@@ -1,13 +1,12 @@
 import AppKit
 import SwiftUI
-import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store = Store()
     private let sampler = SystemSampler()
-    private let claudeClient = ClaudeLimitsClient()
-    private let grokClient = GrokClient()
-    private let ledger = Ledger()
+    private let env = AppEnvironment.live
+    private lazy var services = ProviderServices(store: store, env: env)
+    private var ledger: Ledger { services.ledger }
     private let keepAwake = KeepAwake()
 
     private var statusItem: NSStatusItem!
@@ -16,14 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var timers: [Timer] = []
     private var tick = 0
     private var ledgerBusy = false
-    private var claudeBackoffUntil = Date.distantPast
     private var currentInterval = 0.0
     private var snapshotDir: URL?
     private var hover: HoverController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.register()
-        Pricing.shared.load()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -36,10 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.animates = true
         popover.delegate = self
 
-        if !UserDefaults.standard.bool(forKey: "didRegisterLoginItem") {
-            UserDefaults.standard.set(true, forKey: "didRegisterLoginItem")
-            try? SMAppService.mainApp.register()
-        }
+        services.start()
 
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
             snapshotDir = URL(fileURLWithPath: CommandLine.arguments[i + 1])
@@ -103,34 +97,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: Limits and usage
 
     private func refreshLimits(force: Bool = false) {
-        if force || Date() >= claudeBackoffUntil {
-            Task { @MainActor in
-                do {
-                    store.claudeLimits = try await claudeClient.fetch()
-                    store.claudeError = nil
-                    store.claudeAvailable = true
-                } catch ClientError.notConfigured {
-                    store.claudeAvailable = false
-                    store.claudeLimits = nil
-                } catch {
-                    store.claudeAvailable = true
-                    store.claudeError = error.localizedDescription
-                    if case ClientError.http(429) = error { claudeBackoffUntil = Date().addingTimeInterval(300) }
-                }
-                redraw()
-            }
+        Task { @MainActor in
+            await services.refreshClaude(force: force)
+            redraw()
         }
         Task { @MainActor in
-            do {
-                store.grokPlan = try await grokClient.fetch()
-                store.grokError = nil
-                store.grokAvailable = true
-            } catch ClientError.notConfigured {
-                store.grokAvailable = false
-                store.grokPlan = nil
-            } catch {
-                store.grokError = error.localizedDescription
-            }
+            await services.refreshGrok()
             redraw()
         }
     }
@@ -191,7 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 self?.refreshUsage()
             },
             quit: { NSApp.terminate(nil) },
-            keepAwake: { [weak self] in self?.setAwake($0) }))
+            keepAwake: { [weak self] in self?.setAwake($0) },
+            loginItem: env.loginItem))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -230,7 +203,7 @@ extension AppDelegate {
         }
         print("strip width pt:", strip.size.width)
 
-        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }))
+        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

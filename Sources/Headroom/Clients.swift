@@ -40,17 +40,10 @@ enum ClientError: LocalizedError {
     }
 }
 
-private let session: URLSession = {
-    let c = URLSessionConfiguration.ephemeral
-    c.timeoutIntervalForRequest = 15
-    c.requestCachePolicy = .reloadIgnoringLocalCacheData
-    return URLSession(configuration: c)
-}()
-
-private func getJSON(_ url: URL, headers: [String: String]) async throws -> [String: Any] {
+private func getJSON(_ url: URL, headers: [String: String], via transport: HTTPTransport) async throws -> [String: Any] {
     var req = URLRequest(url: url)
     headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
-    let (data, resp) = try await session.data(for: req)
+    let (data, resp) = try await transport.data(for: req)
     let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
     guard code == 200 else { throw ClientError.http(code) }
     guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClientError.badResponse }
@@ -62,10 +55,17 @@ private func getJSON(_ url: URL, headers: [String: String]) async throws -> [Str
 final class ClaudeLimitsClient {
     private struct Creds { var token: String; var expiresAt: Date?; var plan: String? }
 
+    private let store: CredentialStore
+    private let transport: HTTPTransport
+
+    init(credentials: CredentialStore, transport: HTTPTransport) {
+        self.store = credentials
+        self.transport = transport
+    }
+
     private func credentials() -> Creds? {
-        guard let out = runProcess("/usr/bin/security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"]),
-              out.status == 0,
-              let json = try? JSONSerialization.jsonObject(with: out.output) as? [String: Any],
+        guard let data = store.claudeCredentialJSON(),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = json.dict("claudeAiOauth"),
               let token = oauth.string("accessToken") else { return nil }
         let exp = oauth.double("expiresAt").map { Date(timeIntervalSince1970: $0 / 1000) }
@@ -88,7 +88,7 @@ final class ClaudeLimitsClient {
             "anthropic-beta": "oauth-2025-04-20",
             "Accept": "application/json",
             "User-Agent": "claude-code/2.1 headroom",
-        ])
+        ], via: transport)
 
         var result = ClaudeLimits(all: [], plan: creds.plan, fetchedAt: Date())
         let limits = json["limits"] as? [[String: Any]] ?? []
@@ -155,8 +155,16 @@ struct GrokPlan {
 /// When the token has expired, `grok models` is run once to let the CLI refresh it
 /// (the CLI owns the file and its lock; this client never writes it).
 final class GrokClient {
-    private let grokHome = homeDir.appendingPathComponent(".grok")
+    private let grokHome: URL
+    private let transport: HTTPTransport
+    private let runner: ProcessRunner
     private var lastRefresh: Date?
+
+    init(home: URL, transport: HTTPTransport, runner: ProcessRunner) {
+        self.grokHome = home.appendingPathComponent(".grok")
+        self.transport = transport
+        self.runner = runner
+    }
 
     private func auth() -> (key: String, expires: Date?)? {
         guard let data = try? Data(contentsOf: grokHome.appendingPathComponent("auth.json")),
@@ -172,8 +180,10 @@ final class GrokClient {
         lastRefresh = Date()
         let bin = grokHome.appendingPathComponent("bin/grok").path
         guard FileManager.default.isExecutableFile(atPath: bin) else { return }
+        let runner = runner
         await Task.detached(priority: .utility) {
-            runProcess(bin, ["models"], timeout: 45, captureOutput: false)
+            // Exit status is ignored, so a failed refresh later surfaces as "not configured" (#4, R5).
+            _ = runner.run(bin, ["models"], timeout: 45, captureOutput: false)
         }.value
     }
 
@@ -204,7 +214,7 @@ final class GrokClient {
             "Authorization": "Bearer \(key)",
             "Accept": "application/json",
             "User-Agent": "grok-cli headroom",
-        ])
+        ], via: transport)
         guard let c = json.dict("config") else { throw ClientError.badResponse }
         let period = c.dict("currentPeriod")
         let type = (period?.string("type") ?? "").replacingOccurrences(of: "USAGE_PERIOD_TYPE_", with: "").lowercased()

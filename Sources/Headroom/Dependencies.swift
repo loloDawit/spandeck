@@ -1,0 +1,91 @@
+import Foundation
+import ServiceManagement
+
+// MARK: - Side-effect seams
+//
+// Everything that touches the Keychain, the network, child processes, login items or the user's home
+// directory goes through these protocols, so tests can run the launch path against fakes.
+// `AppEnvironment.live` is the only place the real implementations are created.
+
+protocol HTTPTransport: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+struct URLSessionTransport: HTTPTransport {
+    let session: URLSession
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: request)
+    }
+}
+
+protocol ProcessRunner: Sendable {
+    /// Runs a binary and returns its exit status and stdout, or nil if it could not be launched.
+    func run(_ path: String, _ args: [String], timeout: TimeInterval, captureOutput: Bool) -> (status: Int32, output: Data)?
+}
+
+struct SystemProcessRunner: ProcessRunner {
+    func run(_ path: String, _ args: [String], timeout: TimeInterval, captureOutput: Bool) -> (status: Int32, output: Data)? {
+        runProcess(path, args, timeout: timeout, captureOutput: captureOutput)
+    }
+}
+
+protocol CredentialStore {
+    /// The raw credential JSON Claude Code keeps in the login keychain, or nil if absent or unreadable.
+    func claudeCredentialJSON() -> Data?
+}
+
+struct KeychainCredentialStore: CredentialStore {
+    let runner: ProcessRunner
+    func claudeCredentialJSON() -> Data? {
+        guard let out = runner.run("/usr/bin/security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                                   timeout: 10, captureOutput: true),
+              out.status == 0 else { return nil }
+        return out.output
+    }
+}
+
+protocol LoginItemService {
+    var isEnabled: Bool { get }
+    func register() throws
+    func unregister() throws
+}
+
+struct MainAppLoginItem: LoginItemService {
+    var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    func register() throws { try SMAppService.mainApp.register() }
+    func unregister() throws { try SMAppService.mainApp.unregister() }
+}
+
+// MARK: - Environment
+
+struct AppEnvironment {
+    /// Provider quota endpoints (Anthropic, Grok).
+    var providerTransport: HTTPTransport
+    /// LiteLLM price table download.
+    var pricingTransport: HTTPTransport
+    var processRunner: ProcessRunner
+    var credentials: CredentialStore
+    var loginItem: LoginItemService
+    var defaults: UserDefaults
+    var home: URL
+    var appSupport: URL
+
+    static var live: AppEnvironment {
+        let providerSession: URLSession = {
+            let c = URLSessionConfiguration.ephemeral
+            c.timeoutIntervalForRequest = 15
+            c.requestCachePolicy = .reloadIgnoringLocalCacheData
+            return URLSession(configuration: c)
+        }()
+        let runner = SystemProcessRunner()
+        return AppEnvironment(
+            providerTransport: URLSessionTransport(session: providerSession),
+            pricingTransport: URLSessionTransport(session: .shared),
+            processRunner: runner,
+            credentials: KeychainCredentialStore(runner: runner),
+            loginItem: MainAppLoginItem(),
+            defaults: .standard,
+            home: homeDir,
+            appSupport: appSupportDir)
+    }
+}
