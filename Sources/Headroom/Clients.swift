@@ -169,9 +169,6 @@ final class GrokClient {
         self.runner = runner
     }
 
-    /// Forgets when `grok models` last ran, so a fresh consent isn't throttled by an earlier one.
-    func resetRefreshThrottle() { refreshLock.withLock { lastRefresh = nil } }
-
     private func auth() -> (key: String, expires: Date?)? {
         guard let data = credentials.grokAuthJSON(),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -197,10 +194,11 @@ final class GrokClient {
         }.value
     }
 
-    /// `stillAllowed` is checked before each later step (running `grok models`, re-reading the key, retrying),
-    /// so withdrawing consent while a fetch is in flight stops it there (#17).
+    /// `stillAllowed` is checked before every key read, every `grok models` run and immediately before every
+    /// request, so withdrawing consent stops the fetch at the next step (#17). A request already sent can't be recalled.
     func fetch(stillAllowed: () async -> Bool) async throws -> GrokPlan {
         func checkAllowed() async throws { if !(await stillAllowed()) { throw CancellationError() } }
+        try await checkAllowed()
         guard var a = auth() else { throw ClientError.notConfigured }
         if let exp = a.expires, exp < Date().addingTimeInterval(60) {
             try await checkAllowed()
@@ -209,6 +207,7 @@ final class GrokClient {
             a = auth() ?? a
         }
         do {
+            try await checkAllowed()
             return try await request(a.key)
         } catch ClientError.http(401) {
             try await checkAllowed()
@@ -216,6 +215,7 @@ final class GrokClient {
             try await checkAllowed()
             guard let fresh = auth() else { throw ClientError.notConfigured }
             do {
+                try await checkAllowed()
                 return try await request(fresh.key)
             } catch ClientError.http(let code) where [401, 402, 403, 404].contains(code) {
                 // Logged in but no plan with billing access.

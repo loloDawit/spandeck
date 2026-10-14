@@ -196,19 +196,62 @@ struct GrokConsentTests {
     }
 
     // A new consent isn't throttled by `grok models` runs from an earlier one.
-    @Test func reenableResetsCLIRefreshThrottle() async throws {
+    @Test func togglingConsentKeepsCLIRefreshThrottle() async throws {
         let transport = FakeTransport([Hosts.grok: [.unauthorized]])
         let rig = try Rig(transport: transport)
 
         await rig.services.applyGrokChoice(true)
         #expect(rig.runner.calls.count == 1)
         await rig.services.refreshGrok()
-        #expect(rig.runner.calls.count == 1) // still throttled within one consent
+        #expect(rig.runner.calls.count == 1)
 
+        // The consent text promises at most one `grok models` run every 10 minutes, even across off and on.
         await rig.services.applyGrokChoice(false)
         await rig.services.applyGrokChoice(true)
-        #expect(rig.runner.calls.count == 2)
+        #expect(rig.runner.calls.count == 1)
         #expect(try rig.box.grokFiles().count == 3)
+    }
+
+    // Consent withdrawn while the key is being read: no request, retry or `grok models` may start afterwards.
+    @Test(arguments: [false, true])
+    func consentWithdrawnDuringKeyReadSendsNothing(reenable: Bool) async throws {
+        let box = try Sandbox()
+        try box.installGrok()
+        let auth = PausingGrokAuth(home: box.home)
+        let transport = FakeTransport([Hosts.grok: [.grokBilling]])
+        let runner = FakeProcessRunner()
+        let services = ProviderServices(store: Store(), env: box.environment(
+            transport: transport, runner: runner, grokCredentials: auth))
+        services.setGrokEnabled(true)
+
+        let inFlight = Task { await services.refreshGrok() }
+        let reading = await auth.waitUntilReading()
+        services.setGrokEnabled(false)
+        if reenable { services.setGrokEnabled(true) }
+        auth.resume()
+        await inFlight.value // bounded: the paused read gives up after 2 s
+
+        #expect(reading, "the key read never started")
+        #expect(transport.requests.isEmpty)
+        #expect(runner.calls.isEmpty)
+        #expect(services.store.grokPlan == nil)
+    }
+
+    // GrokClient directly: consent is checked before the key is read, and again before the request is sent.
+    @Test func clientChecksConsentBeforeReadAndBeforeRequest() async throws {
+        let box = try Sandbox()
+        try box.installGrok()
+        let auth = CountingGrokAuth(home: box.home)
+        let transport = FakeTransport([Hosts.grok: [.grokBilling]])
+        let client = GrokClient(home: box.home, credentials: auth, transport: transport, runner: FakeProcessRunner())
+
+        await #expect(throws: CancellationError.self) { _ = try await client.fetch(stillAllowed: { false }) }
+        #expect(auth.reads == 0)
+
+        let answers = Answers([true, false])
+        await #expect(throws: CancellationError.self) { _ = try await client.fetch(stillAllowed: { answers.next() }) }
+        #expect(auth.reads == 1)
+        #expect(transport.requests.isEmpty)
     }
 
     // With Claude already enabled, agreeing to Grok's consent must not trigger a Claude read or request.

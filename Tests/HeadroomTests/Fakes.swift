@@ -163,6 +163,39 @@ final class CountingGrokAuth: GrokCredentialSource, @unchecked Sendable {
     }
 }
 
+/// Like `CountingGrokAuth`, but the first read blocks (off the main actor) until `resume()` or a 2 s timeout,
+/// so a test can change consent while the key is being read.
+final class PausingGrokAuth: GrokCredentialSource, @unchecked Sendable {
+    private let file: GrokAuthFile
+    private let gate = DispatchSemaphore(value: 0)
+    private let entered = Flag()
+    private let lock = NSLock()
+    private var _reads = 0
+    init(home: URL) { file = GrokAuthFile(home: home) }
+    var reads: Int { lock.withLock { _reads } }
+
+    func grokAuthJSON() -> Data? {
+        let first: Bool = lock.withLock { _reads += 1; return _reads == 1 }
+        if first {
+            entered.set()
+            _ = gate.wait(timeout: .now() + 2)
+        }
+        return file.grokAuthJSON()
+    }
+
+    /// Waits until the first read has started; false after `timeout`.
+    func waitUntilReading(timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !entered.isSet {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
+    }
+
+    func resume() { gate.signal() }
+}
+
 final class FakeLoginItem: LoginItemService {
     private(set) var registers = 0
     private(set) var unregisters = 0
@@ -260,4 +293,12 @@ func refreshLedger(_ ledger: Ledger) async -> (claude: UsageSummary, grok: Usage
     await withCheckedContinuation { c in
         ledger.refresh(windowStart: nil, progress: { _ in }, completion: { claude, grok, _ in c.resume(returning: (claude, grok)) })
     }
+}
+
+/// Returns the given answers in order, then repeats the last.
+final class Answers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Bool]
+    init(_ values: [Bool]) { self.values = values }
+    func next() -> Bool { lock.withLock { values.count > 1 ? values.removeFirst() : values[0] } }
 }

@@ -31,13 +31,13 @@ final class ProviderServices {
     /// so they stay off until the user opts in (#17). Local Grok usage files are read either way.
     var grokEnabled: Bool { preferences.bool(forKey: Prefs.grokCredits) }
 
-    /// Records the user's choice. Turning it off clears shown plan data; any change resets the CLI refresh throttle.
+    /// Records the user's choice. Turning it off clears shown plan data. The `grok models` throttle is kept across
+    /// changes, so toggling consent can't run the CLI more than once every 10 minutes.
     @MainActor func setGrokEnabled(_ on: Bool) {
         grokConsentGeneration += 1
         preferences.set(on, forKey: Prefs.grokCredits)
         store.grokEnabled = on
         store.grokConsentRequested = false
-        grokClient.resetRefreshThrottle()
         guard !on else { return }
         store.grokPlan = nil
         store.grokError = nil
