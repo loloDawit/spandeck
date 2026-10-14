@@ -6,7 +6,7 @@ Audited revision: `c60d3d9` (`main`, inherited Headroom v1.1 source). Date: 2026
 
 **Status update: 2026-10-14** (`main` = `13b017d`). The findings below describe the inherited code at `c60d3d9` and are kept as written. Later changes are recorded beside them, not in place of them:
 - **Merged:** PR #14 (#12, R12) added injectable dependencies and mocked launch-path tests; production behavior unchanged. PR #16 (#15, R1 + R2) made the Claude Keychain read / usage endpoint and launch at login opt-in. PR #18 (#17, R4) made the Grok key read, billing request and `grok models` execution opt-in.
-- **Proposed:** R3 (display toggles vs collection) — #19 / draft PR #20, not merged.
+- **Merged:** R3 (display toggles vs collection) — #19 / PR #20 (`e5aed20`): hidden gauges pause quota polling [mocked].
 - **Open:** R5 (Grok failures shown as absence), R9 (request identity, 401 backoff), R6–R8, R10, R11; OS-level verification (§7 Phase 2). CI was not run: hosted CI is unavailable for budget reasons (owner, 2026-10-14).
 - Status cells use **Merged (#14 / #16 / #18)** or **Unchanged**. Status annotations reflect current `main`; §6 keeps a dated snapshot for each step.
 
@@ -134,7 +134,7 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
 - **F7 [hypothesis] Keychain prompt behavior.** Whether the read is silent depends on the item's ACL. If Claude Code writes the item via `/usr/bin/security`, that binary is likely already trusted and the read is silent; if the user ever clicks "Always Allow" for `/usr/bin/security`, *any* local process using the `security` CLI can read the item without prompting. **Check:** on a fresh test account, create a synthetic item with the same service name via `security add-generic-password`, run the app, and record whether a prompt appears; inspect the ACL with `security dump-keychain -a` (synthetic item only).
 - **F8 [hypothesis] Cache file modes.** Files are written with the process umask (commonly `0644`) under `~/Library` (commonly `0700`). **Check:** `stat -f '%Sp %N'` on the cache files after a synthetic run.
 
-**Status of findings (2026-10-14):** F1 — still true on `main` (R3 proposed in #19 / draft PR #20), but since #16 (Claude) and #18 (Grok), collection first requires consent. F2 — resolved by #16 (no automatic registration). F3 — unchanged in effect; since #14 the directory is created when the live environment is built during launch. F4–F8 — unchanged.
+**Status of findings (2026-10-14):** F1 — resolved by #20 (R3, `e5aed20`): hidden gauges pause quota polling; collection also requires consent since #16 (Claude) and #18 (Grok) [mocked]. F2 — resolved by #16 (no automatic registration). F3 — unchanged in effect; since #14 the directory is created when the live environment is built during launch. F4–F8 — unchanged.
 
 ## 6. Default launch: quiet/offline or side effects?
 
@@ -188,7 +188,7 @@ Introduce seams so the default launch path can run under test with no real Keych
 Phase 1 acceptance tests (all synthetic, run in `swift test`):
 
 1. Default launch records exactly the calls listed in §6 — this is the reproducible confirmation of the "not quiet / not offline" verdict.
-2. Disabling the Claude/Grok display toggles does not stop credential reads or requests (documents F1 today; flips to "no calls" once R3 lands). *Status 2026-10-14: flipped in draft PR #20 as `displayTogglesGateCollection` [mocked]; not merged.*
+2. Disabling the Claude/Grok display toggles does not stop credential reads or requests (documents F1 today; flips to "no calls" once R3 lands). *Status 2026-10-14: flipped by PR #20 (merged) as `displayTogglesGateCollection` [mocked].*
 3. Grok 401 → refresh → 401 yields `.notConfigured` and one `ProcessRunner` call (documents §4 today; flips with R5).
 4. After a refresh cycle, the temp cache directory contains the synthetic transcript path (F5) and never the canary string.
 5. Pricing request is issued at launch when no cache exists; with the transport offline, unpriced models contribute $0 to totals (F4).
@@ -213,7 +213,7 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 |---|---|---|---|---|---|---|---|---|
 | R1 | P0 | Stop registering login item on first launch | Surprising persistence (B10, F2) | New installs no longer auto-start; existing registrations untouched (do not silently unregister) | Revert commit | `LoginItemService` fake: launch path never calls `register()`; toggle calls register/unregister and reflects status | #4 | Merged — #15 / PR #16 |
 | R2 | P0 | Gate Claude Keychain read + usage endpoint behind explicit opt-in (default off) | Credential exposure (B1, B2, F1) | Existing users lose quota gauge until they opt in; ledger unaffected | Revert; or default the pref to on | `CredentialStore` fake: zero calls when disabled; transport records no request | #4 | Merged — #15 / PR #16 |
-| R3 | P1 | Make provider display toggles gate collection (Claude, Grok) | Collection continues when user "turns off" (F1) | None visible | Revert | Phase 1 test 2 flips to "no calls" | #4 | Proposed — #19 / draft PR #20 |
+| R3 | P1 | Make provider display toggles gate collection (Claude, Grok) | Collection continues when user "turns off" (F1) | None visible | Revert | Phase 1 test 2 flips to "no calls" | #4 | Merged — #19 / PR #20 |
 | R4 | P1 | Remove automatic execution of `~/.grok/bin/grok`; Grok opt-in | Unexpected exec of user-writable binary (B4) | Grok tokens no longer auto-refreshed; user runs CLI | Revert | `ProcessRunner` fake asserts no exec; Grok disabled by default | #4 | Merged — #17 / PR #18 |
 | R5 | P1 | Surface Grok refresh/auth failures distinctly from "not configured" | Failure masked as absence (§4) | UI shows an error state instead of hiding Grok | Revert | Phase 1 test 3 yields an auth-error state; error text contains no key material | #4 | Open (more visible since R4 merged) |
 | R6 | P1 | Pricing: bundled reviewed snapshot, pinned (commit SHA + checksum) opt-in updates, explicit timeout, ephemeral session | Unpinned remote data, silent egress (B6) | Prices may lag until updated | Revert to remote fetch | Default launch issues no pricing request; checksum mismatch rejected; table provenance (source/date) exposed | #7 (provenance), #11 (integrity/pinning) | Open |
