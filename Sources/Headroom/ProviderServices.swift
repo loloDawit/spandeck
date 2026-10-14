@@ -97,7 +97,7 @@ final class ProviderServices {
 
     @MainActor private func clearGrok() {
         store.grokPlan = nil
-        store.grokError = nil
+        store.grokFailure = nil
         store.grokAvailable = false
     }
 
@@ -187,15 +187,20 @@ final class ProviderServices {
         do { result = .success(try await grokClient.fetch(stillAllowed: { await MainActor.run { isCurrent() } })) } catch { result = .failure(error) }
         // Drop the result if the user changed their choice while the request was in flight (even off and on again).
         guard isCurrent() else { return }
-        do {
-            store.grokPlan = try result.get()
-            store.grokError = nil
+        switch result {
+        case .success(let plan):
+            store.grokPlan = plan
+            store.grokFailure = nil
             store.grokAvailable = true
-        } catch ClientError.notConfigured {
-            store.grokAvailable = false
-            store.grokPlan = nil
-        } catch {
-            store.grokError = error.localizedDescription
+        case .failure(let error):
+            // Every failure is shown; none hides Grok once the user opted in (#21). Only a temporary failure keeps
+            // the last plan, which the UI labels stale.
+            let failure = error as? GrokError ?? .unexpectedResponse
+            store.grokFailure = failure
+            if !failure.isTemporary {
+                store.grokPlan = nil
+                store.grokAvailable = false
+            }
         }
     }
 }

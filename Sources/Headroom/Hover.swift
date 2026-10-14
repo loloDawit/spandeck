@@ -146,10 +146,10 @@ struct HoverView: View {
             switch model.kind {
             case .claude: limits(store.claudeLimits?.all ?? [], error: store.claudeError)
             case .grok:
-                if let g = store.grokPlan {
+                if let g = store.grokPlan, store.grokFailure == nil {
                     limits([LimitEntry(id: "g", name: "Credits used", percent: g.percent, resetsAt: g.periodEnd)], error: nil)
                 } else {
-                    Text(store.grokError ?? "Loading").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(store.grokFailure?.title ?? "Loading").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             case .awake:
                 VStack(alignment: .leading, spacing: 3) {

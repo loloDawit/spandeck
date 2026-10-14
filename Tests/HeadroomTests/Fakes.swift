@@ -29,6 +29,7 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
             return list[min(i, list.count - 1)]
         }
         guard let response else { throw URLError(.notConnectedToInternet) }
+        if response.status == FakeTransport.Response.timeout.status { throw URLError(.timedOut) }
         let http = HTTPURLResponse(url: request.url!, statusCode: response.status, httpVersion: nil, headerFields: nil)!
         return (response.body, http)
     }
@@ -311,6 +312,8 @@ extension FakeTransport.Response {
     static let pricingTable = json(#"{"claude-test-1":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}"#)
     static let unauthorized = json("{}", status: 401)
     static let grokBilling = json(#"{"config":{"creditUsagePercent":10}}"#)
+    /// Not an HTTP answer: the transport throws `URLError(.timedOut)`.
+    static let timeout = Self(status: -1, body: Data())
 }
 
 /// Runs one ledger refresh and returns its summaries.

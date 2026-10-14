@@ -245,8 +245,9 @@ struct LaunchPathTests {
         #expect(services.store.grokPlan == nil && services.store.claudeLimits == nil)
     }
 
-    // Acceptance 3: once opted in (#17), a failed Grok refresh is reported as "not configured" (#4, R5 will flip this).
-    @Test func grokRefreshFailureLooksNotConfigured() async throws {
+    // Acceptance 3, flipped by R5 (#21): a login still rejected after `grok models` is an auth failure that stays
+    // visible, not "not configured". More cases in GrokErrorStateTests.
+    @Test func grokRefreshFailureIsAuthFailure() async throws {
         let box = try Sandbox()
         try box.write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"}}"#)
         let bin = try box.write(".grok/bin/grok", "", executable: true)
@@ -261,8 +262,8 @@ struct LaunchPathTests {
         #expect(runner.calls.first?.path == bin.path)
         #expect(runner.calls.first?.args == ["models"])
         #expect(transport.hosts == [Hosts.grok, Hosts.grok])
-        #expect(!services.store.grokAvailable)
-        #expect(services.store.grokError == nil)
+        #expect(services.store.grokFailure == .authRejected(.succeeded))
+        #expect(GrokSection.select(services.store) == .failure(.authRejected(.succeeded)))
     }
 
     // Acceptance 4: the ledger cache keeps transcript paths (#5, R8) but never transcript content.

@@ -386,6 +386,30 @@ struct BatteryCard: View {
 
 // MARK: - Limits
 
+/// What the popover's Grok section shows (#21). Pure, so tests can check that a failure is never hidden.
+enum GrokSection: Equatable {
+    case consent
+    /// Consent given, quota switch off (R3, #19).
+    case paused
+    case loading
+    case plan(GrokPlanView)
+    case failure(GrokError)
+
+    /// A plan, possibly kept through a temporary failure; `failure` is then shown next to it as stale.
+    struct GrokPlanView: Equatable {
+        var staleBecause: GrokError?
+    }
+
+    /// nil: no Grok section (consent not given and not requested).
+    static func select(_ store: Store) -> GrokSection? {
+        guard store.grokEnabled else { return store.grokConsentRequested ? .consent : nil }
+        guard store.grokQuotaShown else { return .paused }
+        if store.grokPlan != nil { return .plan(GrokPlanView(staleBecause: store.grokFailure)) }
+        if let failure = store.grokFailure { return .failure(failure) }
+        return .loading
+    }
+}
+
 struct LimitsCard: View {
     @ObservedObject var store: Store
     var enableClaudeLimits: () -> Void
@@ -393,10 +417,9 @@ struct LimitsCard: View {
 
     /// The Claude section shows the consent prompt, a paused note when its gauge is hidden, or the account's limits.
     private var showsClaude: Bool { !store.claudeLimitsEnabled || !store.claudeQuotaShown || store.claudeAvailable }
-    private var showsGrokPaused: Bool { store.grokEnabled && !store.grokQuotaShown }
     /// Grok consent is only shown when asked for from Settings, so the app never probes for Grok files to decide.
-    private var showsGrokConsent: Bool { !store.grokEnabled && store.grokConsentRequested }
-    private var showsGrok: Bool { showsGrokConsent || showsGrokPaused || (store.grokEnabled && store.grokAvailable) }
+    private var grok: GrokSection? { GrokSection.select(store) }
+    private var showsGrok: Bool { grok != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -418,24 +441,36 @@ struct LimitsCard: View {
             if showsClaude && showsGrok {
                 Divider().opacity(0.5)
             }
-            if showsGrokConsent {
+            switch grok {
+            case .consent?:
                 GrokCreditsConsent(enable: enableGrokCredits, cancel: { store.grokConsentRequested = false })
-            } else if showsGrokPaused {
+            case .paused?:
                 QuotaPaused(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok, what: "Grok credits", toggle: "Grok credits")
-            } else if store.grokEnabled && store.grokAvailable {
-                CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok,
-                           trailing: store.grokPlan.map { $0.periodName.capitalized + " credits" })
+            case .loading?:
+                CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok)
+                Text("Loading plan...").font(.system(size: 11)).foregroundStyle(.secondary)
+            case .plan(let view)?:
                 if let p = store.grokPlan {
+                    CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok,
+                               trailing: view.staleBecause == nil ? p.periodName.capitalized + " credits" : "Stale")
                     LimitRow(entry: LimitEntry(id: "grok", name: "Credits used", percent: p.percent, resetsAt: p.periodEnd,
                                                window: window(p),
                                                note: p.products.count > 1 ? p.products.map { "\($0.name) \(Fmt.pct($0.percent))" }.joined(separator: "  ") : nil),
                              tint: .grok)
-                } else {
-                    Text(store.grokError ?? "Loading plan...").font(.system(size: 11)).foregroundStyle(.secondary)
+                    if let failure = view.staleBecause {
+                        Text("\(failure.title). Not current: last updated \(Fmt.ago(p.fetchedAt)). \(failure.guidance)")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                if let err = store.grokError, store.grokPlan != nil {
-                    Text("\(err), showing data from \(Fmt.ago(store.grokPlan?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
-                }
+            case .failure(let failure)?:
+                CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok,
+                           trailing: failure == .notConfigured ? "Not set up" : failure.isTemporary ? "Retrying" : "Error")
+                Text(failure.title).font(.system(size: 11, weight: .medium))
+                Text(failure.guidance).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case nil:
+                EmptyView()
             }
             if !showsClaude && !showsGrok {
                 Text("No Claude Code or Grok account found").font(.system(size: 11)).foregroundStyle(.secondary)

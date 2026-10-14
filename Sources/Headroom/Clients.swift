@@ -151,8 +151,95 @@ struct GrokPlan {
     var fetchedAt: Date
 }
 
+/// Outcome of the most recent `grok models` run, used to explain a rejected login (#21). Exit status 0 doesn't prove
+/// the key works; only a successful request does.
+enum GrokRefresh: Equatable {
+    case succeeded
+    /// Non-zero exit, killed by the 45 s timeout, or couldn't be launched (nil).
+    case failed(status: Int32?)
+    /// No executable at `~/.grok/bin/grok`.
+    case cliMissing
+}
+
+/// Why Grok credits couldn't be fetched (#21). Each case maps to one UI message; nothing here carries the key,
+/// a response body or CLI output.
+enum GrokError: Error, Equatable {
+    /// `~/.grok/auth.json` is absent or unreadable.
+    case notConfigured
+    /// `~/.grok/auth.json` exists but isn't JSON or holds no non-empty `key`.
+    case invalidCredentials
+    /// Still 401 after the recovery attempt. nil: no `grok models` outcome is known.
+    case authRejected(GrokRefresh?)
+    /// HTTP 402 or 403. The response doesn't say why.
+    case accessDenied(Int)
+    /// HTTP 404.
+    case endpointUnavailable
+    case rateLimited
+    case serverError(Int)
+    /// The request didn't complete (offline, timeout, connection lost).
+    case network
+    /// HTTP 200 with a body that isn't the expected billing JSON.
+    case unexpectedResponse
+    /// Any other HTTP status.
+    case http(Int)
+
+    /// Failures expected to clear on their own; the last plan may be kept, labelled stale.
+    var isTemporary: Bool {
+        switch self {
+        case .rateLimited, .serverError, .network: return true
+        default: return false
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .notConfigured: return "Grok CLI not signed in"
+        case .invalidCredentials: return "Grok login unreadable"
+        case .authRejected: return "Grok rejected the saved login"
+        case .accessDenied(let code): return "Grok credits not available (HTTP \(code))"
+        case .endpointUnavailable: return "Grok credits endpoint not found (HTTP 404)"
+        case .rateLimited: return "Rate limited by Grok (HTTP 429)"
+        case .serverError(let code): return "Grok service error (HTTP \(code))"
+        case .network: return "Couldn't reach Grok"
+        case .unexpectedResponse: return "Unexpected response from Grok"
+        case .http(let code): return "Grok request failed (HTTP \(code))"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .notConfigured:
+            return "No login found in ~/.grok/auth.json. Sign in with the Grok CLI, then refresh."
+        case .invalidCredentials:
+            return "~/.grok/auth.json has no usable key. Sign in again with the Grok CLI."
+        case .authRejected(let refresh):
+            let why: String
+            switch refresh {
+            case .succeeded?: why = "`grok models` ran, but the key was still rejected."
+            case .failed(let status?)?: why = "`grok models` couldn't refresh it (exit status \(status))."
+            case .failed(nil)?: why = "`grok models` couldn't be run to refresh it."
+            case .cliMissing?: why = "No Grok CLI at ~/.grok/bin/grok to refresh it."
+            case nil: why = "The key was rejected."
+            }
+            return why + " Sign in again with the Grok CLI."
+        case .accessDenied:
+            return "The billing endpoint refused access; the response doesn't say why. It may depend on your account or plan."
+        case .endpointUnavailable:
+            return "The unofficial billing endpoint may have changed or isn't available for this account."
+        case .rateLimited, .serverError:
+            return "Temporary. Will retry on the next refresh."
+        case .network:
+            return "Check your connection. Will retry on the next refresh."
+        case .unexpectedResponse:
+            return "The unofficial billing endpoint may have changed."
+        case .http:
+            return "Will retry on the next refresh."
+        }
+    }
+}
+
 /// Reads Grok credit usage with the token the grok CLI stores in ~/.grok/auth.json.
-/// When the token has expired, `grok models` is run once to let the CLI refresh it
+/// When the token has expired or is rejected, `grok models` is run to let the CLI refresh it
 /// (the CLI owns the file and its lock; this client never writes it).
 final class GrokClient {
     private let grokHome: URL
@@ -161,6 +248,10 @@ final class GrokClient {
     private let runner: ProcessRunner
     private let refreshLock = NSLock()
     private var lastRefresh: Date?
+    private var lastRefreshOutcome: GrokRefresh?
+
+    /// A 401 before recovery; becomes `GrokError.authRejected` if recovery doesn't help.
+    private struct Unauthorized: Error {}
 
     init(home: URL, credentials: GrokCredentialSource, transport: HTTPTransport, runner: ProcessRunner) {
         self.grokHome = home.appendingPathComponent(".grok")
@@ -169,70 +260,97 @@ final class GrokClient {
         self.runner = runner
     }
 
-    private func auth() -> (key: String, expires: Date?)? {
-        guard let data = credentials.grokAuthJSON(),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    private func auth() throws -> (key: String, expires: Date?) {
+        guard let data = credentials.grokAuthJSON() else { throw GrokError.notConfigured }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw GrokError.invalidCredentials }
         for case let entry as [String: Any] in json.values {
             if let key = entry.string("key"), !key.isEmpty { return (key, ISO.parse(entry.string("expires_at"))) }
         }
-        return nil
+        throw GrokError.invalidCredentials
     }
 
-    private func refreshToken() async {
-        let throttled: Bool = refreshLock.withLock {
-            if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return true }
+    /// Runs `grok models` at most once every 10 minutes. A throttled call reports the most recent run's outcome
+    /// (nil if that run hasn't finished yet).
+    private func refreshToken() async -> GrokRefresh? {
+        let throttled: GrokRefresh?? = refreshLock.withLock {
+            if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return .some(lastRefreshOutcome) }
             lastRefresh = Date()
-            return false
+            return .none
         }
-        if throttled { return }
+        if case .some(let previous) = throttled { return previous }
         let bin = grokHome.appendingPathComponent("bin/grok").path
-        guard FileManager.default.isExecutableFile(atPath: bin) else { return }
-        let runner = runner
-        await Task.detached(priority: .utility) {
-            // Exit status is ignored, so a failed refresh later surfaces as "not configured" (#4, R5).
-            _ = runner.run(bin, ["models"], timeout: 45, captureOutput: false)
-        }.value
+        let outcome: GrokRefresh
+        if FileManager.default.isExecutableFile(atPath: bin) {
+            let runner = runner
+            // Output is never captured: it could contain account details. Only the exit status is kept.
+            let result = await Task.detached(priority: .utility) {
+                runner.run(bin, ["models"], timeout: 45, captureOutput: false)
+            }.value
+            outcome = result.map { $0.status == 0 ? .succeeded : .failed(status: $0.status) } ?? .failed(status: nil)
+        } else {
+            outcome = .cliMissing
+        }
+        refreshLock.withLock { lastRefreshOutcome = outcome }
+        return outcome
     }
 
     /// `stillAllowed` is checked before every key read, every `grok models` run and immediately before every
     /// request, so withdrawing consent stops the fetch at the next step (#17). A request already sent can't be recalled.
+    /// Throws `GrokError`, or `CancellationError` once `stillAllowed` is false.
     func fetch(stillAllowed: () async -> Bool) async throws -> GrokPlan {
         func checkAllowed() async throws { if !(await stillAllowed()) { throw CancellationError() } }
         try await checkAllowed()
-        guard var a = auth() else { throw ClientError.notConfigured }
+        var a = try auth()
         if let exp = a.expires, exp < Date().addingTimeInterval(60) {
             try await checkAllowed()
-            await refreshToken()
+            _ = await refreshToken()
             try await checkAllowed()
-            a = auth() ?? a
+            // Keep the old key if the file can't be read now; the request decides.
+            if let fresh = try? auth() { a = fresh }
         }
         do {
             try await checkAllowed()
             return try await request(a.key)
-        } catch ClientError.http(401) {
+        } catch is Unauthorized {
             try await checkAllowed()
-            await refreshToken()
+            let refresh = await refreshToken()
             try await checkAllowed()
-            guard let fresh = auth() else { throw ClientError.notConfigured }
+            let fresh = try auth()
             do {
                 try await checkAllowed()
                 return try await request(fresh.key)
-            } catch ClientError.http(let code) where [401, 402, 403, 404].contains(code) {
-                // Logged in but no plan with billing access.
-                throw ClientError.notConfigured
+            } catch is Unauthorized {
+                throw GrokError.authRejected(refresh)
             }
-        } catch ClientError.http(let code) where [402, 403, 404].contains(code) {
-            throw ClientError.notConfigured
         }
     }
 
     private func request(_ key: String) async throws -> GrokPlan {
-        let json = try await getJSON(URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!, headers: [
+        var req = URLRequest(url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!)
+        [
             "Authorization": "Bearer \(key)",
             "Accept": "application/json",
             "User-Agent": "grok-cli headroom",
-        ], via: transport)
-        guard let c = json.dict("config") else { throw ClientError.badResponse }
+        ].forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        let data: Data, resp: URLResponse
+        do {
+            (data, resp) = try await transport.data(for: req)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw GrokError.network
+        }
+        switch (resp as? HTTPURLResponse)?.statusCode ?? 0 {
+        case 200: break
+        case 401: throw Unauthorized()
+        case let code where code == 402 || code == 403: throw GrokError.accessDenied(code)
+        case 404: throw GrokError.endpointUnavailable
+        case 429: throw GrokError.rateLimited
+        case let code where (500...599).contains(code): throw GrokError.serverError(code)
+        case let code: throw GrokError.http(code)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let c = json.dict("config") else { throw GrokError.unexpectedResponse }
         let period = c.dict("currentPeriod")
         let type = (period?.string("type") ?? "").replacingOccurrences(of: "USAGE_PERIOD_TYPE_", with: "").lowercased()
         let products = (c["productUsage"] as? [[String: Any]] ?? []).compactMap { p -> (String, Double)? in
