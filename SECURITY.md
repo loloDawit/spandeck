@@ -1,6 +1,6 @@
 # Security policy
 
-SpanDeck is an early-stage, security-focused fork of Headroom. The current codebase still contains inherited behavior such as reading local transcripts. Reading Claude OAuth credentials (#15) and Grok CLI credentials (#17) is opt-in and off by default. It has **not yet passed a SpanDeck security audit**. Do not treat development builds as approved for enterprise-managed machines.
+SpanDeck is an early-stage, security-focused fork of Headroom. The current codebase still contains inherited behavior such as reading local transcripts. Reading Claude OAuth credentials (#15) and Grok CLI credentials (#17) is opt-in and off by default. Hiding a provider's plan gauge from the menu bar also pauses its quota polling, without changing consent (#19). It has **not yet passed a SpanDeck security audit**. Do not treat development builds as approved for enterprise-managed machines.
 
 ## Reporting a vulnerability
 Please do **not** open public issues containing credentials, private transcripts, exploit payloads with real user data, or details that expose private infrastructure.

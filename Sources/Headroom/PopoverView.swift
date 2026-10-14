@@ -23,6 +23,9 @@ struct PopoverActions {
     var setClaudeLimits: (Bool) -> Void
     /// Turns Grok credits on (from the consent card) or off (from Settings).
     var setGrokCredits: (Bool) -> Void
+    /// Called with each new value of a Claude/Grok menu-bar switch, which pauses or resumes that provider's quota
+    /// polling (#19). Called on the main thread right after the preference is written.
+    var quotaSwitchChanged: (ProviderServices.QuotaSwitch, Bool) -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -388,16 +391,19 @@ struct LimitsCard: View {
     var enableClaudeLimits: () -> Void
     var enableGrokCredits: () -> Void
 
-    /// The Claude section shows either the consent prompt or, once enabled, the account's limits.
-    private var showsClaude: Bool { !store.claudeLimitsEnabled || store.claudeAvailable }
+    /// The Claude section shows the consent prompt, a paused note when its gauge is hidden, or the account's limits.
+    private var showsClaude: Bool { !store.claudeLimitsEnabled || !store.claudeQuotaShown || store.claudeAvailable }
+    private var showsGrokPaused: Bool { store.grokEnabled && !store.grokQuotaShown }
     /// Grok consent is only shown when asked for from Settings, so the app never probes for Grok files to decide.
     private var showsGrokConsent: Bool { !store.grokEnabled && store.grokConsentRequested }
-    private var showsGrok: Bool { showsGrokConsent || (store.grokEnabled && store.grokAvailable) }
+    private var showsGrok: Bool { showsGrokConsent || showsGrokPaused || (store.grokEnabled && store.grokAvailable) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !store.claudeLimitsEnabled {
                 ClaudeLimitsConsent(enable: enableClaudeLimits)
+            } else if !store.claudeQuotaShown {
+                QuotaPaused(title: "Claude Code", icon: "sparkle", tint: .claude, what: "Claude plan limits", toggle: "Claude limits")
             } else if store.claudeAvailable {
                 CardHeader(title: "Claude Code", icon: "sparkle", tint: .claude, trailing: store.claudeLimits?.plan)
                 if let l = store.claudeLimits {
@@ -414,6 +420,8 @@ struct LimitsCard: View {
             }
             if showsGrokConsent {
                 GrokCreditsConsent(enable: enableGrokCredits, cancel: { store.grokConsentRequested = false })
+            } else if showsGrokPaused {
+                QuotaPaused(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok, what: "Grok credits", toggle: "Grok credits")
             } else if store.grokEnabled && store.grokAvailable {
                 CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok,
                            trailing: store.grokPlan.map { $0.periodName.capitalized + " credits" })
@@ -440,6 +448,25 @@ struct LimitsCard: View {
     private func window(_ p: GrokPlan) -> TimeInterval? {
         guard let s = p.periodStart, let e = p.periodEnd else { return nil }
         return e.timeIntervalSince(s)
+    }
+}
+
+/// Shown instead of a provider's plan data while its menu-bar switch is off: nothing is fetched, consent is unchanged (#19).
+struct QuotaPaused: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let what: String
+    let toggle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CardHeader(title: title, icon: icon, tint: tint, trailing: "Paused")
+            Text("\(what) are hidden from the menu bar, so they aren't refreshed. "
+                 + "Turn on Settings ▸ \(toggle) to resume. Token usage is still counted.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -603,8 +630,13 @@ struct Footer: View {
                     Toggle("GPU", isOn: $showGPU)
                     Toggle("Memory", isOn: $showMem)
                     Toggle("Battery", isOn: $showBattery)
-                    Toggle("Claude limits", isOn: $showClaude)
-                    if store.grokEnabled && store.grokAvailable { Toggle("Grok credits", isOn: $showGrok) }
+                }
+                // These switches also pause or resume quota polling; they never grant or revoke consent (#19).
+                if store.claudeLimitsEnabled || store.grokEnabled {
+                    Section("Plan limits · hidden ones aren't refreshed") {
+                        if store.claudeLimitsEnabled { Toggle("Claude limits", isOn: quotaSwitch($showClaude, .claude)) }
+                        if store.grokEnabled { Toggle("Grok credits", isOn: quotaSwitch($showGrok, .grok)) }
+                    }
                 }
                 Picker("Update every", selection: $interval) {
                     Text("0.5 s").tag(0.5)
@@ -657,6 +689,11 @@ struct Footer: View {
     private var awakeLabel: String {
         if let until = store.awakeUntil { return until == .distantFuture ? "Awake" : "Awake \(Fmt.until(until))" }
         return store.awakeForAgents ? "Awake (agents)" : "Keep awake"
+    }
+
+    /// Writes the switch, then reports this exact change so the app records it before anything else runs.
+    private func quotaSwitch(_ value: Binding<Bool>, _ provider: ProviderServices.QuotaSwitch) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; actions.quotaSwitchChanged(provider, $0) })
     }
 
     private func setLaunchAtLogin(_ on: Bool) {

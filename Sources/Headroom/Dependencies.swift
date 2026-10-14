@@ -71,6 +71,13 @@ struct MainAppLoginItem: LoginItemService {
 protocol PreferenceStore: AnyObject {
     func bool(forKey key: String) -> Bool
     func set(_ value: Bool, forKey key: String)
+    /// The stored value, or nil if never set (registered defaults count as set for `UserDefaults`).
+    func object(forKey key: String) -> Any?
+}
+
+extension PreferenceStore {
+    /// A switch whose meaning is "on unless the user turned it off", such as the menu-bar gauges.
+    func bool(forKey key: String, default fallback: Bool) -> Bool { object(forKey: key) as? Bool ?? fallback }
 }
 
 extension UserDefaults: PreferenceStore {}
