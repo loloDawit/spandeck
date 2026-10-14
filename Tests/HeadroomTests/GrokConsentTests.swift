@@ -104,7 +104,7 @@ struct GrokConsentTests {
         await rig.services.applyGrokChoice(false)
         await rig.services.refreshGrok()
 
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil && !rig.store.grokAvailable)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil && !rig.store.grokAvailable)
         #expect(!rig.store.grokEnabled && !rig.box.preferences.bool(forKey: Prefs.grokCredits))
         #expect(rig.auth.reads == reads)
         #expect(transport.requests.count == 1)
@@ -143,7 +143,7 @@ struct GrokConsentTests {
         transport.respond(late)
         #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
 
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil)
         let next = Task { await rig.services.refreshGrok() }
         guard await transport.awaitRequests(2, from: next) else { Issue.record("next refresh never started"); return }
         transport.respond(.grokBilling)
@@ -169,7 +169,7 @@ struct GrokConsentTests {
 
         #expect(rig.runner.calls.isEmpty)
         #expect(transport.started == 1)
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil)
     }
 
     // Two refreshes in flight when the user turns Grok off: neither publishes or runs anything.

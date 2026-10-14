@@ -88,11 +88,13 @@ final class Store: ObservableObject {
     @Published var grokQuotaShown = true
     /// UI only: the user asked (from Settings) to see the Grok consent card.
     @Published var grokConsentRequested = false
-    /// Providers start hidden and appear once their account answers; they hide again if not set up.
+    /// Claude starts hidden and appears once its account answers. For Grok: a plan (current or stale) is available.
     @Published var claudeAvailable = false
     @Published var grokAvailable = false
     @Published var grokPlan: GrokPlan?
-    @Published var grokError: String?
+    /// Why the last Grok refresh failed (#21); nil after a success. With a temporary failure `grokPlan` is the last
+    /// good plan, shown as stale.
+    @Published var grokFailure: GrokError?
     @Published var grokUsage: UsageSummary?
     @Published var indexing: String?
     @Published var usageUpdated: Date?

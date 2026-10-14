@@ -14,6 +14,8 @@ final class ProviderServices {
     /// Bumped on every consent or menu-bar switch change, so a request started under an earlier choice can't publish its result.
     private var claudeConsentGeneration = 0
     private var grokConsentGeneration = 0
+    /// Counts Grok refreshes started; only the newest one may publish, so an older response can't override it (#21).
+    private var grokRefreshesStarted = 0
     /// Last applied state of the menu-bar switches, so only real changes pause or resume collection (#19).
     private var claudeShown: Bool
     private var grokShown: Bool
@@ -97,7 +99,7 @@ final class ProviderServices {
 
     @MainActor private func clearGrok() {
         store.grokPlan = nil
-        store.grokError = nil
+        store.grokFailure = nil
         store.grokAvailable = false
     }
 
@@ -179,23 +181,31 @@ final class ProviderServices {
     @MainActor func refreshGrok() async {
         guard grokCollecting else { return }
         let generation = grokConsentGeneration
+        grokRefreshesStarted += 1
+        let refresh = grokRefreshesStarted
         let isCurrent = { @MainActor [weak self] () -> Bool in
             guard let self else { return false }
             return self.grokCollecting && self.grokConsentGeneration == generation
         }
         let result: Result<GrokPlan, Error>
         do { result = .success(try await grokClient.fetch(stillAllowed: { await MainActor.run { isCurrent() } })) } catch { result = .failure(error) }
-        // Drop the result if the user changed their choice while the request was in flight (even off and on again).
-        guard isCurrent() else { return }
-        do {
-            store.grokPlan = try result.get()
-            store.grokError = nil
+        // Drop the result if the user changed their choice while the request was in flight (even off and on again),
+        // or if a newer refresh started meanwhile: that one publishes instead.
+        guard isCurrent(), refresh == grokRefreshesStarted else { return }
+        switch result {
+        case .success(let plan):
+            store.grokPlan = plan
+            store.grokFailure = nil
             store.grokAvailable = true
-        } catch ClientError.notConfigured {
-            store.grokAvailable = false
-            store.grokPlan = nil
-        } catch {
-            store.grokError = error.localizedDescription
+        case .failure(let error):
+            // Every failure is shown; none hides Grok once the user opted in (#21). Only a temporary failure keeps
+            // the last plan, which the UI labels stale.
+            let failure = error as? GrokError ?? .unexpectedResponse
+            store.grokFailure = failure
+            if !failure.isTemporary {
+                store.grokPlan = nil
+                store.grokAvailable = false
+            }
         }
     }
 }

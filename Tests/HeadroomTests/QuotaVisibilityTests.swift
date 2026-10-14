@@ -105,7 +105,7 @@ struct QuotaVisibilityTests {
         await rig.refreshAll(force: true)
 
         #expect(rig.store.claudeLimits == nil && rig.store.claudeError == nil && !rig.store.claudeAvailable)
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil && !rig.store.grokAvailable)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil && !rig.store.grokAvailable)
         #expect(rig.claude.reads == 1 && rig.auth.reads == 1 && transport.requests.count == 2)
         #expect(rig.prefs.bool(forKey: Prefs.claudeLimits) && rig.prefs.bool(forKey: Prefs.grokCredits))
     }
@@ -235,7 +235,7 @@ struct QuotaVisibilityTests {
         #expect(rig.runner.calls.isEmpty)
         #expect(rig.auth.reads == reads)
         #expect(transport.started == 1)
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil)
     }
 
     // 5. Grok hidden while the billing request is in flight: the late result is dropped.
@@ -251,7 +251,7 @@ struct QuotaVisibilityTests {
         transport.respond(late)
         #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
 
-        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil && !rig.store.grokAvailable)
+        #expect(rig.store.grokPlan == nil && rig.store.grokFailure == nil && !rig.store.grokAvailable)
         #expect(transport.started == 1 && rig.runner.calls.isEmpty)
     }
 

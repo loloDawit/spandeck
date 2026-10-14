@@ -38,7 +38,9 @@ enum StatusRenderer {
                                    values: [l?.session?.percent, l?.weekly?.percent, l?.model?.percent]))
         }
         if Prefs.bool(Prefs.showGrok), store.grokAvailable {
-            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK", values: [store.grokPlan?.percent]))
+            // A stale plan (kept through a temporary failure) is not drawn as current; the popover explains (#21).
+            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK",
+                              values: [store.grokFailure == nil ? store.grokPlan?.percent : nil]))
         }
         if store.awake {
             add(.awake, icon("cup.and.saucer.fill", "AW"))
