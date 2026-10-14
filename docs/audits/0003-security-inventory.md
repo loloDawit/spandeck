@@ -4,6 +4,11 @@ Issue: [#3](https://github.com/loloDawit/spandeck/issues/3) · Parent: [#2 M0 tr
 
 Audited revision: `c60d3d9` (`main`, inherited Headroom v1.1 source). Date: 2026-10-13.
 
+**Status update: 2026-10-14** (`main` = `e68034a`). The findings below describe the inherited code at `c60d3d9` and are kept as written. Later changes are recorded beside them, not in place of them:
+- **Merged:** PR #14 (#12, R12) added injectable dependencies and mocked launch-path tests; production behavior unchanged. PR #16 (#15, R1 + R2) made the Claude Keychain read / usage endpoint and launch at login opt-in.
+- **Proposed, not merged:** PR #18 (#17, R4) makes the Grok key read, billing request and `grok models` execution opt-in. Until it merges, Grok behavior on `main` is as originally audited.
+- Status cells use **Merged (#16)**, **Proposed (#18)** or **Unchanged**.
+
 ## Evidence classes
 
 Every finding is tagged:
@@ -11,6 +16,7 @@ Every finding is tagged:
 - **[code]** — observed by reading source at the audited revision. Describes what the code is written to do, not what was seen at runtime.
 - **[runtime]** — observed by executing something on a real machine; the procedure is stated.
 - **[hypothesis]** — plausible but unverified; listed with the check that would confirm or refute it.
+- **[mocked]** — shown by synthetic launch-path tests under injected fakes (#12 onward). This characterizes what the code does with fake Keychain, network, process, login-item and preference dependencies. It is **not** evidence of OS-level behavior (real Keychain prompts, login-item notifications, file modes, actual network traffic).
 
 **Scope limit:** the application itself was **not launched** for this audit, because a launch on a developer machine reads the real Claude Code Keychain item, calls `api.anthropic.com`, registers a login item and scans real transcripts (see §6). All application behavior below is therefore **[code]** unless marked otherwise. The only [runtime] observations are the build/test run and the `HOME` isolation probe in §6.
 
@@ -75,33 +81,35 @@ flowchart LR
 | B13 | Process → logs | `NSLog` on login-item failure (error only); hover debug log only when `debugHover` default is set (mouse coordinates/state) | — | Low | Debug opt-in | [code] `PopoverView.swift:597`, `Hover.swift:39-49` |
 | B14 | Process → arbitrary dir | `--snapshot <dir>` writes PNGs of the status strip and popover, then exits | — | **Medium**: renders real limits/usage/cost into images | CLI argument | [code] `main.swift:44-46, 210-244` |
 
+**Status (2026-10-14):** B1, B2 — Merged (#16): opt-in, off by default, consent checked before forced refresh, late results dropped [mocked]. B10 — Merged (#16): never registered automatically; existing registrations untouched [mocked]. B3, B4, B5 — Proposed (#18): opt-in, consent re-checked before `grok models`, re-read and retry [mocked on the PR branch]; **unchanged on `main`**. B6–B9, B11–B14 — Unchanged.
+
 Not present [code]: no entitlements file, no App Sandbox, no hardened runtime, no local server/listener, no global event monitors (only `addLocalMonitorForEvents`, which needs no Input Monitoring permission — `Hover.swift:30`), no clipboard, AppleScript, `launchctl`, or hooks/status-line/settings mutation, no SPM dependencies (`Package.swift`).
 
 ## 2. Egress matrix
 
-| Destination | Purpose | Content sent | Frequency | Timeout | Offline / failure behavior | User control | Evidence |
-|---|---|---|---|---|---|---|---|
-| `api.anthropic.com/api/oauth/usage` | Plan quota %, reset times | OAuth bearer token, beta header, UA impersonating `claude-code/2.1` | At launch; every 60 s timer (tolerance 2 s); on wake; on manual refresh. Suppressed for 300 s only after HTTP 429 | 15 s request (ephemeral `URLSession`, no disk cache/cookies) | Error string shown in UI; 401 → "Token expired, will retry" and **retried every 60 s with no backoff**; locally-expired token short-circuits before egress | **None.** `show.claude` toggle only hides the gauge — it does not stop the Keychain read or the request | [code] `main.swift:50-53, 67-70, 105-122`, `Clients.swift:43-48, 82-91`, `StatusRenderer.swift:35` |
-| `cli-chat-proxy.grok.com/v1/billing` | Grok credit usage | Grok bearer key | Same cadence as above (not subject to the 429 backoff); only when `~/.grok/auth.json` has a key | 15 s | 402/403/404 (and 401 after refresh) → `.notConfigured` → provider silently hidden as "Not set up" | **None.** `show.grok` only hides display | [code] `main.swift:123-135`, `Clients.swift:180-207`, `StatusRenderer.swift:40` |
-| `raw.githubusercontent.com/BerriAI/litellm/main/...json` | Model price table for cost estimates | Plain GET (IP, default `URLSession` UA) | At launch if `pricing.json` is missing, empty, or older than 24 h. **Not refreshed while running** | `URLSession.shared` default (60 s request timeout); default shared URL cache and cookie storage | Silent; cached table (if any) remains. With no table, cost is `nil` per model but **summed as $0** into today/week/month totals (missing becomes zero — see #7) | None | [code] `main.swift:26`, `Ledger.swift:106-130, 459-465` |
+| Destination | Purpose | Content sent | Frequency | Timeout | Offline / failure behavior | User control | Evidence | Status (2026-10-14) |
+|---|---|---|---|---|---|---|---|---|
+| `api.anthropic.com/api/oauth/usage` | Plan quota %, reset times | OAuth bearer token, beta header, UA impersonating `claude-code/2.1` | At launch; every 60 s timer (tolerance 2 s); on wake; on manual refresh. Suppressed for 300 s only after HTTP 429 | 15 s request (ephemeral `URLSession`, no disk cache/cookies) | Error string shown in UI; 401 → "Token expired, will retry" and **retried every 60 s with no backoff**; locally-expired token short-circuits before egress | **None.** `show.claude` toggle only hides the gauge — it does not stop the Keychain read or the request | [code] `main.swift:50-53, 67-70, 105-122`, `Clients.swift:43-48, 82-91`, `StatusRenderer.swift:35` | **Merged (#16):** no request unless the user opts in (`claude.limits.enabled`, default off), including forced refresh; late results after a consent change dropped [mocked]. Once enabled: cadence, UA and missing 401 backoff unchanged (R9). |
+| `cli-chat-proxy.grok.com/v1/billing` | Grok credit usage | Grok bearer key | Same cadence as above (not subject to the 429 backoff); only when `~/.grok/auth.json` has a key | 15 s | 402/403/404 (and 401 after refresh) → `.notConfigured` → provider silently hidden as "Not set up" | **None.** `show.grok` only hides display | [code] `main.swift:123-135`, `Clients.swift:180-207`, `StatusRenderer.swift:40` | **Proposed (#18), not merged:** no request unless the user opts in (`grok.enabled`, default off) [mocked]. Unchanged on `main`. |
+| `raw.githubusercontent.com/BerriAI/litellm/main/...json` | Model price table for cost estimates | Plain GET (IP, default `URLSession` UA) | At launch if `pricing.json` is missing, empty, or older than 24 h. **Not refreshed while running** | `URLSession.shared` default (60 s request timeout); default shared URL cache and cookie storage | Silent; cached table (if any) remains. With no table, cost is `nil` per model but **summed as $0** into today/week/month totals (missing becomes zero — see #7) | None | [code] `main.swift:26`, `Ledger.swift:106-130, 459-465` | Unchanged (R6, R7). Now the only default-launch egress on `main` besides Grok [mocked]. |
 
 No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call sites exist in `Sources/` [code] (grep for `URL(`, `URLSession`, `socket`, `NWConnection`, `openURL`, `Link(`, `NSWorkspace.shared.open`, `WKWebView`, `Process(`, `runProcess`).
 
 ## 3. Permissions inventory and least-privilege recommendations
 
-| Capability | Current | Needed for core value? | Least-privilege recommendation | Documented alternative |
-|---|---|---|---|---|
-| Read Claude Code OAuth credential from Keychain | Every refresh (≥ once/min), via `/usr/bin/security -w`, whole JSON blob piped into process memory | No — quota gauge only | Default off; explicit opt-in with capability label "unofficial"; never read while disabled; read only the needed fields; consider not retaining between refreshes | Candidate documented surfaces (to verify in #10): Claude Code status-line input, Claude Code OpenTelemetry metrics, `/usage` in-CLI. Admin/Usage APIs target org API keys, not subscriptions |
-| Call `api.anthropic.com/api/oauth/usage` | Undocumented endpoint, beta header, impersonating `User-Agent` | No | Opt-in only; honest UA; backoff on 401 as well as 429; label results "unofficial, may break" | Same as above |
-| Read `~/.grok/auth.json` | Every refresh if present | No | Opt-in per provider | — |
-| Execute `~/.grok/bin/grok` | Automatically on expiry/401, ≤ once per 10 min, exit status discarded | No | Remove automatic execution; if retained, opt-in, fixed minimal environment, surface failure | Ask user to run the CLI themselves |
-| Download LiteLLM pricing | Launch-time, unpinned `main`, no integrity check | Partially (cost estimates) | Ship a bundled, reviewed snapshot; make updates opt-in; pin to a commit SHA + checksum; ephemeral session with explicit timeout; label prices with source/date | — |
-| Read Claude transcripts | All `*.jsonl` under two roots, ≤ 32 days, every 10 s (hot tail) / 300 s (full scan) | **Yes** (core) | Keep read-only; parse only allowlisted fields; prove via canary fixtures (#5) | Status-line / OTel may reduce need (#10) |
-| Write cache | Paths + message/request IDs + counts, default umask | Yes (performance) | Store no raw paths (hash or project-level opaque IDs); `0600` files / `0700` dir; user-visible delete; documented retention | — |
-| Login item | **Registered on first launch without asking** | No | Default off; only via existing settings toggle; never silently unregister existing users | — |
-| Process/IOKit sampling | Unprivileged, own-UID processes | Yes (inherited hardware feature) | Keep; per-process sampling already limited to hover visibility | — |
-| Power assertion | Manual or opt-in agent mode (default off) | Optional | Keep as is | — |
-| `--snapshot <dir>` | Writes real data to any path | No (dev tool) | Restrict to debug builds or synthetic store | — |
+| Capability | Current | Needed for core value? | Least-privilege recommendation | Documented alternative | Status (2026-10-14) |
+|---|---|---|---|---|---|
+| Read Claude Code OAuth credential from Keychain | Every refresh (≥ once/min), via `/usr/bin/security -w`, whole JSON blob piped into process memory | No — quota gauge only | Default off; explicit opt-in with capability label "unofficial"; never read while disabled; read only the needed fields; consider not retaining between refreshes | Candidate documented surfaces (to verify in #10): Claude Code status-line input, Claude Code OpenTelemetry metrics, `/usage` in-CLI. Admin/Usage APIs target org API keys, not subscriptions | Merged (#16): opt-in, default off [mocked]. |
+| Call `api.anthropic.com/api/oauth/usage` | Undocumented endpoint, beta header, impersonating `User-Agent` | No | Opt-in only; honest UA; backoff on 401 as well as 429; label results "unofficial, may break" | Same as above | Merged (#16): opt-in. Honest UA / 401 backoff still open (R9). |
+| Read `~/.grok/auth.json` | Every refresh if present | No | Opt-in per provider | — | Proposed (#18): opt-in, default off. Unchanged on `main`. |
+| Execute `~/.grok/bin/grok` | Automatically on expiry/401, ≤ once per 10 min, exit status discarded | No | Remove automatic execution; if retained, opt-in, fixed minimal environment, surface failure | Ask user to run the CLI themselves | Proposed (#18): runs only with consent, which is re-checked before exec; not removed. A process already running when consent is withdrawn completes (≤ 45 s). Failure surfacing still open (R5). |
+| Download LiteLLM pricing | Launch-time, unpinned `main`, no integrity check | Partially (cost estimates) | Ship a bundled, reviewed snapshot; make updates opt-in; pin to a commit SHA + checksum; ephemeral session with explicit timeout; label prices with source/date | — | Unchanged (R6). |
+| Read Claude transcripts | All `*.jsonl` under two roots, ≤ 32 days, every 10 s (hot tail) / 300 s (full scan) | **Yes** (core) | Keep read-only; parse only allowlisted fields; prove via canary fixtures (#5) | Status-line / OTel may reduce need (#10) | Unchanged. |
+| Write cache | Paths + message/request IDs + counts, default umask | Yes (performance) | Store no raw paths (hash or project-level opaque IDs); `0600` files / `0700` dir; user-visible delete; documented retention | — | Unchanged (R8). |
+| Login item | **Registered on first launch without asking** | No | Default off; only via existing settings toggle; never silently unregister existing users | — | Merged (#16): Settings toggle only; existing registrations untouched [mocked]. |
+| Process/IOKit sampling | Unprivileged, own-UID processes | Yes (inherited hardware feature) | Keep; per-process sampling already limited to hover visibility | — | Unchanged. |
+| Power assertion | Manual or opt-in agent mode (default off) | Optional | Keep as is | — | Unchanged. |
+| `--snapshot <dir>` | Writes real data to any path | No (dev tool) | Restrict to debug builds or synthetic store | — | Unchanged (R10). |
 
 ## 4. Observations on issue-comment question (`Clients.swift:177` warning)
 
@@ -112,6 +120,7 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
   - After a failed refresh, a second 401 collapses into `ClientError.notConfigured` (`Clients.swift:191-196`), which the UI renders as "Not set up" and **hides the provider** (`main.swift:128-130`). A user cannot distinguish "refresh failed / token invalid" from "Grok not installed".
   - Secrets do not reach error strings: `ClientError.errorDescription` uses only static text and status codes (`Clients.swift:31-40`); subprocess stdout/stderr go to `/dev/null`.
 - **Conclusion:** not a demonstrated runtime defect, but an observability gap (failure masked as absence). Tracked as R5 below.
+- **Status (2026-10-14):** the compiler warning is gone since PR #14, which made the discard explicit (`_ = runner.run(...)`). Exit status is still ignored, and the gap remains (R5, open). With PR #18, a user who opts in to Grok and then hits a failed refresh sees no Grok section at all, so the gap becomes more visible.
 
 ## 5. Other findings
 
@@ -123,6 +132,8 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
 - **F6 [code] Supply chain / distribution.** `build.sh:22` ad-hoc signs (`codesign --sign -`), no hardened runtime, no notarization; `build.sh install` kills, replaces and launches `/Applications/Headroom.app`. Workflows use tag-pinned (not SHA-pinned) `actions/checkout@v5`; `release.yml` has `contents: write`; `test.yml` declares no `permissions` block (inherits repo default). Belongs to #11.
 - **F7 [hypothesis] Keychain prompt behavior.** Whether the read is silent depends on the item's ACL. If Claude Code writes the item via `/usr/bin/security`, that binary is likely already trusted and the read is silent; if the user ever clicks "Always Allow" for `/usr/bin/security`, *any* local process using the `security` CLI can read the item without prompting. **Check:** on a fresh test account, create a synthetic item with the same service name via `security add-generic-password`, run the app, and record whether a prompt appears; inspect the ACL with `security dump-keychain -a` (synthetic item only).
 - **F8 [hypothesis] Cache file modes.** Files are written with the process umask (commonly `0644`) under `~/Library` (commonly `0700`). **Check:** `stat -f '%Sp %N'` on the cache files after a synthetic run.
+
+**Status of findings (2026-10-14):** F1 — still true (R3 open), but since #16 Claude collection first requires consent, and with #18 Grok will too. F2 — resolved by #16 (no automatic registration). F3 — unchanged in effect; since #14 the directory is created when the live environment is built during launch. F4–F8 — unchanged.
 
 ## 6. Default launch: quiet/offline or side effects?
 
@@ -137,11 +148,22 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
 
 **[runtime] Isolation probe:** with `HOME` set to a scratch directory, a Swift script printed `FileManager.default.homeDirectoryForCurrentUser`, `NSHomeDirectory()` and the user Application Support URL — **all three still resolved to the real home directory**. Overriding `HOME` therefore does **not** isolate transcript reads, cache writes or Grok files, and `security` reads the UID's login Keychain regardless. A temp-`HOME` run is not a safe verification method.
 
+**Status as of `e68034a` (PR #16 merged).** The verdict above describes `c60d3d9` and stands as history. On current `main`, default launch with no user opt-ins:
+1. Creates `~/Library/Application Support/Headroom/` and, with no fresh cached table, fetches LiteLLM pricing.
+2. Does **not** register a login item, and leaves an existing one alone [mocked: `defaultLaunchSideEffects`, `existingLoginItemIsLeftAlone`].
+3. Does **not** read the Claude Keychain item or call `api.anthropic.com`, including on forced refresh [mocked: `defaultLaunchSideEffects`, `forcedRefreshWithoutConsentReadsNothing`].
+4. **Still** reads `~/.grok/auth.json`, calls Grok billing and may run `grok models` if a Grok CLI login exists. That only changes when PR #18 merges.
+5. Starts hardware sampling and scans Claude transcripts and Grok usage files (unchanged).
+
+So current `main` is **not offline** (pricing; Grok if installed) and **not yet credential-free** (Grok). **Proposed by PR #18:** item 4 becomes opt-in [mocked on the PR branch: `defaultLaunchDoesNoGrokCredentialWork`]. Once it merges, the only default-launch egress is the pricing download. None of this is confirmed at OS level; see §7 Phase 2.
+
 ## 7. Safe runtime verification procedure
 
 Owner decision (2026-10-13): **no fabricated credentials are sent to real provider endpoints**, and the separate-account launch is deferred until the code has injectable dependencies. Verification therefore happens in two phases. Never paste tokens, real project paths or transcript content into issues.
 
 ### Phase 1 — mocked environment (prerequisite; tracked as R12 in #12)
+
+**Status (2026-10-14): done.** PR #14 delivered the seams and characterization tests; PRs #16 and #18 extended them. Every result here is [mocked], not OS-level evidence. Main tests: `LaunchPathTests` (`defaultLaunchSideEffects`, `forcedRefreshWithoutConsentReadsNothing`, `enablingClaudeLimitsReadsAndPersists`, `lateResultAfterReenableIsDropped`, `existingLoginItemIsLeftAlone`, `ledgerCacheKeepsPathsNotContent`, `offlinePricingCountsAsZero`, `SeamBoundaryTests`) and, on the #18 branch, `GrokConsentTests`. The plan below is kept as originally written.
 
 Introduce seams so the default launch path can run under test with no real Keychain, network, subprocess, login-item or home-directory access:
 
@@ -163,6 +185,8 @@ Phase 1 acceptance tests (all synthetic, run in `swift test`):
 
 ### Phase 2 — dedicated-account observation (optional, after Phase 1)
 
+**Status (2026-10-14): not done.** Still required to confirm OS-level behavior: login-item state and notification, absence of Keychain access and its prompt, real file modes, and the actual set of network destinations.
+
 Only to confirm OS-level effects the mocks cannot (login-item notification, real file modes, real process tree):
 
 1. New macOS user account or VM with **no Claude Code or Grok credentials at all** — do not create synthetic Keychain items or Grok keys, so no credential leaves the machine.
@@ -175,20 +199,20 @@ Only to confirm OS-level effects the mocks cannot (login-item notification, real
 
 Owner decision (2026-10-13): fold remediation into existing M0 issues; create a new issue only for distinct, independently actionable work. Implementation goes in separate, small PRs.
 
-| ID | Priority | Remediation | Risk addressed | Compatibility impact | Rollback | Concrete tests | Tracked in |
-|---|---|---|---|---|---|---|---|
-| R1 | P0 | Stop registering login item on first launch | Surprising persistence (B10, F2) | New installs no longer auto-start; existing registrations untouched (do not silently unregister) | Revert commit | `LoginItemService` fake: launch path never calls `register()`; toggle calls register/unregister and reflects status | #4 |
-| R2 | P0 | Gate Claude Keychain read + usage endpoint behind explicit opt-in (default off) | Credential exposure (B1, B2, F1) | Existing users lose quota gauge until they opt in; ledger unaffected | Revert; or default the pref to on | `CredentialStore` fake: zero calls when disabled; transport records no request | #4 |
-| R3 | P1 | Make provider display toggles gate collection (Claude, Grok) | Collection continues when user "turns off" (F1) | None visible | Revert | Phase 1 test 2 flips to "no calls" | #4 |
-| R4 | P1 | Remove automatic execution of `~/.grok/bin/grok`; Grok opt-in | Unexpected exec of user-writable binary (B4) | Grok tokens no longer auto-refreshed; user runs CLI | Revert | `ProcessRunner` fake asserts no exec; Grok disabled by default | #4 |
-| R5 | P1 | Surface Grok refresh/auth failures distinctly from "not configured" | Failure masked as absence (§4) | UI shows an error state instead of hiding Grok | Revert | Phase 1 test 3 yields an auth-error state; error text contains no key material | #4 |
-| R6 | P1 | Pricing: bundled reviewed snapshot, pinned (commit SHA + checksum) opt-in updates, explicit timeout, ephemeral session | Unpinned remote data, silent egress (B6) | Prices may lag until updated | Revert to remote fetch | Default launch issues no pricing request; checksum mismatch rejected; table provenance (source/date) exposed | #7 (provenance), #11 (integrity/pinning) |
-| R7 | P1 | Unknown price is not $0 in totals | Under-reported cost (F4) | Totals may show "partial" instead of a number | Revert | Fixture with unpriced model → total flagged partial/unknown | #7 |
-| R8 | P1 | Minimize ledger cache: no raw paths, `0600`/`0700` modes, user-visible delete | Local disclosure (B9, F5, F8) | Cache schema bump (`version` 3→4) forces one re-index | Old version file ignored by version check; revert restores old format | Phase 1 test 4: no transcript paths or canary in cache; mode assertions | #5 |
-| R9 | P2 | Honest `User-Agent` for any retained provider call; back off on 401 | Client impersonation; repeated invalid-token requests | None visible | Revert | Transport fake asserts UA value and 401 backoff | #4 |
-| R10 | P2 | Restrict `--snapshot` to debug builds or a synthetic store | Real data rendered to arbitrary path (B14) | Release builds lose snapshot flag | Revert | Argument ignored in release configuration | #5 |
-| R11 | P2 | CI/release hardening: SHA-pin actions, explicit least `permissions` in `test.yml`, Developer ID signing + notarization plan | Supply chain (F6) | None for users until release | Revert workflow change | Workflow lint (e.g. `actionlint`, pin check) | #11 |
-| R12 | P1 | Injectable dependencies + mocked default-launch tests (§7 Phase 1) | No reproducible runtime evidence; prerequisite for R1–R9 tests | Internal refactor only; no behavior change | Revert | Phase 1 tests 1–5 pass and document current behavior | #12 (new: distinct prerequisite; informs #9) |
+| ID | Priority | Remediation | Risk addressed | Compatibility impact | Rollback | Concrete tests | Tracked in | Status (2026-10-14) |
+|---|---|---|---|---|---|---|---|---|
+| R1 | P0 | Stop registering login item on first launch | Surprising persistence (B10, F2) | New installs no longer auto-start; existing registrations untouched (do not silently unregister) | Revert commit | `LoginItemService` fake: launch path never calls `register()`; toggle calls register/unregister and reflects status | #4 | Merged — #15 / PR #16 |
+| R2 | P0 | Gate Claude Keychain read + usage endpoint behind explicit opt-in (default off) | Credential exposure (B1, B2, F1) | Existing users lose quota gauge until they opt in; ledger unaffected | Revert; or default the pref to on | `CredentialStore` fake: zero calls when disabled; transport records no request | #4 | Merged — #15 / PR #16 |
+| R3 | P1 | Make provider display toggles gate collection (Claude, Grok) | Collection continues when user "turns off" (F1) | None visible | Revert | Phase 1 test 2 flips to "no calls" | #4 | Open |
+| R4 | P1 | Remove automatic execution of `~/.grok/bin/grok`; Grok opt-in | Unexpected exec of user-writable binary (B4) | Grok tokens no longer auto-refreshed; user runs CLI | Revert | `ProcessRunner` fake asserts no exec; Grok disabled by default | #4 | Proposed — #17 / PR #18 (not merged) |
+| R5 | P1 | Surface Grok refresh/auth failures distinctly from "not configured" | Failure masked as absence (§4) | UI shows an error state instead of hiding Grok | Revert | Phase 1 test 3 yields an auth-error state; error text contains no key material | #4 | Open (more visible once R4 merges) |
+| R6 | P1 | Pricing: bundled reviewed snapshot, pinned (commit SHA + checksum) opt-in updates, explicit timeout, ephemeral session | Unpinned remote data, silent egress (B6) | Prices may lag until updated | Revert to remote fetch | Default launch issues no pricing request; checksum mismatch rejected; table provenance (source/date) exposed | #7 (provenance), #11 (integrity/pinning) | Open |
+| R7 | P1 | Unknown price is not $0 in totals | Under-reported cost (F4) | Totals may show "partial" instead of a number | Revert | Fixture with unpriced model → total flagged partial/unknown | #7 | Open |
+| R8 | P1 | Minimize ledger cache: no raw paths, `0600`/`0700` modes, user-visible delete | Local disclosure (B9, F5, F8) | Cache schema bump (`version` 3→4) forces one re-index | Old version file ignored by version check; revert restores old format | Phase 1 test 4: no transcript paths or canary in cache; mode assertions | #5 | Open |
+| R9 | P2 | Honest `User-Agent` for any retained provider call; back off on 401 | Client impersonation; repeated invalid-token requests | None visible | Revert | Transport fake asserts UA value and 401 backoff | #4 | Open |
+| R10 | P2 | Restrict `--snapshot` to debug builds or a synthetic store | Real data rendered to arbitrary path (B14) | Release builds lose snapshot flag | Revert | Argument ignored in release configuration | #5 | Open |
+| R11 | P2 | CI/release hardening: SHA-pin actions, explicit least `permissions` in `test.yml`, Developer ID signing + notarization plan | Supply chain (F6) | None for users until release | Revert workflow change | Workflow lint (e.g. `actionlint`, pin check) | #11 | Open; fork has 0 CI runs |
+| R12 | P1 | Injectable dependencies + mocked default-launch tests (§7 Phase 1) | No reproducible runtime evidence; prerequisite for R1–R9 tests | Internal refactor only; no behavior change | Revert | Phase 1 tests 1–5 pass and document current behavior | #12 (new: distinct prerequisite; informs #9) | Merged — #12 / PR #14 |
 
 ## 9. Acceptance checklist for #3
 
@@ -197,4 +221,5 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 - [x] Permissions inventory and least-privilege recommendations, documented vs unofficial — §3 (documented-surface claims to be verified in #10)
 - [x] Safe runtime verification procedure — §7 (mocked first; no fabricated credentials to real endpoints)
 - [x] Prioritized remediation with risk, compatibility, rollback and tests — §8, mapped to #4, #5, #7, #11 and new issue #12 for R12
-- [ ] Default launch confirmed with reproducible runtime observations — §6 gives the [code] verdict; **runtime confirmation pending** §7 Phase 1 (R12, #12)
+- [ ] Default launch confirmed with reproducible runtime observations — §6 gives the original [code] verdict and a dated status. Mocked characterization exists (#14, #16; #18 proposed), but **OS-level observation per §7 Phase 2 is still required.** Mocked tests are not proof of OS behavior.
+- [ ] CI verification of the test suite — the fork has 0 recorded Actions runs; all test results so far are local.
