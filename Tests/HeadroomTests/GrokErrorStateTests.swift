@@ -9,13 +9,15 @@ struct GrokErrorStateTests {
     private struct Rig {
         let box: Sandbox
         let auth: CountingGrokAuth
-        let runner = FakeProcessRunner()
+        let runner: FakeProcessRunner
         let claude = FakeCredentialStore(FakeCredentialStore.synthetic())
         let services: ProviderServices
 
         /// Grok installed (canary key, `bin/grok`, one local usage file) and opted in.
-        @MainActor init(transport: HTTPTransport, expiresIn: TimeInterval? = nil, install: Bool = true) throws {
+        @MainActor init(transport: HTTPTransport, expiresIn: TimeInterval? = nil, install: Bool = true,
+                        runner: FakeProcessRunner = FakeProcessRunner()) throws {
             box = try Sandbox()
+            self.runner = runner
             if install { try box.installGrok(expiresIn: expiresIn) }
             auth = CountingGrokAuth(home: box.home)
             services = ProviderServices(store: Store(), env: box.environment(
@@ -237,6 +239,31 @@ struct GrokErrorStateTests {
         #expect(rig.runner.calls.isEmpty && rig.auth.reads == reads && transport.started == 1)
     }
 
+    /// Withdrawn while `grok models` runs in the 401 recovery path: no key re-read, retry or failure afterwards.
+    @Test(arguments: [false, true])
+    func withdrawnDuringRecoveryStops(hide: Bool) async throws {
+        let transport = FakeTransport([Hosts.grok: [.unauthorized]])
+        let runner = FakeProcessRunner(pausing: true)
+        let rig = try Rig(transport: transport, runner: runner)
+
+        let inFlight = Task { await rig.services.refreshGrok() }
+        let running = await runner.waitUntilRunning()
+        let reads = rig.auth.reads
+        if hide {
+            rig.box.preferences.set(false, forKey: Prefs.showGrok)
+            rig.services.recordQuotaShown(.grok, false)
+        } else {
+            rig.services.setGrokEnabled(false)
+        }
+        runner.resume()
+        await inFlight.value // bounded: the paused run gives up after 2 s
+
+        #expect(running, "`grok models` never started")
+        #expect(rig.auth.reads == reads)
+        #expect(transport.requests.count == 1 && runner.calls.count == 1)
+        #expect(rig.store.grokFailure == nil)
+    }
+
     /// Off → on while a request is pending: its failure can't overwrite the state of the new request.
     @Test(arguments: [FakeTransport.Response.json("{}", status: 500), .json("{}", status: 403), .unauthorized])
     func rapidOffOnOldFailureDropped(_ late: FakeTransport.Response) async throws {
@@ -326,7 +353,8 @@ struct GrokErrorStateTests {
             default: credential = false
             }
             // Signing in is suggested for credential problems only, never for network, 429 or 5xx.
-            #expect(failure.guidance.contains("Sign in") == credential, "\(failure)")
+            let suggestsSignIn = ["sign in", "log in", "reauth"].contains { failure.guidance.localizedCaseInsensitiveContains($0) }
+            #expect(suggestsSignIn == credential, "\(failure)")
         }
         // 402/403 doesn't claim a cause the response doesn't give.
         #expect(GrokError.accessDenied(403).guidance.contains("doesn't say why"))
