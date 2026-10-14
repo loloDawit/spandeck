@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Tracking:** [M0 master issue #2](https://github.com/loloDawit/spandeck/issues/2) links to the nine evidence-first M0 research and test issues. These issue-title workstreams are **not yet GitHub Milestone objects**.
+
 Roadmap stages, not yet-created GitHub milestones. Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation.
 
 ## M0 — Security and accounting baseline
