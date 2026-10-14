@@ -2,6 +2,8 @@
 
 Status: preliminary audit from source inspection; no runtime, binary, dependency or penetration audit has been completed.
 
+Line-level inventory of credentials, file access, subprocesses, egress and launch side effects: [audits/0003-security-inventory.md](audits/0003-security-inventory.md) (issue #3).
+
 ## Assets and trust boundaries
 Assets: Claude OAuth bearer tokens; local prompts, source code, filenames and tool outputs in transcripts; usage histories; optional provider credentials; workstation resources and settings.
 
