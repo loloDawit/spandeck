@@ -20,6 +20,8 @@ enum Prefs {
     static let awakeDisplay = "awake.display"
     /// Consent to read the Claude Code login from the Keychain for plan limits (#15). Off unless the user enables it.
     static let claudeLimits = "claude.limits.enabled"
+    /// Consent to read the Grok CLI's key, call its billing endpoint and run `grok models` (#17). Off by default.
+    static let grokCredits = "grok.enabled"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -78,6 +80,10 @@ final class Store: ObservableObject {
     @Published var claudeUsage: UsageSummary?
     /// Whether the user has opted in to Claude plan limits; mirrors `Prefs.claudeLimits`.
     @Published var claudeLimitsEnabled = false
+    /// Whether the user has opted in to Grok credits; mirrors `Prefs.grokCredits`.
+    @Published var grokEnabled = false
+    /// UI only: the user asked (from Settings) to see the Grok consent card.
+    @Published var grokConsentRequested = false
     /// Providers start hidden and appear once their account answers; they hide again if not set up.
     @Published var claudeAvailable = false
     @Published var grokAvailable = false
@@ -90,6 +96,13 @@ final class Store: ObservableObject {
     @Published var awakeUntil: Date?
     @Published var awakeForAgents = false
     var awake: Bool { awakeUntil != nil || awakeForAgents }
+
+    /// Grok token usage from local session files, shown whenever there is any. Independent of Grok credits
+    /// consent (#17), which only covers the credential-based plan data.
+    var localGrokUsage: UsageSummary? {
+        guard let u = grokUsage, u.month.tokens > 0 else { return nil }
+        return u
+    }
 
     private var seq = 0
 

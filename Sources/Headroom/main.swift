@@ -115,6 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func setGrokCredits(_ on: Bool) {
+        Task { @MainActor in
+            await services.applyGrokChoice(on)
+            redraw()
+        }
+    }
+
     private func refreshUsage() {
         guard !ledgerBusy else { return }
         ledgerBusy = true
@@ -173,7 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             quit: { NSApp.terminate(nil) },
             keepAwake: { [weak self] in self?.setAwake($0) },
             loginItem: env.loginItem,
-            setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) }))
+            setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) },
+            setGrokCredits: { [weak self] on in self?.setGrokCredits(on) }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -212,7 +220,8 @@ extension AppDelegate {
         }
         print("strip width pt:", strip.size.width)
 
-        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in }))
+        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
+                                                              setGrokCredits: { _ in }))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

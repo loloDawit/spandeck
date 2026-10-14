@@ -13,15 +13,41 @@ final class ProviderServices {
     private var claudeBackoffUntil = Date.distantPast
     /// Bumped on every consent change, so a request started under an earlier choice can't publish its result.
     private var claudeConsentGeneration = 0
+    private var grokConsentGeneration = 0
 
     init(store: Store, env: AppEnvironment) {
         self.store = store
         pricing = Pricing(file: env.appSupport.appendingPathComponent("pricing.json"), transport: env.pricingTransport)
         ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
-        grokClient = GrokClient(home: env.home, transport: env.providerTransport, runner: env.processRunner)
+        grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,
+                                runner: env.processRunner)
         preferences = env.preferences
         store.claudeLimitsEnabled = preferences.bool(forKey: Prefs.claudeLimits)
+        store.grokEnabled = preferences.bool(forKey: Prefs.grokCredits)
+    }
+
+    /// Grok credits need the Grok CLI's API key, its billing endpoint and possibly running `grok models`,
+    /// so they stay off until the user opts in (#17). Local Grok usage files are read either way.
+    var grokEnabled: Bool { preferences.bool(forKey: Prefs.grokCredits) }
+
+    /// Records the user's choice. Turning it off clears shown plan data; any change resets the CLI refresh throttle.
+    @MainActor func setGrokEnabled(_ on: Bool) {
+        grokConsentGeneration += 1
+        preferences.set(on, forKey: Prefs.grokCredits)
+        store.grokEnabled = on
+        store.grokConsentRequested = false
+        grokClient.resetRefreshThrottle()
+        guard !on else { return }
+        store.grokPlan = nil
+        store.grokError = nil
+        store.grokAvailable = false
+    }
+
+    /// Applies the user's choice from the consent card or Settings. Enabling refreshes Grok only (#17).
+    @MainActor func applyGrokChoice(_ on: Bool) async {
+        setGrokEnabled(on)
+        if on { await refreshGrok() }
     }
 
     /// Claude plan limits need the Claude Code OAuth token from the Keychain and an unofficial endpoint,
@@ -78,9 +104,20 @@ final class ProviderServices {
         }
     }
 
+    /// Fetches Grok credits if the user opted in. Not gated by the display toggle (#4, R3).
     @MainActor func refreshGrok() async {
+        guard grokEnabled else { return }
+        let generation = grokConsentGeneration
+        let isCurrent = { @MainActor [weak self] () -> Bool in
+            guard let self else { return false }
+            return self.grokEnabled && self.grokConsentGeneration == generation
+        }
+        let result: Result<GrokPlan, Error>
+        do { result = .success(try await grokClient.fetch(stillAllowed: { await MainActor.run { isCurrent() } })) } catch { result = .failure(error) }
+        // Drop the result if the user changed their choice while the request was in flight (even off and on again).
+        guard isCurrent() else { return }
         do {
-            store.grokPlan = try await grokClient.fetch()
+            store.grokPlan = try result.get()
             store.grokError = nil
             store.grokAvailable = true
         } catch ClientError.notConfigured {
