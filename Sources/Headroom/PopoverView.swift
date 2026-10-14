@@ -1,6 +1,5 @@
 import SwiftUI
 import Charts
-import ServiceManagement
 
 extension Color {
     static let cpu = Color(nsColor: Palette.cpu)
@@ -19,6 +18,7 @@ struct PopoverActions {
     var refresh: () -> Void
     var quit: () -> Void
     var keepAwake: (AwakeSession) -> Void
+    var loginItem: LoginItemService
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -582,7 +582,7 @@ struct Footer: View {
             Button("Quit", action: actions.quit).buttonStyle(.borderless)
         }
         .font(.system(size: 11))
-        .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
+        .onAppear { launchAtLogin = actions.loginItem.isEnabled }
     }
 
     private var awakeLabel: String {
@@ -592,10 +592,10 @@ struct Footer: View {
 
     private func setLaunchAtLogin(_ on: Bool) {
         do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            if on { try actions.loginItem.register() } else { try actions.loginItem.unregister() }
         } catch {
             NSLog("Headroom: login item change failed: \(error)")
         }
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        launchAtLogin = actions.loginItem.isEnabled
     }
 }

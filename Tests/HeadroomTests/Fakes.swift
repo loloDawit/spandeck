@@ -1,0 +1,134 @@
+import Foundation
+@testable import Headroom
+
+/// Records every request and answers from canned responses keyed by host. Unknown hosts fail as offline
+/// and are recorded in `unexpected`, so a test can assert that nothing left the allowlist.
+final class FakeTransport: HTTPTransport, @unchecked Sendable {
+    struct Response { var status: Int; var body: Data }
+
+    private let lock = NSLock()
+    private var _requests: [URLRequest] = []
+    private var _unexpected: [String] = []
+    private let responses: [String: [Response]]
+    private var served: [String: Int] = [:]
+
+    /// `responses[host]` is served in order; the last one repeats. A host with no entry is unexpected.
+    init(_ responses: [String: [Response]] = [:]) { self.responses = responses }
+
+    var requests: [URLRequest] { lock.withLock { _requests } }
+    var unexpected: [String] { lock.withLock { _unexpected } }
+    var hosts: [String] { requests.compactMap { $0.url?.host } }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let host = request.url?.host ?? ""
+        let response: Response? = lock.withLock {
+            _requests.append(request)
+            guard let list = responses[host], !list.isEmpty else { _unexpected.append(host); return nil }
+            let i = served[host, default: 0]
+            served[host] = i + 1
+            return list[min(i, list.count - 1)]
+        }
+        guard let response else { throw URLError(.notConnectedToInternet) }
+        let http = HTTPURLResponse(url: request.url!, statusCode: response.status, httpVersion: nil, headerFields: nil)!
+        return (response.body, http)
+    }
+}
+
+/// Records calls; never executes anything.
+final class FakeProcessRunner: ProcessRunner, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [(path: String, args: [String])] = []
+    var result: (status: Int32, output: Data)? = (0, Data())
+
+    var calls: [(path: String, args: [String])] { lock.withLock { _calls } }
+
+    func run(_ path: String, _ args: [String], timeout: TimeInterval, captureOutput: Bool) -> (status: Int32, output: Data)? {
+        lock.withLock { _calls.append((path, args)) }
+        return result
+    }
+}
+
+final class FakeCredentialStore: CredentialStore {
+    var json: Data?
+    private(set) var reads = 0
+    init(_ json: Data?) { self.json = json }
+    func claudeCredentialJSON() -> Data? { reads += 1; return json }
+
+    /// Synthetic Claude Code credential blob; the token is a canary, never a real secret.
+    static func synthetic(expiresIn: TimeInterval = 3600) -> Data {
+        let ms = Int((Date().timeIntervalSince1970 + expiresIn) * 1000)
+        return Data(#"{"claudeAiOauth":{"accessToken":"CANARY-NOT-A-TOKEN","expiresAt":\#(ms),"subscriptionType":"pro"}}"#.utf8)
+    }
+}
+
+/// In-memory preferences; never touches a real defaults domain.
+final class InMemoryPreferences: PreferenceStore {
+    private var values: [String: Bool] = [:]
+    func bool(forKey key: String) -> Bool { values[key] ?? false }
+    func set(_ value: Bool, forKey key: String) { values[key] = value }
+}
+
+final class FakeLoginItem: LoginItemService {
+    private(set) var registers = 0
+    private(set) var unregisters = 0
+    private(set) var isEnabled = false
+    func register() throws { registers += 1; isEnabled = true }
+    func unregister() throws { unregisters += 1; isEnabled = false }
+}
+
+/// A throwaway home and Application Support under a temp directory (removed on deinit), plus in-memory preferences.
+final class Sandbox {
+    let root: URL
+    let home: URL
+    let appSupport: URL
+    let preferences = InMemoryPreferences()
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("spandeck-tests-\(UUID().uuidString)")
+        home = root.appendingPathComponent("home")
+        appSupport = root.appendingPathComponent("appsupport")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func environment(transport: FakeTransport, runner: FakeProcessRunner = FakeProcessRunner(),
+                     credentials: FakeCredentialStore = FakeCredentialStore(nil),
+                     loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
+        AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,
+                       credentials: credentials, loginItem: loginItem, preferences: preferences,
+                       home: home, appSupport: appSupport)
+    }
+
+    /// Writes `contents` to a path relative to the sandbox home, creating folders.
+    @discardableResult
+    func write(_ relative: String, _ contents: String, executable: Bool = false) throws -> URL {
+        let url = home.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: url)
+        if executable { try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path) }
+        return url
+    }
+
+    /// One synthetic Claude Code assistant line with usage, timestamped now, with `canary` in the message body.
+    static func transcriptLine(model: String, id: String, canary: String) -> String {
+        let ts = ISO8601DateFormatter().string(from: Date())
+        return #"{"type":"assistant","timestamp":"\#(ts)","requestId":"req_\#(id)","message":{"id":"msg_\#(id)","model":"\#(model)","content":[{"type":"text","text":"\#(canary)"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#
+    }
+}
+
+enum Hosts {
+    static let anthropic = "api.anthropic.com"
+    static let grok = "cli-chat-proxy.grok.com"
+    static let pricing = "raw.githubusercontent.com"
+}
+
+extension FakeTransport.Response {
+    static func json(_ s: String, status: Int = 200) -> Self { .init(status: status, body: Data(s.utf8)) }
+    static let claudeUsage = json(#"{"limits":[{"kind":"session","percent":42,"resets_at":"2030-01-01T00:00:00Z"}]}"#)
+    static let pricingTable = json(#"{"claude-test-1":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}"#)
+    static let unauthorized = json("{}", status: 401)
+}

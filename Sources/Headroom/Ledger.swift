@@ -96,24 +96,32 @@ struct Price: Codable {
     var cacheRead: Double
 }
 
-final class Pricing {
-    static let shared = Pricing()
+final class Pricing: @unchecked Sendable {
     private let lock = NSLock()
     private var table: [String: Price] = [:]
-    private let file = appSupportDir.appendingPathComponent("pricing.json")
+    private let file: URL
+    private let transport: HTTPTransport
     private let source = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
 
-    func load() {
+    init(file: URL, transport: HTTPTransport) {
+        self.file = file
+        self.transport = transport
+    }
+
+    /// Loads the cached table and, if it is missing or older than a day, starts a download (returned so tests can await it).
+    @discardableResult
+    func load() -> Task<Void, Never>? {
         if let data = try? Data(contentsOf: file), let t = try? JSONDecoder().decode([String: Price].self, from: data) {
             lock.withLock { table = t }
         }
         let age = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
             .map { -$0.timeIntervalSinceNow } ?? .infinity
-        if age > 86400 || table.isEmpty { Task.detached { await self.download() } }
+        guard age > 86400 || table.isEmpty else { return nil }
+        return Task.detached { await self.download() }
     }
 
     private func download() async {
-        guard let (data, _) = try? await URLSession.shared.data(from: source),
+        guard let (data, _) = try? await transport.data(for: URLRequest(url: source)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         var t: [String: Price] = [:]
         for (k, v) in json where k.hasPrefix("claude") {
@@ -181,11 +189,19 @@ final class Ledger {
     private var changeCounter = 0
     private var lastSummaryKey = ""
     private var cachedSummaries: (UsageSummary, UsageSummary)?
-    private let cacheFile = appSupportDir.appendingPathComponent("claude-ledger.json")
+    private let cacheFile: URL
+    private let home: URL
+    private let pricing: Pricing
     private let usageNeedle = Array(#""usage":{"#.utf8)
 
+    init(home: URL, appSupport: URL, pricing: Pricing) {
+        self.home = home
+        self.cacheFile = appSupport.appendingPathComponent("claude-ledger.json")
+        self.pricing = pricing
+    }
+
     private var claudeRoots: [URL] {
-        [homeDir.appendingPathComponent(".claude/projects"), homeDir.appendingPathComponent(".config/claude/projects")]
+        [home.appendingPathComponent(".claude/projects"), home.appendingPathComponent(".config/claude/projects")]
     }
 
     /// Scans for new data and returns summaries. `progress` reports indexing on first run.
@@ -389,7 +405,7 @@ final class Ledger {
     // MARK: Grok
 
     private func scanGrok() {
-        let root = homeDir.appendingPathComponent(".grok/sessions")
+        let root = home.appendingPathComponent(".grok/sessions")
         guard let projects = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return }
         var present = Set<String>()
         for p in projects {
@@ -456,7 +472,7 @@ final class Ledger {
             guard date >= monthStart else { continue }
             let day = cal.startOfDay(for: date)
             for (model, a) in byModel {
-                let cost = Pricing.shared.cost(model: model, a)
+                let cost = pricing.cost(model: model, a)
                 let c = cost ?? 0
                 let t = a.total
                 s.month.tokens += t; s.month.cost += c
