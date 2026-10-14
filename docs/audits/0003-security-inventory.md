@@ -6,7 +6,7 @@ Audited revision: `c60d3d9` (`main`, inherited Headroom v1.1 source). Date: 2026
 
 **Status update: 2026-10-14** (`main` = `13b017d`). The findings below describe the inherited code at `c60d3d9` and are kept as written. Later changes are recorded beside them, not in place of them:
 - **Merged:** PR #14 (#12, R12) added injectable dependencies and mocked launch-path tests; production behavior unchanged. PR #16 (#15, R1 + R2) made the Claude Keychain read / usage endpoint and launch at login opt-in. PR #18 (#17, R4) made the Grok key read, billing request and `grok models` execution opt-in.
-- **Open:** R3 (display toggles vs collection), R5 (Grok failures shown as absence), R9 (request identity, 401 backoff), R6–R8, R10, R11; OS-level verification (§7 Phase 2); CI.
+- **Open:** R3 (display toggles vs collection), R5 (Grok failures shown as absence), R9 (request identity, 401 backoff), R6–R8, R10, R11; OS-level verification (§7 Phase 2). CI was not run: hosted CI is unavailable for budget reasons (owner, 2026-10-14).
 - Status cells use **Merged (#14 / #16 / #18)** or **Unchanged**. Status annotations reflect current `main`; §6 keeps a dated snapshot for each step.
 
 ## Evidence classes
@@ -148,7 +148,7 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
 
 **[runtime] Isolation probe:** with `HOME` set to a scratch directory, a Swift script printed `FileManager.default.homeDirectoryForCurrentUser`, `NSHomeDirectory()` and the user Application Support URL — **all three still resolved to the real home directory**. Overriding `HOME` therefore does **not** isolate transcript reads, cache writes or Grok files, and `security` reads the UID's login Keychain regardless. A temp-`HOME` run is not a safe verification method.
 
-**Status as of `e68034a` (PR #16 merged).** The verdict above describes `c60d3d9` and stands as history. On current `main`, default launch with no user opt-ins:
+**Status as of `e68034a` (PR #16 merged).** The verdict above describes `c60d3d9` and stands as history. On `main` at `e68034a`, default launch with no user opt-ins:
 1. Creates `~/Library/Application Support/Headroom/` and, with no fresh cached table, fetches LiteLLM pricing.
 2. Does **not** register a login item, and leaves an existing one alone [mocked: `defaultLaunchSideEffects`, `existingLoginItemIsLeftAlone`].
 3. Does **not** read the Claude Keychain item or call `api.anthropic.com`, including on forced refresh [mocked: `defaultLaunchSideEffects`, `forcedRefreshWithoutConsentReadsNothing`].
@@ -220,7 +220,7 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 | R8 | P1 | Minimize ledger cache: no raw paths, `0600`/`0700` modes, user-visible delete | Local disclosure (B9, F5, F8) | Cache schema bump (`version` 3→4) forces one re-index | Old version file ignored by version check; revert restores old format | Phase 1 test 4: no transcript paths or canary in cache; mode assertions | #5 | Open |
 | R9 | P2 | Honest `User-Agent` for any retained provider call; back off on 401 | Client impersonation; repeated invalid-token requests | None visible | Revert | Transport fake asserts UA value and 401 backoff | #4 | Open |
 | R10 | P2 | Restrict `--snapshot` to debug builds or a synthetic store | Real data rendered to arbitrary path (B14) | Release builds lose snapshot flag | Revert | Argument ignored in release configuration | #5 | Open |
-| R11 | P2 | CI/release hardening: SHA-pin actions, explicit least `permissions` in `test.yml`, Developer ID signing + notarization plan | Supply chain (F6) | None for users until release | Revert workflow change | Workflow lint (e.g. `actionlint`, pin check) | #11 | Open; fork has 0 CI runs |
+| R11 | P2 | CI/release hardening: SHA-pin actions, explicit least `permissions` in `test.yml`, Developer ID signing + notarization plan | Supply chain (F6) | None for users until release | Revert workflow change | Workflow lint (e.g. `actionlint`, pin check) | #11 | Open; CI not run (hosted CI unavailable, budget) |
 | R12 | P1 | Injectable dependencies + mocked default-launch tests (§7 Phase 1) | No reproducible runtime evidence; prerequisite for R1–R9 tests | Internal refactor only; no behavior change | Revert | Phase 1 tests 1–5 pass and document current behavior | #12 (new: distinct prerequisite; informs #9) | Merged — #12 / PR #14 |
 
 ## 9. Acceptance checklist for #3
@@ -231,4 +231,4 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 - [x] Safe runtime verification procedure — §7 (mocked first; no fabricated credentials to real endpoints)
 - [x] Prioritized remediation with risk, compatibility, rollback and tests — §8, mapped to #4, #5, #7, #11 and new issue #12 for R12
 - [ ] Default launch confirmed with reproducible runtime observations — §6 gives the original [code] verdict and a dated status. Mocked characterization exists (#14, #16, #18), but **OS-level observation per §7 Phase 2 is still required.** Mocked tests are not proof of OS behavior.
-- [ ] CI verification of the test suite — the fork has 0 recorded Actions runs; all test results so far are local.
+- [ ] CI verification of the test suite — not run: hosted CI is unavailable for budget reasons (owner, 2026-10-14). All test results cited are local and owner-reported. Not a blocker for accepting this document.
