@@ -113,12 +113,13 @@ struct LaunchPathTests {
     @Test func lateResultAfterDisableIsDropped() async throws {
         let box = try Sandbox()
         let transport = DeferredTransport()
+        defer { transport.close() }
         let services = ProviderServices(store: Store(), env: box.environment(
             transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
         services.setClaudeLimitsEnabled(true)
 
         let inFlight = Task { await services.refreshClaude(force: true) }
-        try #require(await transport.waitForRequests(1))
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
         services.setClaudeLimitsEnabled(false)
         transport.respond(.claudeUsage)
         await inFlight.value
@@ -131,12 +132,13 @@ struct LaunchPathTests {
     func lateResultAfterReenableIsDropped(_ late: FakeTransport.Response) async throws {
         let box = try Sandbox()
         let transport = DeferredTransport()
+        defer { transport.close() }
         let services = ProviderServices(store: Store(), env: box.environment(
             transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
         services.setClaudeLimitsEnabled(true)
 
         let inFlight = Task { await services.refreshClaude(force: true) }
-        try #require(await transport.waitForRequests(1))
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
         services.setClaudeLimitsEnabled(false)
         services.setClaudeLimitsEnabled(true)
         transport.respond(late)
@@ -146,14 +148,34 @@ struct LaunchPathTests {
         #expect(services.store.claudeError == nil)
         // No stale 429 backoff: an unforced refresh still goes out.
         let next = Task { await services.refreshClaude() }
-        guard await transport.waitForRequests(2) else {
+        guard await transport.awaitRequests(2, from: next) else {
             Issue.record("unforced refresh was suppressed by a stale backoff")
-            await next.value
             return
         }
         transport.respond(.claudeUsage)
         await next.value
         #expect(services.store.claudeLimits?.session?.percent == 42)
+    }
+
+    // The harness itself: a timeout closes the transport, so a request that starts late, or a task that never
+    // sends one, ends promptly instead of hanging the run.
+    @Test func deferredTransportTimeoutTerminates() async throws {
+        let clock = Date()
+        let url = URL(string: "https://example.invalid")!
+
+        let idle = DeferredTransport()
+        let quiet = Task<Void, Never> {}
+        #expect(await idle.awaitRequests(1, from: quiet, timeout: 0.05) == false)
+
+        let transport = DeferredTransport()
+        let late = Task { () -> Bool in (try? await transport.data(for: URLRequest(url: url))) == nil }
+        #expect(await transport.waitForRequests(1))
+        transport.close()
+        #expect(await late.value, "pending request should fail on close")
+        #expect(await Task { (try? await transport.data(for: URLRequest(url: url))) == nil }.value,
+                "requests after close should fail immediately")
+
+        #expect(Date().timeIntervalSince(clock) < 1)
     }
 
     // Agreeing to Claude's consent refreshes Claude only: no Grok credential read, request or subprocess.

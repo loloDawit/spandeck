@@ -35,17 +35,44 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
 }
 
 /// Holds every request until the test answers it, to exercise results that arrive late.
+/// Tests must `close()` it (e.g. in `defer`) so no request can stay suspended after the test ends.
 final class DeferredTransport: HTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var pending: [(URLRequest, CheckedContinuation<(Data, URLResponse), Error>)] = []
     private var _started = 0
+    private var closed = false
 
     var started: Int { lock.withLock { _started } }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         try await withCheckedThrowingContinuation { c in
-            lock.withLock { pending.append((request, c)); _started += 1 }
+            let rejected: Bool = lock.withLock {
+                guard !closed else { return true }
+                pending.append((request, c))
+                _started += 1
+                return false
+            }
+            if rejected { c.resume(throwing: URLError(.cancelled)) }
         }
+    }
+
+    /// Fails every pending request and every later one, so nothing waits on a response that will never come.
+    func close() {
+        let waiting: [(URLRequest, CheckedContinuation<(Data, URLResponse), Error>)] = lock.withLock {
+            closed = true
+            defer { pending = [] }
+            return pending
+        }
+        waiting.forEach { $0.1.resume(throwing: URLError(.cancelled)) }
+    }
+
+    /// Waits for `count` requests to start. On timeout, closes the transport so `task` can't hang,
+    /// waits for `task` to finish, and returns false.
+    func awaitRequests<T>(_ count: Int, from task: Task<T, Never>, timeout: TimeInterval = 2) async -> Bool {
+        if await waitForRequests(count, timeout: timeout) { return true }
+        close()
+        _ = await task.value
+        return false
     }
 
     /// Waits until `count` requests have been started; false if that doesn't happen within `timeout`.
