@@ -109,6 +109,75 @@ struct LaunchPathTests {
         #expect(transport.requests.count == 1)
     }
 
+    // A request started before the user turned limits off must not publish anything afterwards.
+    @Test func lateResultAfterDisableIsDropped() async throws {
+        let box = try Sandbox()
+        let transport = DeferredTransport()
+        let services = ProviderServices(store: Store(), env: box.environment(
+            transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
+        services.setClaudeLimitsEnabled(true)
+
+        let inFlight = Task { await services.refreshClaude(force: true) }
+        try #require(await transport.waitForRequests(1))
+        services.setClaudeLimitsEnabled(false)
+        transport.respond(.claudeUsage)
+        await inFlight.value
+
+        #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
+    }
+
+    // Off and on again while a request is pending: the old request's success, error or 429 is still dropped.
+    @Test(arguments: [FakeTransport.Response.claudeUsage, .json("{}", status: 500), .json("{}", status: 429)])
+    func lateResultAfterReenableIsDropped(_ late: FakeTransport.Response) async throws {
+        let box = try Sandbox()
+        let transport = DeferredTransport()
+        let services = ProviderServices(store: Store(), env: box.environment(
+            transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
+        services.setClaudeLimitsEnabled(true)
+
+        let inFlight = Task { await services.refreshClaude(force: true) }
+        try #require(await transport.waitForRequests(1))
+        services.setClaudeLimitsEnabled(false)
+        services.setClaudeLimitsEnabled(true)
+        transport.respond(late)
+        await inFlight.value
+
+        #expect(services.store.claudeLimits == nil)
+        #expect(services.store.claudeError == nil)
+        // No stale 429 backoff: an unforced refresh still goes out.
+        let next = Task { await services.refreshClaude() }
+        guard await transport.waitForRequests(2) else {
+            Issue.record("unforced refresh was suppressed by a stale backoff")
+            await next.value
+            return
+        }
+        transport.respond(.claudeUsage)
+        await next.value
+        #expect(services.store.claudeLimits?.session?.percent == 42)
+    }
+
+    // Agreeing to Claude's consent refreshes Claude only: no Grok credential read, request or subprocess.
+    @Test func enablingClaudeDoesNotTouchGrok() async throws {
+        let box = try Sandbox()
+        try box.write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"}}"#)
+        try box.write(".grok/bin/grok", "", executable: true)
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage], Hosts.grok: [.unauthorized]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let runner = FakeProcessRunner()
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, runner: runner, credentials: creds))
+
+        await services.applyClaudeLimitsChoice(true)
+
+        #expect(creds.reads == 1)
+        #expect(transport.hosts == [Hosts.anthropic])
+        #expect(runner.calls.isEmpty)
+        #expect(services.store.claudeLimits?.session?.percent == 42)
+
+        await services.applyClaudeLimitsChoice(false)
+        #expect(creds.reads == 1 && transport.requests.count == 1)
+        #expect(services.store.claudeLimits == nil && !services.store.claudeLimitsEnabled)
+    }
+
     // A login item the user (or an older Headroom build) already registered is neither re-registered nor removed.
     @Test func existingLoginItemIsLeftAlone() async throws {
         let box = try Sandbox()

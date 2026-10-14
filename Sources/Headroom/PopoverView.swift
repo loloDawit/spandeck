@@ -441,8 +441,9 @@ struct ClaudeLimitsConsent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CardHeader(title: "Claude Code", icon: "sparkle", tint: .claude, trailing: "Off")
-            Text("Plan limits are off. To show them, this app reads your Claude Code login from the macOS Keychain "
-                 + "and sends it to api.anthropic.com/api/oauth/usage once a minute. That endpoint is unofficial and may stop working. "
+            Text("Plan limits are off. To show them, this app reads the Claude Code credentials stored in your macOS Keychain "
+                 + "and sends their OAuth access token to api.anthropic.com/api/oauth/usage: at launch, once a minute, "
+                 + "after wake and when you refresh. That endpoint is unofficial and may stop working. "
                  + "Token usage works without this. You can turn it off in Settings.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

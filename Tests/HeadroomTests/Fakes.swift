@@ -34,6 +34,38 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// Holds every request until the test answers it, to exercise results that arrive late.
+final class DeferredTransport: HTTPTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [(URLRequest, CheckedContinuation<(Data, URLResponse), Error>)] = []
+    private var _started = 0
+
+    var started: Int { lock.withLock { _started } }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { c in
+            lock.withLock { pending.append((request, c)); _started += 1 }
+        }
+    }
+
+    /// Waits until `count` requests have been started; false if that doesn't happen within `timeout`.
+    func waitForRequests(_ count: Int, timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while started < count {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
+    }
+
+    /// Answers the oldest pending request.
+    func respond(_ response: FakeTransport.Response) {
+        let (request, c) = lock.withLock { pending.removeFirst() }
+        c.resume(returning: (response.body, HTTPURLResponse(url: request.url!, statusCode: response.status,
+                                                            httpVersion: nil, headerFields: nil)!))
+    }
+}
+
 /// Records calls; never executes anything.
 final class FakeProcessRunner: ProcessRunner, @unchecked Sendable {
     private let lock = NSLock()
@@ -96,7 +128,7 @@ final class Sandbox {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func environment(transport: FakeTransport, runner: FakeProcessRunner = FakeProcessRunner(),
+    func environment(transport: HTTPTransport, runner: FakeProcessRunner = FakeProcessRunner(),
                      credentials: FakeCredentialStore = FakeCredentialStore(nil),
                      loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
         AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,

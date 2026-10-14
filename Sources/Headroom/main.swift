@@ -110,9 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func setClaudeLimits(_ on: Bool) {
         Task { @MainActor in
-            services.setClaudeLimitsEnabled(on)
+            await services.applyClaudeLimitsChoice(on)
             redraw()
-            if on { refreshLimits(force: true) }
         }
     }
 

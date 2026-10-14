@@ -11,6 +11,8 @@ final class ProviderServices {
     private let grokClient: GrokClient
     private let preferences: PreferenceStore
     private var claudeBackoffUntil = Date.distantPast
+    /// Bumped on every consent change, so a request started under an earlier choice can't publish its result.
+    private var claudeConsentGeneration = 0
 
     init(store: Store, env: AppEnvironment) {
         self.store = store
@@ -28,6 +30,7 @@ final class ProviderServices {
 
     /// Records the user's choice. Turning it off clears what was shown and any backoff.
     @MainActor func setClaudeLimitsEnabled(_ on: Bool) {
+        claudeConsentGeneration += 1
         preferences.set(on, forKey: Prefs.claudeLimits)
         store.claudeLimitsEnabled = on
         guard !on else { return }
@@ -35,6 +38,13 @@ final class ProviderServices {
         store.claudeError = nil
         store.claudeAvailable = false
         claudeBackoffUntil = .distantPast
+    }
+
+    /// Applies the user's choice from the consent card or Settings. Enabling refreshes Claude only; it must not
+    /// trigger other providers' credential reads (#15).
+    @MainActor func applyClaudeLimitsChoice(_ on: Bool) async {
+        setClaudeLimitsEnabled(on)
+        if on { await refreshClaude(force: true) }
     }
 
     /// Loads prices, possibly starting a download (returned for tests). The login item is never registered here:
@@ -49,10 +59,11 @@ final class ProviderServices {
     @MainActor func refreshClaude(force: Bool = false) async {
         guard claudeLimitsEnabled else { return }
         guard force || Date() >= claudeBackoffUntil else { return }
+        let generation = claudeConsentGeneration
         let result: Result<ClaudeLimits, Error>
         do { result = .success(try await claudeClient.fetch()) } catch { result = .failure(error) }
-        // The user may have turned limits off while the request was in flight.
-        guard claudeLimitsEnabled else { return }
+        // Drop the result if the user changed their choice while the request was in flight (even off and on again).
+        guard claudeLimitsEnabled, generation == claudeConsentGeneration else { return }
         do {
             store.claudeLimits = try result.get()
             store.claudeError = nil
