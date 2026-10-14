@@ -197,4 +197,4 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 - [x] Permissions inventory and least-privilege recommendations, documented vs unofficial — §3 (documented-surface claims to be verified in #10)
 - [x] Safe runtime verification procedure — §7 (mocked first; no fabricated credentials to real endpoints)
 - [x] Prioritized remediation with risk, compatibility, rollback and tests — §8, mapped to #4, #5, #7, #11 and new issue #12 for R12
-- [ ] Default launch confirmed with reproducible runtime observations — §6 gives the [code] verdict; **runtime confirmation pending** §7 Phase 1 (R12)
+- [ ] Default launch confirmed with reproducible runtime observations — §6 gives the [code] verdict; **runtime confirmation pending** §7 Phase 1 (R12, #12)
