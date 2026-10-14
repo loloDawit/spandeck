@@ -34,6 +34,65 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// Holds every request until the test answers it, to exercise results that arrive late.
+/// Tests must `close()` it (e.g. in `defer`) so no request can stay suspended after the test ends.
+final class DeferredTransport: HTTPTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [(URLRequest, CheckedContinuation<(Data, URLResponse), Error>)] = []
+    private var _started = 0
+    private var closed = false
+
+    var started: Int { lock.withLock { _started } }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { c in
+            let rejected: Bool = lock.withLock {
+                guard !closed else { return true }
+                pending.append((request, c))
+                _started += 1
+                return false
+            }
+            if rejected { c.resume(throwing: URLError(.cancelled)) }
+        }
+    }
+
+    /// Fails every pending request and every later one, so nothing waits on a response that will never come.
+    func close() {
+        let waiting: [(URLRequest, CheckedContinuation<(Data, URLResponse), Error>)] = lock.withLock {
+            closed = true
+            defer { pending = [] }
+            return pending
+        }
+        waiting.forEach { $0.1.resume(throwing: URLError(.cancelled)) }
+    }
+
+    /// Waits for `count` requests to start. On timeout, closes the transport so `task` can't hang,
+    /// waits for `task` to finish, and returns false.
+    func awaitRequests<T>(_ count: Int, from task: Task<T, Never>, timeout: TimeInterval = 2) async -> Bool {
+        if await waitForRequests(count, timeout: timeout) { return true }
+        close()
+        _ = await task.value
+        return false
+    }
+
+    /// Waits until `count` requests have been started; false if that doesn't happen within `timeout`.
+    func waitForRequests(_ count: Int, timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while started < count {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
+    }
+
+    /// Answers the oldest pending request.
+    func respond(_ response: FakeTransport.Response) {
+        let (request, c) = lock.withLock { pending.removeFirst() }
+        c.resume(returning: (response.body, HTTPURLResponse(url: request.url!, statusCode: response.status,
+                                                            httpVersion: nil, headerFields: nil)!))
+    }
+}
+
 /// Records calls; never executes anything.
 final class FakeProcessRunner: ProcessRunner, @unchecked Sendable {
     private let lock = NSLock()
@@ -71,7 +130,8 @@ final class InMemoryPreferences: PreferenceStore {
 final class FakeLoginItem: LoginItemService {
     private(set) var registers = 0
     private(set) var unregisters = 0
-    private(set) var isEnabled = false
+    private(set) var isEnabled: Bool
+    init(enabled: Bool = false) { isEnabled = enabled }
     func register() throws { registers += 1; isEnabled = true }
     func unregister() throws { unregisters += 1; isEnabled = false }
 }
@@ -95,7 +155,7 @@ final class Sandbox {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func environment(transport: FakeTransport, runner: FakeProcessRunner = FakeProcessRunner(),
+    func environment(transport: HTTPTransport, runner: FakeProcessRunner = FakeProcessRunner(),
                      credentials: FakeCredentialStore = FakeCredentialStore(nil),
                      loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
         AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,

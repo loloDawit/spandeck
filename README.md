@@ -24,7 +24,7 @@ This fork initially inherits Headroom v1.1's implementation, including:
 - Local transcript-derived token summaries and model-cost estimates.
 - Optional Grok usage and a keep-awake feature.
 
-**Inherited security notice:** The current code reads Claude Code OAuth credentials from macOS Keychain, reads local Claude conversation files, makes external requests to Anthropic/Grok and LiteLLM pricing sources, and attempts to register a login item on first launch. These are pre-existing Headroom behaviors, not yet the desired SpanDeck security posture. Do not install on an enterprise-managed machine without appropriate approval. See [SECURITY.md](SECURITY.md).
+**Inherited security notice:** The current code reads local Claude conversation files, downloads LiteLLM pricing, and, if a Grok CLI login exists, reads its key and calls Grok. Since #15, reading the Claude Code OAuth credential from macOS Keychain (to call Anthropic's unofficial usage endpoint) is **off until you enable it** in the app, and launch at login is **only enabled from Settings**. The remaining behaviors are inherited from Headroom and are not yet the desired SpanDeck security posture. Do not install on an enterprise-managed machine without appropriate approval. See [SECURITY.md](SECURITY.md).
 
 ## Development baseline
 

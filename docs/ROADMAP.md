@@ -14,8 +14,8 @@ Roadmap stages, not yet-created GitHub milestones. Work must be traceable to iss
 **Exit:** Known risks recorded, core arithmetic regression-tested, and first hardening changes planned with measurable acceptance criteria.
 
 ## M1 — Privacy-first foundation
-- [ ] Explicit permission model and settings; no credential extraction on default startup.
-- [ ] Opt-in login-item registration and reversible integration installation.
+- [ ] Explicit permission model and settings; no credential extraction on default startup. *(Claude Keychain read opt-in since #15; Grok still automatic.)*
+- [ ] Opt-in login-item registration and reversible integration installation. *(Login item opt-in since #15.)*
 - [ ] Storage/retention policy, data classification, and migration/versioning.
 - [ ] Extract adapters and reconciliation behind testable interfaces without changing existing working UI behavior.
 - [ ] Document unsupported or unauthorized quota sources.

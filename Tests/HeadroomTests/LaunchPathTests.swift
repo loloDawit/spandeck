@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import Headroom
 
-/// Drives the launch path against fakes (#12). These tests pin down *current* inherited behavior, including
-/// behavior the #3 audit flags as wrong; each such assertion names the remediation that will flip it.
+/// Drives the launch path against fakes (#12). These tests pin down current behavior. Assertions on behavior the
+/// #3 audit flags as wrong name the remediation that will flip them; R1 and R2 were flipped by #15.
 /// Nothing here touches the real Keychain, network, login items, home directory or persistent preferences.
 @MainActor
 struct LaunchPathTests {
@@ -13,7 +13,7 @@ struct LaunchPathTests {
         }
     }
 
-    // Acceptance 1: the default launch performs exactly the side effects listed in audit §6.
+    // Acceptance 1: the default launch performs only the side effects below (audit §6 as amended by #15).
     @Test func defaultLaunchSideEffects() async throws {
         let box = try Sandbox()
         let transport = FakeTransport([Hosts.anthropic: [.claudeUsage], Hosts.pricing: [.pricingTable]])
@@ -28,13 +28,54 @@ struct LaunchPathTests {
         await services.refreshGrok()
         _ = await refresh(services.ledger)
 
-        // Login item registered without asking (#4, R1).
-        #expect(login.registers == 1)
-        #expect(box.preferences.bool(forKey: "didRegisterLoginItem"))
-        // Keychain read and unofficial endpoint with no opt-in (#4, R2).
-        #expect(creds.reads == 1)
-        #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.pricing])
+        // Launch at login is opt-in from Settings only (#15).
+        #expect(login.registers == 0)
+        // No Keychain read and no Anthropic request without opt-in (#15). Only the price table is fetched.
+        #expect(creds.reads == 0)
+        #expect(transport.hosts == [Hosts.pricing])
         #expect(transport.unexpected.isEmpty)
+        #expect(!services.store.claudeLimitsEnabled)
+        #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
+        // No Grok install in the sandbox: no Grok request, no subprocess.
+        #expect(runner.calls.isEmpty)
+        #expect(!services.store.grokAvailable)
+        // Price table cached inside the sandbox.
+        #expect(FileManager.default.fileExists(atPath: box.appSupport.appendingPathComponent("pricing.json").path))
+
+        // Relaunch: still no registration, and a fresh price table means no second download.
+        let relaunch = ProviderServices(store: Store(), env: env)
+        #expect(relaunch.start() == nil)
+        #expect(login.registers == 0)
+        #expect(transport.hosts.filter { $0 == Hosts.pricing }.count == 1)
+    }
+
+    // Manual refresh and wake pass `force`, which skips the 429 backoff but must never skip consent.
+    @Test func forcedRefreshWithoutConsentReadsNothing() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+
+        await services.refreshClaude(force: true)
+
+        #expect(creds.reads == 0)
+        #expect(transport.requests.isEmpty)
+    }
+
+    // After opting in: the Keychain is read and the unofficial endpoint called; the choice survives a relaunch.
+    @Test func enablingClaudeLimitsReadsAndPersists() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let env = box.environment(transport: transport, credentials: creds)
+        let services = ProviderServices(store: Store(), env: env)
+
+        services.setClaudeLimitsEnabled(true)
+        await services.refreshClaude(force: true)
+
+        #expect(box.preferences.bool(forKey: Prefs.claudeLimits))
+        #expect(services.store.claudeLimitsEnabled)
+        #expect(creds.reads == 1)
         let usage = try #require(transport.requests.first { $0.url?.host == Hosts.anthropic })
         #expect(usage.url?.path == "/api/oauth/usage")
         #expect(usage.value(forHTTPHeaderField: "Authorization") == "Bearer CANARY-NOT-A-TOKEN")
@@ -42,17 +83,133 @@ struct LaunchPathTests {
         // Borrowed Claude Code identity (#4, R9).
         #expect(usage.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1 headroom")
         #expect(services.store.claudeLimits?.session?.percent == 42)
-        // No Grok install in the sandbox: no Grok request, no subprocess.
-        #expect(runner.calls.isEmpty)
-        #expect(!services.store.grokAvailable)
-        // Price table cached inside the sandbox.
-        #expect(FileManager.default.fileExists(atPath: box.appSupport.appendingPathComponent("pricing.json").path))
+        #expect(services.store.claudeAvailable)
 
-        // Relaunch: no second registration, and a fresh price table means no second download.
         let relaunch = ProviderServices(store: Store(), env: env)
-        #expect(relaunch.start() == nil)
-        #expect(login.registers == 1)
-        #expect(transport.hosts.filter { $0 == Hosts.pricing }.count == 1)
+        #expect(relaunch.store.claudeLimitsEnabled)
+    }
+
+    // Turning limits off clears what was shown and stops further reads.
+    @Test func disablingClaudeLimitsClearsAndStops() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+        services.setClaudeLimitsEnabled(true)
+        await services.refreshClaude()
+        #expect(services.store.claudeLimits != nil)
+
+        services.setClaudeLimitsEnabled(false)
+        await services.refreshClaude(force: true)
+
+        #expect(!box.preferences.bool(forKey: Prefs.claudeLimits))
+        #expect(services.store.claudeLimits == nil && services.store.claudeError == nil)
+        #expect(!services.store.claudeAvailable && !services.store.claudeLimitsEnabled)
+        #expect(creds.reads == 1)
+        #expect(transport.requests.count == 1)
+    }
+
+    // A request started before the user turned limits off must not publish anything afterwards.
+    @Test func lateResultAfterDisableIsDropped() async throws {
+        let box = try Sandbox()
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let services = ProviderServices(store: Store(), env: box.environment(
+            transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
+        services.setClaudeLimitsEnabled(true)
+
+        let inFlight = Task { await services.refreshClaude(force: true) }
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
+        services.setClaudeLimitsEnabled(false)
+        transport.respond(.claudeUsage)
+        await inFlight.value
+
+        #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
+    }
+
+    // Off and on again while a request is pending: the old request's success, error or 429 is still dropped.
+    @Test(arguments: [FakeTransport.Response.claudeUsage, .json("{}", status: 500), .json("{}", status: 429)])
+    func lateResultAfterReenableIsDropped(_ late: FakeTransport.Response) async throws {
+        let box = try Sandbox()
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let services = ProviderServices(store: Store(), env: box.environment(
+            transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
+        services.setClaudeLimitsEnabled(true)
+
+        let inFlight = Task { await services.refreshClaude(force: true) }
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
+        services.setClaudeLimitsEnabled(false)
+        services.setClaudeLimitsEnabled(true)
+        transport.respond(late)
+        await inFlight.value
+
+        #expect(services.store.claudeLimits == nil)
+        #expect(services.store.claudeError == nil)
+        // No stale 429 backoff: an unforced refresh still goes out.
+        let next = Task { await services.refreshClaude() }
+        guard await transport.awaitRequests(2, from: next) else {
+            Issue.record("unforced refresh was suppressed by a stale backoff")
+            return
+        }
+        transport.respond(.claudeUsage)
+        await next.value
+        #expect(services.store.claudeLimits?.session?.percent == 42)
+    }
+
+    // The harness itself: a timeout closes the transport, so a request that starts late, or a task that never
+    // sends one, ends promptly instead of hanging the run.
+    @Test func deferredTransportTimeoutTerminates() async throws {
+        let clock = Date()
+        let url = URL(string: "https://example.invalid")!
+
+        let idle = DeferredTransport()
+        let quiet = Task<Void, Never> {}
+        #expect(await idle.awaitRequests(1, from: quiet, timeout: 0.05) == false)
+
+        let transport = DeferredTransport()
+        let late = Task { () -> Bool in (try? await transport.data(for: URLRequest(url: url))) == nil }
+        #expect(await transport.waitForRequests(1))
+        transport.close()
+        #expect(await late.value, "pending request should fail on close")
+        #expect(await Task { (try? await transport.data(for: URLRequest(url: url))) == nil }.value,
+                "requests after close should fail immediately")
+
+        #expect(Date().timeIntervalSince(clock) < 1)
+    }
+
+    // Agreeing to Claude's consent refreshes Claude only: no Grok credential read, request or subprocess.
+    @Test func enablingClaudeDoesNotTouchGrok() async throws {
+        let box = try Sandbox()
+        try box.write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"}}"#)
+        try box.write(".grok/bin/grok", "", executable: true)
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage], Hosts.grok: [.unauthorized]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let runner = FakeProcessRunner()
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, runner: runner, credentials: creds))
+
+        await services.applyClaudeLimitsChoice(true)
+
+        #expect(creds.reads == 1)
+        #expect(transport.hosts == [Hosts.anthropic])
+        #expect(runner.calls.isEmpty)
+        #expect(services.store.claudeLimits?.session?.percent == 42)
+
+        await services.applyClaudeLimitsChoice(false)
+        #expect(creds.reads == 1 && transport.requests.count == 1)
+        #expect(services.store.claudeLimits == nil && !services.store.claudeLimitsEnabled)
+    }
+
+    // A login item the user (or an older Headroom build) already registered is neither re-registered nor removed.
+    @Test func existingLoginItemIsLeftAlone() async throws {
+        let box = try Sandbox()
+        let login = FakeLoginItem(enabled: true)
+        let env = box.environment(transport: FakeTransport([Hosts.pricing: [.pricingTable]]), loginItem: login)
+
+        await ProviderServices(store: Store(), env: env).start()?.value
+
+        #expect(login.isEnabled)
+        #expect(login.registers == 0 && login.unregisters == 0)
     }
 
     @Test func keychainStoreUsesSecurityCLI() {
@@ -66,7 +223,7 @@ struct LaunchPathTests {
         #expect(KeychainCredentialStore(runner: runner).claudeCredentialJSON() == nil)
     }
 
-    // Acceptance 2: display toggles only hide gauges; collection continues (#4, R3 will flip this).
+    // Acceptance 2: once opted in, display toggles only hide gauges; collection continues (#4, R3 will flip this).
     // R3 must read the toggles from `env.preferences` (`UserDefaults.standard` in `live`), not `Prefs`, or this test cannot flip.
     @Test func displayTogglesDoNotGateCollection() async throws {
         let box = try Sandbox()
@@ -77,6 +234,7 @@ struct LaunchPathTests {
                                        Hosts.grok: [.json(#"{"config":{"creditUsagePercent":10}}"#)]])
         let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
         let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+        services.setClaudeLimitsEnabled(true)
 
         await services.refreshClaude()
         await services.refreshGrok()

@@ -19,6 +19,8 @@ struct PopoverActions {
     var quit: () -> Void
     var keepAwake: (AwakeSession) -> Void
     var loginItem: LoginItemService
+    /// Turns Claude plan limits on (from the consent card) or off (from Settings).
+    var setClaudeLimits: (Bool) -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -39,7 +41,7 @@ struct PopoverView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 12) {
                     SystemGrid(store: store)
-                    LimitsCard(store: store)
+                    LimitsCard(store: store, enableClaudeLimits: { actions.setClaudeLimits(true) })
                 }
                 .frame(width: 330)
                 UsageCard(store: store)
@@ -380,10 +382,16 @@ struct BatteryCard: View {
 
 struct LimitsCard: View {
     @ObservedObject var store: Store
+    var enableClaudeLimits: () -> Void
+
+    /// The Claude section shows either the consent prompt or, once enabled, the account's limits.
+    private var showsClaude: Bool { !store.claudeLimitsEnabled || store.claudeAvailable }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if store.claudeAvailable {
+            if !store.claudeLimitsEnabled {
+                ClaudeLimitsConsent(enable: enableClaudeLimits)
+            } else if store.claudeAvailable {
                 CardHeader(title: "Claude Code", icon: "sparkle", tint: .claude, trailing: store.claudeLimits?.plan)
                 if let l = store.claudeLimits {
                     ForEach(l.all) { LimitRow(entry: $0, tint: .claude) }
@@ -394,7 +402,7 @@ struct LimitsCard: View {
                     Text("\(err), showing data from \(Fmt.ago(store.claudeLimits?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
-            if store.claudeAvailable && store.grokAvailable {
+            if showsClaude && store.grokAvailable {
                 Divider().opacity(0.5)
             }
             if store.grokAvailable {
@@ -412,7 +420,7 @@ struct LimitsCard: View {
                     Text("\(err), showing data from \(Fmt.ago(store.grokPlan?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
-            if !store.claudeAvailable && !store.grokAvailable {
+            if !showsClaude && !store.grokAvailable {
                 Text("No Claude Code or Grok account found").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
@@ -423,6 +431,25 @@ struct LimitsCard: View {
     private func window(_ p: GrokPlan) -> TimeInterval? {
         guard let s = p.periodStart, let e = p.periodEnd else { return nil }
         return e.timeIntervalSince(s)
+    }
+}
+
+/// Explains exactly what enabling Claude plan limits does before anything is read (#15).
+struct ClaudeLimitsConsent: View {
+    var enable: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CardHeader(title: "Claude Code", icon: "sparkle", tint: .claude, trailing: "Off")
+            Text("Plan limits are off. To show them, this app reads the Claude Code credentials stored in your macOS Keychain "
+                 + "and sends their OAuth access token to api.anthropic.com/api/oauth/usage: at launch, once a minute, "
+                 + "after wake and when you refresh. That endpoint is unofficial and may stop working. "
+                 + "Token usage works without this. You can turn it off in Settings.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Enable Claude plan limits", action: enable)
+                .controlSize(.small)
+        }
     }
 }
 
@@ -552,6 +579,9 @@ struct Footer: View {
                     Text("5 s").tag(5.0)
                 }
                 Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+                if store.claudeLimitsEnabled {
+                    Button("Turn off Claude plan limits") { actions.setClaudeLimits(false) }
+                }
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }

@@ -16,9 +16,9 @@ Boundaries:
 ## Current risks and intended mitigations
 | Risk | Source behavior | Proposed mitigation |
 | --- | --- | --- |
-| Credential exposure | `Clients.swift` extracts a Claude OAuth token from Keychain and calls an unofficial usage API | Disable default extraction. Define optional consent and supported capability before any alternative credential path |
+| Credential exposure | `Clients.swift` extracts a Claude OAuth token from Keychain and calls an unofficial usage API; Grok key read from `~/.grok/auth.json` | **Claude: off by default with inline consent (#15).** Grok: still automatic (#4, R4). Define a supported capability before any alternative credential path |
 | Secret-rich raw input | `Ledger.swift` parses session JSONL records containing potentially sensitive material | Persist only allowlisted derived metrics. Add tests asserting prompts, code and tool bodies never enter logs/cache |
-| Surprising persistence | `main.swift` registers login item on initial launch | Default off; explicit opt-in and clearly reversible UX |
+| Surprising persistence | Inherited: login item registered on initial launch | **Done (#15):** never registered automatically; enabled/disabled only from Settings; existing registrations untouched |
 | Accidental exfiltration | Provider HTTPS calls plus downloaded LiteLLM prices | Egress inventory/allowlist; no telemetry; privacy tests |
 | Wrong or inflated numbers | Late streaming records, missing request IDs, overlap across adapters, unknown prices | Provenance and stable identity, fixture coverage, distinguish unknown from zero |
 | Supply-chain tampering | New upstream source, release DMG not yet Developer ID notarized | Pin reviewed commits, audit CI/dependencies, sign/notarize and verify releases |
@@ -35,7 +35,7 @@ Boundaries:
 - Inspect actual cache output with seeded synthetic transcripts containing canary secrets; assert absence from persisted artifacts and logs.
 - Inject streaming duplicates and malformed/partial transcript records.
 - Exercise locked/denied Keychain, expired credentials, offline mode, and provider 429/401.
-- Confirm default launch causes no login-item mutation.
+- Confirm default launch causes no login-item mutation. *Covered by mocked tests in #15; OS-level confirmation pending.*
 - Use OS network/process observation to compare with the documented egress list.
 - Review permissions, CI, artifacts, SBOM/dependencies and reproducibility before recommending installation.
 
