@@ -58,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if Prefs.sampleInterval != currentInterval { startSampling() }
             syncAwake()
             redraw()
+            // Also catches menu-bar switch changes made outside the Settings menu; a no-op if nothing changed.
+            applyQuotaVisibility()
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.refreshLimits()
@@ -104,6 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
         Task { @MainActor in
             await services.refreshGrok()
+            redraw()
+        }
+    }
+
+    /// Pauses or resumes quota polling after a menu-bar switch change (#19).
+    private func applyQuotaVisibility() {
+        Task { @MainActor in
+            await services.applyQuotaVisibility()
             redraw()
         }
     }
@@ -181,7 +191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             keepAwake: { [weak self] in self?.setAwake($0) },
             loginItem: env.loginItem,
             setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) },
-            setGrokCredits: { [weak self] on in self?.setGrokCredits(on) }))
+            setGrokCredits: { [weak self] on in self?.setGrokCredits(on) },
+            quotaVisibilityChanged: { [weak self] in self?.applyQuotaVisibility() }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -221,7 +232,7 @@ extension AppDelegate {
         print("strip width pt:", strip.size.width)
 
         let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
-                                                              setGrokCredits: { _ in }))
+                                                              setGrokCredits: { _ in }, quotaVisibilityChanged: {}))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

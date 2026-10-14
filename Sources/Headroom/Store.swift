@@ -82,6 +82,10 @@ final class Store: ObservableObject {
     @Published var claudeLimitsEnabled = false
     /// Whether the user has opted in to Grok credits; mirrors `Prefs.grokCredits`.
     @Published var grokEnabled = false
+    /// Whether the menu-bar switch for each provider's quota is on; mirrors `Prefs.showClaude` / `Prefs.showGrok`.
+    /// Off pauses that provider's quota polling (#19).
+    @Published var claudeQuotaShown = true
+    @Published var grokQuotaShown = true
     /// UI only: the user asked (from Settings) to see the Grok consent card.
     @Published var grokConsentRequested = false
     /// Providers start hidden and appear once their account answers; they hide again if not set up.

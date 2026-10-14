@@ -223,9 +223,9 @@ struct LaunchPathTests {
         #expect(KeychainCredentialStore(runner: runner).claudeCredentialJSON() == nil)
     }
 
-    // Acceptance 2: once opted in, display toggles only hide gauges; collection continues (#4, R3 will flip this).
-    // R3 must read the toggles from `env.preferences` (`UserDefaults.standard` in `live`), not `Prefs`, or this test cannot flip.
-    @Test func displayTogglesDoNotGateCollection() async throws {
+    // Acceptance 2, flipped by R3 (#19): with consent, hidden menu-bar gauges pause quota collection.
+    // The toggles are read from `env.preferences`. More cases in QuotaVisibilityTests.
+    @Test func displayTogglesGateCollection() async throws {
         let box = try Sandbox()
         box.preferences.set(false, forKey: Prefs.showClaude)
         box.preferences.set(false, forKey: Prefs.showGrok)
@@ -237,14 +237,12 @@ struct LaunchPathTests {
         services.setClaudeLimitsEnabled(true)
         services.setGrokEnabled(true)
 
-        await services.refreshClaude()
+        await services.refreshClaude(force: true)
         await services.refreshGrok()
 
-        #expect(creds.reads == 1)
-        #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.grok])
-        let grok = try #require(transport.requests.first { $0.url?.host == Hosts.grok })
-        #expect(grok.value(forHTTPHeaderField: "Authorization") == "Bearer CANARY-GROK-KEY")
-        #expect(services.store.grokPlan?.percent == 10)
+        #expect(creds.reads == 0)
+        #expect(transport.requests.isEmpty)
+        #expect(services.store.grokPlan == nil && services.store.claudeLimits == nil)
     }
 
     // Acceptance 3: once opted in (#17), a failed Grok refresh is reported as "not configured" (#4, R5 will flip this).

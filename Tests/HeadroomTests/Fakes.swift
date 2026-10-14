@@ -116,18 +116,39 @@ final class Flag: @unchecked Sendable {
     func set() { lock.withLock { value = true } }
 }
 
-/// Records calls; never executes anything.
+/// Records calls; never executes anything. With `pausing`, the first call blocks (off the main actor) until
+/// `resume()` or a 2 s timeout, so a test can change settings while `grok models` is "running".
 final class FakeProcessRunner: ProcessRunner, @unchecked Sendable {
     private let lock = NSLock()
     private var _calls: [(path: String, args: [String])] = []
+    private let gate: DispatchSemaphore?
+    private let entered = Flag()
     var result: (status: Int32, output: Data)? = (0, Data())
+
+    init(pausing: Bool = false) { gate = pausing ? DispatchSemaphore(value: 0) : nil }
 
     var calls: [(path: String, args: [String])] { lock.withLock { _calls } }
 
     func run(_ path: String, _ args: [String], timeout: TimeInterval, captureOutput: Bool) -> (status: Int32, output: Data)? {
-        lock.withLock { _calls.append((path, args)) }
+        let first: Bool = lock.withLock { _calls.append((path, args)); return _calls.count == 1 }
+        if first, let gate {
+            entered.set()
+            _ = gate.wait(timeout: .now() + 2)
+        }
         return result
     }
+
+    /// Waits until the first call has started; false after `timeout`.
+    func waitUntilRunning(timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !entered.isSet {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
+    }
+
+    func resume() { gate?.signal() }
 }
 
 final class FakeCredentialStore: CredentialStore {
@@ -148,6 +169,7 @@ final class InMemoryPreferences: PreferenceStore {
     private var values: [String: Bool] = [:]
     func bool(forKey key: String) -> Bool { values[key] ?? false }
     func set(_ value: Bool, forKey key: String) { values[key] = value }
+    func object(forKey key: String) -> Any? { values[key] }
 }
 
 /// Reads the sandbox's `~/.grok/auth.json` like the real source, and counts every read.

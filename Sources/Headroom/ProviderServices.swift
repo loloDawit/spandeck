@@ -11,9 +11,12 @@ final class ProviderServices {
     private let grokClient: GrokClient
     private let preferences: PreferenceStore
     private var claudeBackoffUntil = Date.distantPast
-    /// Bumped on every consent change, so a request started under an earlier choice can't publish its result.
+    /// Bumped on every consent or menu-bar switch change, so a request started under an earlier choice can't publish its result.
     private var claudeConsentGeneration = 0
     private var grokConsentGeneration = 0
+    /// Last applied state of the menu-bar switches, so only real changes pause or resume collection (#19).
+    private var claudeShown: Bool
+    private var grokShown: Bool
 
     init(store: Store, env: AppEnvironment) {
         self.store = store
@@ -23,8 +26,60 @@ final class ProviderServices {
         grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,
                                 runner: env.processRunner)
         preferences = env.preferences
+        claudeShown = preferences.bool(forKey: Prefs.showClaude, default: true)
+        grokShown = preferences.bool(forKey: Prefs.showGrok, default: true)
         store.claudeLimitsEnabled = preferences.bool(forKey: Prefs.claudeLimits)
         store.grokEnabled = preferences.bool(forKey: Prefs.grokCredits)
+        store.claudeQuotaShown = claudeShown
+        store.grokQuotaShown = grokShown
+    }
+
+    // MARK: Menu-bar switches (#19, R3)
+    //
+    // Consent (`claude.limits.enabled`, `grok.enabled`) is permission to use a provider's credential. The menu-bar
+    // switches (`show.claude`, `show.grok`) decide whether that permission is used: hiding a gauge pauses its quota
+    // polling, showing it again resumes polling only if consent was already given. Neither setting changes the other,
+    // and neither affects local transcript usage.
+
+    /// Whether Claude plan limits are collected: consent given and the gauge not hidden.
+    var claudeCollecting: Bool { claudeLimitsEnabled && preferences.bool(forKey: Prefs.showClaude, default: true) }
+    /// Whether Grok credits are collected: consent given and the gauge not hidden.
+    var grokCollecting: Bool { grokEnabled && preferences.bool(forKey: Prefs.showGrok, default: true) }
+
+    /// Applies a change to the menu-bar switches, from the Settings menu or any other write to the preferences.
+    /// Hiding drops in-flight results and clears shown plan data; showing refreshes once, only under existing consent.
+    /// The Claude 429 backoff and the `grok models` throttle are kept.
+    @MainActor func applyQuotaVisibility() async {
+        let claude = preferences.bool(forKey: Prefs.showClaude, default: true)
+        let grok = preferences.bool(forKey: Prefs.showGrok, default: true)
+        let resumeClaude = claude && !claudeShown
+        let resumeGrok = grok && !grokShown
+        if claude != claudeShown {
+            claudeShown = claude
+            claudeConsentGeneration += 1
+            store.claudeQuotaShown = claude
+            if !claude { clearClaude() }
+        }
+        if grok != grokShown {
+            grokShown = grok
+            grokConsentGeneration += 1
+            store.grokQuotaShown = grok
+            if !grok { clearGrok() }
+        }
+        if resumeClaude { await refreshClaude() }
+        if resumeGrok { await refreshGrok() }
+    }
+
+    @MainActor private func clearClaude() {
+        store.claudeLimits = nil
+        store.claudeError = nil
+        store.claudeAvailable = false
+    }
+
+    @MainActor private func clearGrok() {
+        store.grokPlan = nil
+        store.grokError = nil
+        store.grokAvailable = false
     }
 
     /// Grok credits need the Grok CLI's API key, its billing endpoint and possibly running `grok models`,
@@ -39,9 +94,7 @@ final class ProviderServices {
         store.grokEnabled = on
         store.grokConsentRequested = false
         guard !on else { return }
-        store.grokPlan = nil
-        store.grokError = nil
-        store.grokAvailable = false
+        clearGrok()
     }
 
     /// Applies the user's choice from the consent card or Settings. Enabling refreshes Grok only (#17).
@@ -60,9 +113,7 @@ final class ProviderServices {
         preferences.set(on, forKey: Prefs.claudeLimits)
         store.claudeLimitsEnabled = on
         guard !on else { return }
-        store.claudeLimits = nil
-        store.claudeError = nil
-        store.claudeAvailable = false
+        clearClaude()
         claudeBackoffUntil = .distantPast
     }
 
@@ -80,16 +131,16 @@ final class ProviderServices {
         pricing.load()
     }
 
-    /// Fetches Claude plan limits if the user opted in, unless backing off after a 429. `force` (manual refresh,
-    /// wake) skips the backoff but never the consent check. Not gated by the display toggle (#4, R3).
+    /// Fetches Claude plan limits if the user opted in and the gauge isn't hidden, unless backing off after a 429.
+    /// `force` (manual refresh, wake) skips the backoff but never the consent or menu-bar switch check.
     @MainActor func refreshClaude(force: Bool = false) async {
-        guard claudeLimitsEnabled else { return }
+        guard claudeCollecting else { return }
         guard force || Date() >= claudeBackoffUntil else { return }
         let generation = claudeConsentGeneration
         let result: Result<ClaudeLimits, Error>
         do { result = .success(try await claudeClient.fetch()) } catch { result = .failure(error) }
         // Drop the result if the user changed their choice while the request was in flight (even off and on again).
-        guard claudeLimitsEnabled, generation == claudeConsentGeneration else { return }
+        guard claudeCollecting, generation == claudeConsentGeneration else { return }
         do {
             store.claudeLimits = try result.get()
             store.claudeError = nil
@@ -104,13 +155,14 @@ final class ProviderServices {
         }
     }
 
-    /// Fetches Grok credits if the user opted in. Not gated by the display toggle (#4, R3).
+    /// Fetches Grok credits if the user opted in and the gauge isn't hidden. Hiding it mid-fetch stops the fetch at
+    /// its next step, like withdrawing consent.
     @MainActor func refreshGrok() async {
-        guard grokEnabled else { return }
+        guard grokCollecting else { return }
         let generation = grokConsentGeneration
         let isCurrent = { @MainActor [weak self] () -> Bool in
             guard let self else { return false }
-            return self.grokEnabled && self.grokConsentGeneration == generation
+            return self.grokCollecting && self.grokConsentGeneration == generation
         }
         let result: Result<GrokPlan, Error>
         do { result = .success(try await grokClient.fetch(stillAllowed: { await MainActor.run { isCurrent() } })) } catch { result = .failure(error) }
