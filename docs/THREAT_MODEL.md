@@ -1,0 +1,43 @@
+# Threat model (initial)
+
+Status: preliminary audit from source inspection; no runtime, binary, dependency or penetration audit has been completed.
+
+## Assets and trust boundaries
+Assets: Claude OAuth bearer tokens; local prompts, source code, filenames and tool outputs in transcripts; usage histories; optional provider credentials; workstation resources and settings.
+
+Boundaries:
+1. macOS process -> login Keychain, through `/usr/bin/security`.
+2. Process -> `~/.claude/projects`, `~/.config/claude/projects`, and Grok local files.
+3. Process -> external provider endpoints and GitHub-hosted LiteLLM model pricing.
+4. Process -> `~/Library/Application Support/Headroom` cached usage records.
+5. Process -> ServiceManagement login-item registration.
+6. Proposed future telemetry -> local adapter/store/UI.
+
+## Current risks and intended mitigations
+| Risk | Source behavior | Proposed mitigation |
+| --- | --- | --- |
+| Credential exposure | `Clients.swift` extracts a Claude OAuth token from Keychain and calls an unofficial usage API | Disable default extraction. Define optional consent and supported capability before any alternative credential path |
+| Secret-rich raw input | `Ledger.swift` parses session JSONL records containing potentially sensitive material | Persist only allowlisted derived metrics. Add tests asserting prompts, code and tool bodies never enter logs/cache |
+| Surprising persistence | `main.swift` registers login item on initial launch | Default off; explicit opt-in and clearly reversible UX |
+| Accidental exfiltration | Provider HTTPS calls plus downloaded LiteLLM prices | Egress inventory/allowlist; no telemetry; privacy tests |
+| Wrong or inflated numbers | Late streaming records, missing request IDs, overlap across adapters, unknown prices | Provenance and stable identity, fixture coverage, distinguish unknown from zero |
+| Supply-chain tampering | New upstream source, release DMG not yet Developer ID notarized | Pin reviewed commits, audit CI/dependencies, sign/notarize and verify releases |
+| Local disclosure | Usage history/cache and backups accessible to local account/processes | Data minimization, permissions, retention/deletion, avoid storing identifiers where not required |
+| Instrumentation conflicts | Proposed future hooks or status-line changes could overwrite user settings | Never mutate silently; backup, consent, merge semantics, reversible uninstall |
+| Excessive resource use | Frequent timers and long session files | Measure and budget scan CPU/memory, bounded indexing/retention, cancellation |
+
+## Safeguards that are NOT yet implemented
+- Threat-driven tests, network isolation, data-retention controls, consent-gated credentials, hardened release signing.
+- Verified support for enterprise/Bedrock usage, or authoritative quota reporting for all Claude account types.
+
+## Verification plan
+- Review each executable and network call; map request headers and response handling without exposing secrets.
+- Inspect actual cache output with seeded synthetic transcripts containing canary secrets; assert absence from persisted artifacts and logs.
+- Inject streaming duplicates and malformed/partial transcript records.
+- Exercise locked/denied Keychain, expired credentials, offline mode, and provider 429/401.
+- Confirm default launch causes no login-item mutation.
+- Use OS network/process observation to compare with the documented egress list.
+- Review permissions, CI, artifacts, SBOM/dependencies and reproducibility before recommending installation.
+
+## Privacy commitments (target state)
+Local-only by default. Collect only the metadata needed for selected metrics. No raw prompts, source code, tool arguments/results or API responses by default. No remote telemetry without clear opt-in. Explicit retention and deletion controls. Always disclose source/coverage gaps.
