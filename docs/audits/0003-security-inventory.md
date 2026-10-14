@@ -7,7 +7,8 @@ Audited revision: `c60d3d9` (`main`, inherited Headroom v1.1 source). Date: 2026
 **Status update: 2026-10-14** (`main` = `13b017d`). The findings below describe the inherited code at `c60d3d9` and are kept as written. Later changes are recorded beside them, not in place of them:
 - **Merged:** PR #14 (#12, R12) added injectable dependencies and mocked launch-path tests; production behavior unchanged. PR #16 (#15, R1 + R2) made the Claude Keychain read / usage endpoint and launch at login opt-in. PR #18 (#17, R4) made the Grok key read, billing request and `grok models` execution opt-in.
 - **Merged:** R3 (display toggles vs collection) — #19 / PR #20 (`e5aed20`): hidden gauges pause quota polling [mocked].
-- **Open:** R5 (Grok failures shown as absence), R9 (request identity, 401 backoff), R6–R8, R10, R11; OS-level verification (§7 Phase 2). CI was not run: hosted CI is unavailable for budget reasons (owner, 2026-10-14).
+- **Proposed:** R5 (Grok failures shown as absence) — #21 / draft PR #22, not merged.
+- **Open:** R9 (request identity, 401 backoff), R6–R8, R10, R11; OS-level verification (§7 Phase 2). CI was not run: hosted CI is unavailable for budget reasons (owner, 2026-10-14).
 - Status cells use **Merged (#14 / #16 / #18)** or **Unchanged**. Status annotations reflect current `main`; §6 keeps a dated snapshot for each step.
 
 ## Evidence classes
@@ -121,7 +122,7 @@ No other `URL(string:)`, `URLSession`, socket, URL-opening or subprocess call si
   - After a failed refresh, a second 401 collapses into `ClientError.notConfigured` (`Clients.swift:191-196`), which the UI renders as "Not set up" and **hides the provider** (`main.swift:128-130`). A user cannot distinguish "refresh failed / token invalid" from "Grok not installed".
   - Secrets do not reach error strings: `ClientError.errorDescription` uses only static text and status codes (`Clients.swift:31-40`); subprocess stdout/stderr go to `/dev/null`.
 - **Conclusion:** not a demonstrated runtime defect, but an observability gap (failure masked as absence). Tracked as R5 below.
-- **Status (2026-10-14):** the compiler warning is gone since PR #14, which made the discard explicit (`_ = runner.run(...)`). Exit status is still ignored, and the gap remains (R5, open). Since PR #18, a user who opts in to Grok and then hits a failed refresh sees no Grok section at all, so the gap is more visible.
+- **Status (2026-10-14):** the compiler warning is gone since PR #14, which made the discard explicit (`_ = runner.run(...)`). Exit status is still ignored, and the gap remains (R5, open). Since PR #18, a user who opts in to Grok and then hits a failed refresh sees no Grok section at all, so the gap is more visible. *Proposed in #21 / draft PR #22 (not merged): typed Grok errors, the `grok models` exit status kept, and failures shown instead of hiding Grok [mocked].*
 
 ## 5. Other findings
 
@@ -189,7 +190,7 @@ Phase 1 acceptance tests (all synthetic, run in `swift test`):
 
 1. Default launch records exactly the calls listed in §6 — this is the reproducible confirmation of the "not quiet / not offline" verdict.
 2. Disabling the Claude/Grok display toggles does not stop credential reads or requests (documents F1 today; flips to "no calls" once R3 lands). *Status 2026-10-14: flipped by PR #20 (merged) as `displayTogglesGateCollection` [mocked].*
-3. Grok 401 → refresh → 401 yields `.notConfigured` and one `ProcessRunner` call (documents §4 today; flips with R5).
+3. Grok 401 → refresh → 401 yields `.notConfigured` and one `ProcessRunner` call (documents §4 today; flips with R5). *Status 2026-10-14: flipped in draft PR #22 as `grokRefreshFailureIsAuthFailure` [mocked]; not merged.*
 4. After a refresh cycle, the temp cache directory contains the synthetic transcript path (F5) and never the canary string.
 5. Pricing request is issued at launch when no cache exists; with the transport offline, unpriced models contribute $0 to totals (F4).
 
@@ -215,7 +216,7 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 | R2 | P0 | Gate Claude Keychain read + usage endpoint behind explicit opt-in (default off) | Credential exposure (B1, B2, F1) | Existing users lose quota gauge until they opt in; ledger unaffected | Revert; or default the pref to on | `CredentialStore` fake: zero calls when disabled; transport records no request | #4 | Merged — #15 / PR #16 |
 | R3 | P1 | Make provider display toggles gate collection (Claude, Grok) | Collection continues when user "turns off" (F1) | None visible | Revert | Phase 1 test 2 flips to "no calls" | #4 | Merged — #19 / PR #20 |
 | R4 | P1 | Remove automatic execution of `~/.grok/bin/grok`; Grok opt-in | Unexpected exec of user-writable binary (B4) | Grok tokens no longer auto-refreshed; user runs CLI | Revert | `ProcessRunner` fake asserts no exec; Grok disabled by default | #4 | Merged — #17 / PR #18 |
-| R5 | P1 | Surface Grok refresh/auth failures distinctly from "not configured" | Failure masked as absence (§4) | UI shows an error state instead of hiding Grok | Revert | Phase 1 test 3 yields an auth-error state; error text contains no key material | #4 | Open (more visible since R4 merged) |
+| R5 | P1 | Surface Grok refresh/auth failures distinctly from "not configured" | Failure masked as absence (§4) | UI shows an error state instead of hiding Grok | Revert | Phase 1 test 3 yields an auth-error state; error text contains no key material | #4 | Proposed — #21 / draft PR #22 |
 | R6 | P1 | Pricing: bundled reviewed snapshot, pinned (commit SHA + checksum) opt-in updates, explicit timeout, ephemeral session | Unpinned remote data, silent egress (B6) | Prices may lag until updated | Revert to remote fetch | Default launch issues no pricing request; checksum mismatch rejected; table provenance (source/date) exposed | #7 (provenance), #11 (integrity/pinning) | Open |
 | R7 | P1 | Unknown price is not $0 in totals | Under-reported cost (F4) | Totals may show "partial" instead of a number | Revert | Fixture with unpriced model → total flagged partial/unknown | #7 | Open |
 | R8 | P1 | Minimize ledger cache: no raw paths, `0600`/`0700` modes, user-visible delete | Local disclosure (B9, F5, F8) | Cache schema bump (`version` 3→4) forces one re-index | Old version file ignored by version check; revert restores old format | Phase 1 test 4: no transcript paths or canary in cache; mode assertions | #5 | Open |
