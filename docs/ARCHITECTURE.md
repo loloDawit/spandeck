@@ -5,14 +5,14 @@ Status: current-source inventory plus proposed target; no refactor has happened 
 ## Present fork baseline (Headroom v1.1)
 - `Sources/Headroom/main.swift`: lifecycle, menu bar, timers.
 - `Dependencies.swift`, `ProviderServices.swift`: injectable Keychain/network/process/login-item/preferences seams (#12) and the launch path, including the Claude plan-limits consent (#15).
-- `Clients.swift`: Claude OAuth Keychain read (opt-in); unofficial usage endpoint; Grok token/file integration.
+- `Clients.swift`: Claude OAuth Keychain read (opt-in); unofficial usage endpoint; Grok token/file integration (opt-in, #17).
 - `Ledger.swift`: local Claude JSONL/Grok usage scanning, deduplication, price lookup, disk cache.
 - `Store.swift`, `StatusRenderer.swift`, `PopoverView.swift`, `Hover.swift`: state and UI.
 - `SystemSampler.swift`, `Consumers.swift`: hardware and per-process metrics.
 - `KeepAwake.swift`: idle-sleep prevention.
 - `Tests/HeadroomTests`: existing test suite; GitHub Actions runs `swift test`.
 
-Important: the current code reads local transcripts, downloads LiteLLM pricing, and reads Grok CLI credentials if present. Once the user opts in, it obtains a Claude bearer token from login Keychain and calls Anthropic's unofficial usage endpoint. Launch at login is only enabled from Settings. See `docs/THREAT_MODEL.md`.
+Important: the current code reads local Claude and Grok usage files and downloads LiteLLM pricing. Only after the user opts in per provider does it obtain a Claude bearer token from login Keychain and call Anthropic's unofficial usage endpoint (#15), or read the Grok CLI key, call Grok's billing endpoint and possibly run `grok models` (#17). Launch at login is only enabled from Settings. See `docs/THREAT_MODEL.md`.
 
 ## Target boundaries (proposal)
 ```text
