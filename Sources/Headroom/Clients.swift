@@ -351,13 +351,17 @@ final class GrokClient {
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let c = json.dict("config") else { throw GrokError.unexpectedResponse }
+        // A missing or non-numeric usage figure is a malformed answer, not 0% used (#21). JSON booleans are NSNumbers too.
+        guard let used = c["creditUsagePercent"] as? NSNumber, CFGetTypeID(used) != CFBooleanGetTypeID() else {
+            throw GrokError.unexpectedResponse
+        }
         let period = c.dict("currentPeriod")
         let type = (period?.string("type") ?? "").replacingOccurrences(of: "USAGE_PERIOD_TYPE_", with: "").lowercased()
         let products = (c["productUsage"] as? [[String: Any]] ?? []).compactMap { p -> (String, Double)? in
             guard let n = p.string("product") else { return nil }
             return (n, p.double("usagePercent") ?? 0)
         }
-        return GrokPlan(percent: c.double("creditUsagePercent") ?? 0,
+        return GrokPlan(percent: used.doubleValue,
                         periodStart: ISO.parse(period?.string("start") ?? c.string("billingPeriodStart")),
                         periodEnd: ISO.parse(period?.string("end") ?? c.string("billingPeriodEnd")),
                         periodName: type.isEmpty ? "period" : type,

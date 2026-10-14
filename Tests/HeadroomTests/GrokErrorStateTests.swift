@@ -173,7 +173,9 @@ struct GrokErrorStateTests {
         #expect(rig.section == .failure(failure))
     }
 
-    @Test(arguments: ["not json", "{}", #"{"config":"x"}"#])
+    @Test(arguments: ["not json", "{}", #"{"config":"x"}"#, #"{"config":{}}"#,
+                      #"{"config":{"creditUsagePercent":"not-a-number"}}"#, #"{"config":{"creditUsagePercent":null}}"#,
+                      #"{"config":{"creditUsagePercent":true}}"#])
     func malformedBillingResponse(_ body: String) async throws {
         let rig = try Rig(transport: FakeTransport([Hosts.grok: [.json(body)]]))
 
@@ -182,6 +184,59 @@ struct GrokErrorStateTests {
         #expect(rig.store.grokFailure == .unexpectedResponse)
         #expect(rig.store.grokPlan == nil)
         #expect(rig.section == .failure(.unexpectedResponse))
+    }
+
+    /// A real 0 is a valid plan, not a malformed answer; other metadata stays optional.
+    @Test(arguments: [#"{"config":{"creditUsagePercent":0}}"#, #"{"config":{"creditUsagePercent":0.0}}"#])
+    func zeroUsageIsValid(_ body: String) async throws {
+        let rig = try Rig(transport: FakeTransport([Hosts.grok: [.json(body)]]))
+
+        await rig.services.refreshGrok()
+
+        #expect(rig.store.grokFailure == nil && rig.store.grokPlan?.percent == 0 && rig.store.grokAvailable)
+        #expect(rig.section == .plan(.init(staleBecause: nil)))
+    }
+
+    /// Two overlapping refreshes (e.g. timer and wake): the newer one succeeds first, then the older one answers.
+    /// The older answer, failure or success, must not replace the newer plan.
+    @Test(arguments: [FakeTransport.Response.json("{}", status: 403), .json("{}", status: 500),
+                      .json(#"{"config":{"creditUsagePercent":55}}"#)])
+    func olderRefreshCannotOverrideNewer(_ older: FakeTransport.Response) async throws {
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let rig = try Rig(transport: transport)
+
+        let first = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(1, from: first) else { Issue.record("first refresh never started a request"); return }
+        let second = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(2, from: second) else { Issue.record("second refresh never started a request"); return }
+        #expect(transport.respond(.grokBilling, newest: true))
+        #expect(await transport.join(second))
+        #expect(rig.store.grokPlan?.percent == 10 && rig.store.grokFailure == nil)
+        #expect(transport.respond(older))
+        #expect(await transport.join(first))
+
+        #expect(rig.store.grokPlan?.percent == 10 && rig.store.grokFailure == nil && rig.store.grokAvailable)
+        #expect(rig.section == .plan(.init(staleBecause: nil)))
+        #expect(transport.started == 2 && rig.runner.calls.isEmpty)
+    }
+
+    /// In order, the newer answer still wins: a later failure is published as usual.
+    @Test func newerFailureAfterOlderSuccessIsShown() async throws {
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let rig = try Rig(transport: transport)
+
+        let first = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(1, from: first) else { Issue.record("first refresh never started a request"); return }
+        let second = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(2, from: second) else { Issue.record("second refresh never started a request"); return }
+        #expect(transport.respond(.grokBilling))
+        #expect(await transport.join(first))
+        #expect(transport.respond(.json("{}", status: 403)))
+        #expect(await transport.join(second))
+
+        #expect(rig.store.grokFailure == .accessDenied(403) && rig.store.grokPlan == nil)
     }
 
     @Test func successClearsEarlierFailure() async throws {
