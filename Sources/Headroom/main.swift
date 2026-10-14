@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if Prefs.sampleInterval != currentInterval { startSampling() }
             syncAwake()
             redraw()
-            // Also catches menu-bar switch changes made outside the Settings menu; a no-op if nothing changed.
+            // Best-effort catch-up for switch changes made outside the Settings menu; a no-op if nothing changed.
             applyQuotaVisibility()
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -110,7 +110,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    /// Pauses or resumes quota polling after a menu-bar switch change (#19).
+    /// Called by the Settings switch on the main thread right after it writes the preference (#19). The change is
+    /// recorded before this returns, so in-flight results are invalidated even if the switch goes back on at once;
+    /// only the resume refresh runs later.
+    private func quotaSwitchChanged(_ provider: ProviderServices.QuotaSwitch, _ on: Bool) {
+        let resume = MainActor.assumeIsolated { services.recordQuotaShown(provider, on) }
+        redraw()
+        guard resume else { return }
+        Task { @MainActor in
+            await services.resumeQuota(provider)
+            redraw()
+        }
+    }
+
+    /// Catches switch changes made outside the Settings menu (best effort, see `ProviderServices.applyQuotaVisibility`).
     private func applyQuotaVisibility() {
         Task { @MainActor in
             await services.applyQuotaVisibility()
@@ -192,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             loginItem: env.loginItem,
             setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) },
             setGrokCredits: { [weak self] on in self?.setGrokCredits(on) },
-            quotaVisibilityChanged: { [weak self] in self?.applyQuotaVisibility() }))
+            quotaSwitchChanged: { [weak self] provider, on in self?.quotaSwitchChanged(provider, on) }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -232,7 +245,7 @@ extension AppDelegate {
         print("strip width pt:", strip.size.width)
 
         let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
-                                                              setGrokCredits: { _ in }, quotaVisibilityChanged: {}))
+                                                              setGrokCredits: { _ in }, quotaSwitchChanged: { _, _ in }))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

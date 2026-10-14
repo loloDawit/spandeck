@@ -30,10 +30,17 @@ struct QuotaVisibilityTests {
         var store: Store { services.store }
         var prefs: InMemoryPreferences { box.preferences }
 
-        /// Flips a menu-bar switch the way the Settings menu does: write the preference, then apply it.
-        func show(_ key: String, _ on: Bool) async {
+        /// Flips a menu-bar switch the way the Settings menu does: write the preference, record the change at once,
+        /// then run the resume refresh if it was turned on.
+        @MainActor func show(_ key: String, _ on: Bool) async {
+            if flip(key, on) { await services.resumeQuota(key == Prefs.showClaude ? .claude : .grok) }
+        }
+
+        /// The synchronous part of a Settings flip; returns whether a resume refresh is due.
+        @MainActor @discardableResult
+        func flip(_ key: String, _ on: Bool) -> Bool {
             prefs.set(on, forKey: key)
-            await services.applyQuotaVisibility()
+            return services.recordQuotaShown(key == Prefs.showClaude ? .claude : .grok, on)
         }
 
         /// Timer, manual refresh and wake: `refreshLimits(force:)` in the app delegate calls these two.
@@ -103,14 +110,15 @@ struct QuotaVisibilityTests {
         #expect(rig.prefs.bool(forKey: Prefs.claudeLimits) && rig.prefs.bool(forKey: Prefs.grokCredits))
     }
 
-    // 4. Off → on under existing consent: exactly one refresh per provider; re-applying does not refresh again.
+    // 4. Off → on under existing consent: exactly one refresh per provider; the defaults notification that follows
+    // a Settings flip (and any unrelated preference change) does not refresh again.
     @Test func showingResumesOnceUnderConsent() async throws {
         let transport = FakeTransport(Self.both)
         let rig = try Rig(transport: transport, prefs: Self.consentedHidden)
 
         await rig.show(Prefs.showClaude, true)
         await rig.show(Prefs.showGrok, true)
-        await rig.services.applyQuotaVisibility() // e.g. an unrelated preference change
+        await rig.services.applyQuotaVisibility()
         await rig.services.applyQuotaVisibility()
 
         #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.grok])
@@ -118,8 +126,8 @@ struct QuotaVisibilityTests {
         #expect(rig.store.claudeQuotaShown && rig.store.grokQuotaShown)
     }
 
-    // In the app a Settings flip applies twice at once (the menu's callback and the defaults notification).
-    // Only one refresh may result.
+    // Outside-menu path: a stored change is picked up by `applyQuotaVisibility`, and two concurrent applies
+    // (e.g. two defaults notifications) refresh only once.
     @Test func concurrentApplyRefreshesOnce() async throws {
         let transport = DeferredTransport()
         defer { transport.close() }
@@ -167,8 +175,7 @@ struct QuotaVisibilityTests {
         await rig.show(Prefs.showClaude, false)
         var resumed: Task<Void, Never>?
         if reshow {
-            rig.prefs.set(true, forKey: Prefs.showClaude)
-            let resume = Task { await rig.services.applyQuotaVisibility() }
+            let resume = Task { await rig.show(Prefs.showClaude, true) }
             resumed = resume
             guard await transport.awaitRequests(2, from: resume) else { Issue.record("showing again never refreshed"); return }
         }
@@ -182,6 +189,53 @@ struct QuotaVisibilityTests {
             #expect(rig.store.claudeLimits?.session?.percent == 7 && rig.store.claudeError == nil)
         }
         #expect(transport.started == (reshow ? 2 : 1))
+    }
+
+    // Review on #20: off and back on in quick succession, before any refresh or apply runs, must still drop the
+    // in-flight result. The Settings menu records each change synchronously, so both edges are seen.
+    @Test(arguments: [FakeTransport.Response.claudeUsage, .json("{}", status: 429)])
+    func rapidOffOnDropsInFlightClaude(_ late: FakeTransport.Response) async throws {
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let rig = try Rig(transport: transport, prefs: [Prefs.claudeLimits: true])
+
+        let inFlight = Task { await rig.services.refreshClaude(force: true) }
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
+        #expect(!rig.flip(Prefs.showClaude, false))
+        #expect(rig.flip(Prefs.showClaude, true))
+        await rig.services.applyQuotaVisibility() // the queued notifications find nothing new
+        transport.respond(late)
+        #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
+
+        #expect(rig.store.claudeLimits == nil && rig.store.claudeError == nil && !rig.store.claudeAvailable)
+        #expect(transport.started == 1)
+
+        // The resume refresh is not held back by a 429 from the dropped request.
+        let resumed = Task { await rig.services.resumeQuota(.claude) }
+        guard await transport.awaitRequests(2, from: resumed) else { Issue.record("resume never refreshed"); return }
+        transport.respond(.json(#"{"limits":[{"kind":"session","percent":7}]}"#))
+        #expect(await transport.join(resumed), "task did not finish; it likely sent an unexpected extra request")
+        #expect(rig.store.claudeLimits?.session?.percent == 7)
+    }
+
+    // Same for Grok, with the stale request answering 401: no `grok models`, key re-read or retry.
+    @Test func rapidOffOnStopsGrokRecovery() async throws {
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let rig = try Rig(transport: transport, prefs: [Prefs.grokCredits: true])
+
+        let inFlight = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
+        let reads = rig.auth.reads
+        rig.flip(Prefs.showGrok, false)
+        rig.flip(Prefs.showGrok, true)
+        transport.respond(.unauthorized)
+        #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
+
+        #expect(rig.runner.calls.isEmpty)
+        #expect(rig.auth.reads == reads)
+        #expect(transport.started == 1)
+        #expect(rig.store.grokPlan == nil && rig.store.grokError == nil)
     }
 
     // 5. Grok hidden while the billing request is in flight: the late result is dropped.
@@ -212,12 +266,10 @@ struct QuotaVisibilityTests {
         let inFlight = Task { await rig.services.refreshGrok() }
         guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
         let reads = rig.auth.reads
-        rig.prefs.set(false, forKey: Prefs.showGrok)
-        await rig.services.applyQuotaVisibility()
+        await rig.show(Prefs.showGrok, false)
         var resumed: Task<Void, Never>?
         if reshow {
-            rig.prefs.set(true, forKey: Prefs.showGrok)
-            let resume = Task { await rig.services.applyQuotaVisibility() }
+            let resume = Task { await rig.show(Prefs.showGrok, true) }
             resumed = resume
             guard await transport.awaitRequests(2, from: resume) else { Issue.record("showing again never refreshed"); return }
         }

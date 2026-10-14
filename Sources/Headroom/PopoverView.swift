@@ -23,8 +23,9 @@ struct PopoverActions {
     var setClaudeLimits: (Bool) -> Void
     /// Turns Grok credits on (from the consent card) or off (from Settings).
     var setGrokCredits: (Bool) -> Void
-    /// Called after a Claude/Grok menu-bar switch changes, which pauses or resumes that provider's quota polling (#19).
-    var quotaVisibilityChanged: () -> Void
+    /// Called with each new value of a Claude/Grok menu-bar switch, which pauses or resumes that provider's quota
+    /// polling (#19). Called on the main thread right after the preference is written.
+    var quotaSwitchChanged: (ProviderServices.QuotaSwitch, Bool) -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -633,8 +634,8 @@ struct Footer: View {
                 // These switches also pause or resume quota polling; they never grant or revoke consent (#19).
                 if store.claudeLimitsEnabled || store.grokEnabled {
                     Section("Plan limits · hidden ones aren't refreshed") {
-                        if store.claudeLimitsEnabled { Toggle("Claude limits", isOn: quotaSwitch($showClaude)) }
-                        if store.grokEnabled { Toggle("Grok credits", isOn: quotaSwitch($showGrok)) }
+                        if store.claudeLimitsEnabled { Toggle("Claude limits", isOn: quotaSwitch($showClaude, .claude)) }
+                        if store.grokEnabled { Toggle("Grok credits", isOn: quotaSwitch($showGrok, .grok)) }
                     }
                 }
                 Picker("Update every", selection: $interval) {
@@ -690,9 +691,9 @@ struct Footer: View {
         return store.awakeForAgents ? "Awake (agents)" : "Keep awake"
     }
 
-    /// Writes the switch, then lets the app pause or resume that provider's polling in the same step.
-    private func quotaSwitch(_ value: Binding<Bool>) -> Binding<Bool> {
-        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; actions.quotaVisibilityChanged() })
+    /// Writes the switch, then reports this exact change so the app records it before anything else runs.
+    private func quotaSwitch(_ value: Binding<Bool>, _ provider: ProviderServices.QuotaSwitch) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; actions.quotaSwitchChanged(provider, $0) })
     }
 
     private func setLaunchAtLogin(_ on: Bool) {

@@ -46,28 +46,47 @@ final class ProviderServices {
     /// Whether Grok credits are collected: consent given and the gauge not hidden.
     var grokCollecting: Bool { grokEnabled && preferences.bool(forKey: Prefs.showGrok, default: true) }
 
-    /// Applies a change to the menu-bar switches, from the Settings menu or any other write to the preferences.
-    /// Hiding drops in-flight results and clears shown plan data; showing refreshes once, only under existing consent.
-    /// The Claude 429 backoff and the `grok models` throttle are kept.
-    @MainActor func applyQuotaVisibility() async {
-        let claude = preferences.bool(forKey: Prefs.showClaude, default: true)
-        let grok = preferences.bool(forKey: Prefs.showGrok, default: true)
-        let resumeClaude = claude && !claudeShown
-        let resumeGrok = grok && !grokShown
-        if claude != claudeShown {
-            claudeShown = claude
+    enum QuotaSwitch { case claude, grok }
+
+    /// Records one switch change synchronously, as it happens. Every change bumps that provider's generation at once,
+    /// so switching off and back on before anything else runs still drops requests already in flight. Hiding clears
+    /// shown plan data. Returns true when the switch was just turned on; the caller then calls `resumeQuota`.
+    @MainActor @discardableResult
+    func recordQuotaShown(_ provider: QuotaSwitch, _ on: Bool) -> Bool {
+        switch provider {
+        case .claude:
+            guard on != claudeShown else { return false }
+            claudeShown = on
             claudeConsentGeneration += 1
-            store.claudeQuotaShown = claude
-            if !claude { clearClaude() }
-        }
-        if grok != grokShown {
-            grokShown = grok
+            store.claudeQuotaShown = on
+            if !on { clearClaude() }
+        case .grok:
+            guard on != grokShown else { return false }
+            grokShown = on
             grokConsentGeneration += 1
-            store.grokQuotaShown = grok
-            if !grok { clearGrok() }
+            store.grokQuotaShown = on
+            if !on { clearGrok() }
         }
-        if resumeClaude { await refreshClaude() }
-        if resumeGrok { await refreshGrok() }
+        return on
+    }
+
+    /// One refresh after a switch was turned on. Collects only under existing consent; the Claude 429 backoff and the
+    /// `grok models` throttle still apply.
+    @MainActor func resumeQuota(_ provider: QuotaSwitch) async {
+        switch provider {
+        case .claude: await refreshClaude()
+        case .grok: await refreshGrok()
+        }
+    }
+
+    /// Best-effort catch-up for switch changes made outside the Settings menu (for example `defaults write`): compares
+    /// the stored preferences with the last recorded state. It sees only the current value, so an off-and-on that
+    /// happened entirely between two calls is not noticed; the Settings menu records each change itself.
+    @MainActor func applyQuotaVisibility() async {
+        let resumeClaude = recordQuotaShown(.claude, preferences.bool(forKey: Prefs.showClaude, default: true))
+        let resumeGrok = recordQuotaShown(.grok, preferences.bool(forKey: Prefs.showGrok, default: true))
+        if resumeClaude { await resumeQuota(.claude) }
+        if resumeGrok { await resumeQuota(.grok) }
     }
 
     @MainActor private func clearClaude() {
