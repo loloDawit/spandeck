@@ -159,6 +159,7 @@ final class GrokClient {
     private let credentials: GrokCredentialSource
     private let transport: HTTPTransport
     private let runner: ProcessRunner
+    private let refreshLock = NSLock()
     private var lastRefresh: Date?
 
     init(home: URL, credentials: GrokCredentialSource, transport: HTTPTransport, runner: ProcessRunner) {
@@ -169,7 +170,7 @@ final class GrokClient {
     }
 
     /// Forgets when `grok models` last ran, so a fresh consent isn't throttled by an earlier one.
-    func resetRefreshThrottle() { lastRefresh = nil }
+    func resetRefreshThrottle() { refreshLock.withLock { lastRefresh = nil } }
 
     private func auth() -> (key: String, expires: Date?)? {
         guard let data = credentials.grokAuthJSON(),
@@ -181,8 +182,12 @@ final class GrokClient {
     }
 
     private func refreshToken() async {
-        if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return }
-        lastRefresh = Date()
+        let throttled: Bool = refreshLock.withLock {
+            if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return true }
+            lastRefresh = Date()
+            return false
+        }
+        if throttled { return }
         let bin = grokHome.appendingPathComponent("bin/grok").path
         guard FileManager.default.isExecutableFile(atPath: bin) else { return }
         let runner = runner

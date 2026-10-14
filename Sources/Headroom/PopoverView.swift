@@ -473,7 +473,7 @@ struct GrokCreditsConsent: View {
             Text("Grok credits are off. To show them, this app reads the API key the Grok CLI stores in ~/.grok/auth.json "
                  + "and sends it to cli-chat-proxy.grok.com/v1/billing: at launch, once a minute, after wake and when you refresh. "
                  + "If the key has expired or is rejected, it runs ~/.grok/bin/grok models (at most every 10 minutes) "
-                 + "so the CLI can refresh it. This app never changes your Grok files. "
+                 + "so the CLI can refresh it. That endpoint is the Grok CLI's and may change. This app never changes your Grok files. "
                  + "Grok token usage works without this. You can turn it off in Settings.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

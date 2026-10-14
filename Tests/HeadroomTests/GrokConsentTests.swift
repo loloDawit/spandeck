@@ -84,9 +84,11 @@ struct GrokConsentTests {
     @Test func enabledExpiredKeyRunsGrokModelsOnce() async throws {
         let transport = FakeTransport([Hosts.grok: [.grokBilling]])
         let rig = try Rig(transport: transport, expiresIn: -3600)
+        let before = try rig.box.grokFiles()
 
         await rig.services.applyGrokChoice(true)
 
+        #expect(try rig.box.grokFiles() == before)
         #expect(rig.runner.calls.map(\.args) == [["models"]])
         #expect(transport.requests.count == 1)
     }
@@ -95,6 +97,7 @@ struct GrokConsentTests {
     @Test func disablingClearsAndStops() async throws {
         let transport = FakeTransport([Hosts.grok: [.grokBilling]])
         let rig = try Rig(transport: transport)
+        let before = try rig.box.grokFiles()
         await rig.services.applyGrokChoice(true)
         let reads = rig.auth.reads
 
@@ -106,6 +109,7 @@ struct GrokConsentTests {
         #expect(rig.auth.reads == reads)
         #expect(transport.requests.count == 1)
         #expect(rig.claude.reads == 0)
+        #expect(try rig.box.grokFiles() == before)
     }
 
     // Acceptance 5: a result that arrives after the user turned Grok off is dropped.
@@ -204,6 +208,7 @@ struct GrokConsentTests {
         await rig.services.applyGrokChoice(false)
         await rig.services.applyGrokChoice(true)
         #expect(rig.runner.calls.count == 2)
+        #expect(try rig.box.grokFiles().count == 3)
     }
 
     // With Claude already enabled, agreeing to Grok's consent must not trigger a Claude read or request.
