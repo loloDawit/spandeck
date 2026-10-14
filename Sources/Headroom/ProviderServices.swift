@@ -9,7 +9,6 @@ final class ProviderServices {
     let ledger: Ledger
     private let claudeClient: ClaudeLimitsClient
     private let grokClient: GrokClient
-    private let loginItem: LoginItemService
     private let preferences: PreferenceStore
     private var claudeBackoffUntil = Date.distantPast
 
@@ -19,20 +18,14 @@ final class ProviderServices {
         ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, transport: env.providerTransport, runner: env.processRunner)
-        loginItem = env.loginItem
         preferences = env.preferences
     }
 
-    /// Loads prices (possibly starting a download, returned for tests) and registers the login item on first launch.
+    /// Loads prices, possibly starting a download (returned for tests). The login item is never registered here:
+    /// launch at login is only enabled from Settings, and an existing registration is left as it is (#15).
     @discardableResult
     func start() -> Task<Void, Never>? {
-        let download = pricing.load()
-        // Registered without asking on first launch; tracked in #4 (R1).
-        if !preferences.bool(forKey: "didRegisterLoginItem") {
-            preferences.set(true, forKey: "didRegisterLoginItem")
-            try? loginItem.register()
-        }
-        return download
+        pricing.load()
     }
 
     /// Fetches Claude plan limits unless backing off after a 429. Not gated by the display toggle (#4, R3).

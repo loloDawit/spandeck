@@ -28,9 +28,8 @@ struct LaunchPathTests {
         await services.refreshGrok()
         _ = await refresh(services.ledger)
 
-        // Login item registered without asking (#4, R1).
-        #expect(login.registers == 1)
-        #expect(box.preferences.bool(forKey: "didRegisterLoginItem"))
+        // Launch at login is opt-in from Settings only (#15).
+        #expect(login.registers == 0)
         // Keychain read and unofficial endpoint with no opt-in (#4, R2).
         #expect(creds.reads == 1)
         #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.pricing])
@@ -48,11 +47,23 @@ struct LaunchPathTests {
         // Price table cached inside the sandbox.
         #expect(FileManager.default.fileExists(atPath: box.appSupport.appendingPathComponent("pricing.json").path))
 
-        // Relaunch: no second registration, and a fresh price table means no second download.
+        // Relaunch: still no registration, and a fresh price table means no second download.
         let relaunch = ProviderServices(store: Store(), env: env)
         #expect(relaunch.start() == nil)
-        #expect(login.registers == 1)
+        #expect(login.registers == 0)
         #expect(transport.hosts.filter { $0 == Hosts.pricing }.count == 1)
+    }
+
+    // A login item the user (or an older Headroom build) already registered is neither re-registered nor removed.
+    @Test func existingLoginItemIsLeftAlone() async throws {
+        let box = try Sandbox()
+        let login = FakeLoginItem(enabled: true)
+        let env = box.environment(transport: FakeTransport([Hosts.pricing: [.pricingTable]]), loginItem: login)
+
+        await ProviderServices(store: Store(), env: env).start()?.value
+
+        #expect(login.isEnabled)
+        #expect(login.registers == 0 && login.unregisters == 0)
     }
 
     @Test func keychainStoreUsesSecurityCLI() {

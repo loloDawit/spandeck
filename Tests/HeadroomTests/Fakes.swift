@@ -71,7 +71,8 @@ final class InMemoryPreferences: PreferenceStore {
 final class FakeLoginItem: LoginItemService {
     private(set) var registers = 0
     private(set) var unregisters = 0
-    private(set) var isEnabled = false
+    private(set) var isEnabled: Bool
+    init(enabled: Bool = false) { isEnabled = enabled }
     func register() throws { registers += 1; isEnabled = true }
     func unregister() throws { unregisters += 1; isEnabled = false }
 }
