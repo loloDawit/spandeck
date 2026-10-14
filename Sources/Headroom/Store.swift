@@ -18,6 +18,8 @@ enum Prefs {
     static let interval = "interval"
     static let awakeForAgents = "awake.agents"
     static let awakeDisplay = "awake.display"
+    /// Consent to read the Claude Code login from the Keychain for plan limits (#15). Off unless the user enables it.
+    static let claudeLimits = "claude.limits.enabled"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -74,6 +76,8 @@ final class Store: ObservableObject {
     @Published var claudeLimits: ClaudeLimits?
     @Published var claudeError: String?
     @Published var claudeUsage: UsageSummary?
+    /// Whether the user has opted in to Claude plan limits; mirrors `Prefs.claudeLimits`.
+    @Published var claudeLimitsEnabled = false
     /// Providers start hidden and appear once their account answers; they hide again if not set up.
     @Published var claudeAvailable = false
     @Published var grokAvailable = false

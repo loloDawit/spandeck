@@ -108,6 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func setClaudeLimits(_ on: Bool) {
+        Task { @MainActor in
+            services.setClaudeLimitsEnabled(on)
+            redraw()
+            if on { refreshLimits(force: true) }
+        }
+    }
+
     private func refreshUsage() {
         guard !ledgerBusy else { return }
         ledgerBusy = true
@@ -165,7 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             },
             quit: { NSApp.terminate(nil) },
             keepAwake: { [weak self] in self?.setAwake($0) },
-            loginItem: env.loginItem))
+            loginItem: env.loginItem,
+            setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -204,7 +213,7 @@ extension AppDelegate {
         }
         print("strip width pt:", strip.size.width)
 
-        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem))
+        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in }))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

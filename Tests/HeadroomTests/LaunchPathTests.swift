@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import Headroom
 
-/// Drives the launch path against fakes (#12). These tests pin down *current* inherited behavior, including
-/// behavior the #3 audit flags as wrong; each such assertion names the remediation that will flip it.
+/// Drives the launch path against fakes (#12). These tests pin down current behavior. Assertions on behavior the
+/// #3 audit flags as wrong name the remediation that will flip them; R1 and R2 were flipped by #15.
 /// Nothing here touches the real Keychain, network, login items, home directory or persistent preferences.
 @MainActor
 struct LaunchPathTests {
@@ -13,7 +13,7 @@ struct LaunchPathTests {
         }
     }
 
-    // Acceptance 1: the default launch performs exactly the side effects listed in audit §6.
+    // Acceptance 1: the default launch performs only the side effects below (audit §6 as amended by #15).
     @Test func defaultLaunchSideEffects() async throws {
         let box = try Sandbox()
         let transport = FakeTransport([Hosts.anthropic: [.claudeUsage], Hosts.pricing: [.pricingTable]])
@@ -30,17 +30,12 @@ struct LaunchPathTests {
 
         // Launch at login is opt-in from Settings only (#15).
         #expect(login.registers == 0)
-        // Keychain read and unofficial endpoint with no opt-in (#4, R2).
-        #expect(creds.reads == 1)
-        #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.pricing])
+        // No Keychain read and no Anthropic request without opt-in (#15). Only the price table is fetched.
+        #expect(creds.reads == 0)
+        #expect(transport.hosts == [Hosts.pricing])
         #expect(transport.unexpected.isEmpty)
-        let usage = try #require(transport.requests.first { $0.url?.host == Hosts.anthropic })
-        #expect(usage.url?.path == "/api/oauth/usage")
-        #expect(usage.value(forHTTPHeaderField: "Authorization") == "Bearer CANARY-NOT-A-TOKEN")
-        #expect(usage.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
-        // Borrowed Claude Code identity (#4, R9).
-        #expect(usage.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1 headroom")
-        #expect(services.store.claudeLimits?.session?.percent == 42)
+        #expect(!services.store.claudeLimitsEnabled)
+        #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
         // No Grok install in the sandbox: no Grok request, no subprocess.
         #expect(runner.calls.isEmpty)
         #expect(!services.store.grokAvailable)
@@ -52,6 +47,66 @@ struct LaunchPathTests {
         #expect(relaunch.start() == nil)
         #expect(login.registers == 0)
         #expect(transport.hosts.filter { $0 == Hosts.pricing }.count == 1)
+    }
+
+    // Manual refresh and wake pass `force`, which skips the 429 backoff but must never skip consent.
+    @Test func forcedRefreshWithoutConsentReadsNothing() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+
+        await services.refreshClaude(force: true)
+
+        #expect(creds.reads == 0)
+        #expect(transport.requests.isEmpty)
+    }
+
+    // After opting in: the Keychain is read and the unofficial endpoint called; the choice survives a relaunch.
+    @Test func enablingClaudeLimitsReadsAndPersists() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let env = box.environment(transport: transport, credentials: creds)
+        let services = ProviderServices(store: Store(), env: env)
+
+        services.setClaudeLimitsEnabled(true)
+        await services.refreshClaude(force: true)
+
+        #expect(box.preferences.bool(forKey: Prefs.claudeLimits))
+        #expect(services.store.claudeLimitsEnabled)
+        #expect(creds.reads == 1)
+        let usage = try #require(transport.requests.first { $0.url?.host == Hosts.anthropic })
+        #expect(usage.url?.path == "/api/oauth/usage")
+        #expect(usage.value(forHTTPHeaderField: "Authorization") == "Bearer CANARY-NOT-A-TOKEN")
+        #expect(usage.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
+        // Borrowed Claude Code identity (#4, R9).
+        #expect(usage.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1 headroom")
+        #expect(services.store.claudeLimits?.session?.percent == 42)
+        #expect(services.store.claudeAvailable)
+
+        let relaunch = ProviderServices(store: Store(), env: env)
+        #expect(relaunch.store.claudeLimitsEnabled)
+    }
+
+    // Turning limits off clears what was shown and stops further reads.
+    @Test func disablingClaudeLimitsClearsAndStops() async throws {
+        let box = try Sandbox()
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage]])
+        let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
+        let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+        services.setClaudeLimitsEnabled(true)
+        await services.refreshClaude()
+        #expect(services.store.claudeLimits != nil)
+
+        services.setClaudeLimitsEnabled(false)
+        await services.refreshClaude(force: true)
+
+        #expect(!box.preferences.bool(forKey: Prefs.claudeLimits))
+        #expect(services.store.claudeLimits == nil && services.store.claudeError == nil)
+        #expect(!services.store.claudeAvailable && !services.store.claudeLimitsEnabled)
+        #expect(creds.reads == 1)
+        #expect(transport.requests.count == 1)
     }
 
     // A login item the user (or an older Headroom build) already registered is neither re-registered nor removed.
@@ -77,7 +132,7 @@ struct LaunchPathTests {
         #expect(KeychainCredentialStore(runner: runner).claudeCredentialJSON() == nil)
     }
 
-    // Acceptance 2: display toggles only hide gauges; collection continues (#4, R3 will flip this).
+    // Acceptance 2: once opted in, display toggles only hide gauges; collection continues (#4, R3 will flip this).
     // R3 must read the toggles from `env.preferences` (`UserDefaults.standard` in `live`), not `Prefs`, or this test cannot flip.
     @Test func displayTogglesDoNotGateCollection() async throws {
         let box = try Sandbox()
@@ -88,6 +143,7 @@ struct LaunchPathTests {
                                        Hosts.grok: [.json(#"{"config":{"creditUsagePercent":10}}"#)]])
         let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
         let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
+        services.setClaudeLimitsEnabled(true)
 
         await services.refreshClaude()
         await services.refreshGrok()

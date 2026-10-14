@@ -19,6 +19,22 @@ final class ProviderServices {
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, transport: env.providerTransport, runner: env.processRunner)
         preferences = env.preferences
+        store.claudeLimitsEnabled = preferences.bool(forKey: Prefs.claudeLimits)
+    }
+
+    /// Claude plan limits need the Claude Code OAuth token from the Keychain and an unofficial endpoint,
+    /// so they stay off until the user opts in (#15).
+    var claudeLimitsEnabled: Bool { preferences.bool(forKey: Prefs.claudeLimits) }
+
+    /// Records the user's choice. Turning it off clears what was shown and any backoff.
+    @MainActor func setClaudeLimitsEnabled(_ on: Bool) {
+        preferences.set(on, forKey: Prefs.claudeLimits)
+        store.claudeLimitsEnabled = on
+        guard !on else { return }
+        store.claudeLimits = nil
+        store.claudeError = nil
+        store.claudeAvailable = false
+        claudeBackoffUntil = .distantPast
     }
 
     /// Loads prices, possibly starting a download (returned for tests). The login item is never registered here:
@@ -28,11 +44,17 @@ final class ProviderServices {
         pricing.load()
     }
 
-    /// Fetches Claude plan limits unless backing off after a 429. Not gated by the display toggle (#4, R3).
+    /// Fetches Claude plan limits if the user opted in, unless backing off after a 429. `force` (manual refresh,
+    /// wake) skips the backoff but never the consent check. Not gated by the display toggle (#4, R3).
     @MainActor func refreshClaude(force: Bool = false) async {
+        guard claudeLimitsEnabled else { return }
         guard force || Date() >= claudeBackoffUntil else { return }
+        let result: Result<ClaudeLimits, Error>
+        do { result = .success(try await claudeClient.fetch()) } catch { result = .failure(error) }
+        // The user may have turned limits off while the request was in flight.
+        guard claudeLimitsEnabled else { return }
         do {
-            store.claudeLimits = try await claudeClient.fetch()
+            store.claudeLimits = try result.get()
             store.claudeError = nil
             store.claudeAvailable = true
         } catch ClientError.notConfigured {
