@@ -44,6 +44,18 @@ struct KeychainCredentialStore: CredentialStore {
     }
 }
 
+protocol GrokCredentialSource {
+    /// The raw contents of the Grok CLI's `~/.grok/auth.json`, or nil if absent or unreadable. Never written.
+    func grokAuthJSON() -> Data?
+}
+
+struct GrokAuthFile: GrokCredentialSource {
+    let home: URL
+    func grokAuthJSON() -> Data? {
+        try? Data(contentsOf: home.appendingPathComponent(".grok/auth.json"))
+    }
+}
+
 protocol LoginItemService {
     var isEnabled: Bool { get }
     func register() throws
@@ -72,6 +84,7 @@ struct AppEnvironment {
     var pricingTransport: HTTPTransport
     var processRunner: ProcessRunner
     var credentials: CredentialStore
+    var grokCredentials: GrokCredentialSource
     var loginItem: LoginItemService
     var preferences: PreferenceStore
     var home: URL
@@ -90,6 +103,7 @@ struct AppEnvironment {
             pricingTransport: URLSessionTransport(session: .shared),
             processRunner: runner,
             credentials: KeychainCredentialStore(runner: runner),
+            grokCredentials: GrokAuthFile(home: homeDir),
             loginItem: MainAppLoginItem(),
             preferences: UserDefaults.standard,
             home: homeDir,

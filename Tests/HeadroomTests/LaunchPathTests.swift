@@ -122,7 +122,7 @@ struct LaunchPathTests {
         guard await transport.awaitRequests(1, from: inFlight) else { Issue.record("refresh never started a request"); return }
         services.setClaudeLimitsEnabled(false)
         transport.respond(.claudeUsage)
-        await inFlight.value
+        #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
 
         #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
     }
@@ -142,7 +142,7 @@ struct LaunchPathTests {
         services.setClaudeLimitsEnabled(false)
         services.setClaudeLimitsEnabled(true)
         transport.respond(late)
-        await inFlight.value
+        #expect(await transport.join(inFlight), "task did not finish; it likely sent an unexpected extra request")
 
         #expect(services.store.claudeLimits == nil)
         #expect(services.store.claudeError == nil)
@@ -153,7 +153,7 @@ struct LaunchPathTests {
             return
         }
         transport.respond(.claudeUsage)
-        await next.value
+        #expect(await transport.join(next), "task did not finish; it likely sent an unexpected extra request")
         #expect(services.store.claudeLimits?.session?.percent == 42)
     }
 
@@ -235,6 +235,7 @@ struct LaunchPathTests {
         let creds = FakeCredentialStore(FakeCredentialStore.synthetic())
         let services = ProviderServices(store: Store(), env: box.environment(transport: transport, credentials: creds))
         services.setClaudeLimitsEnabled(true)
+        services.setGrokEnabled(true)
 
         await services.refreshClaude()
         await services.refreshGrok()
@@ -246,7 +247,7 @@ struct LaunchPathTests {
         #expect(services.store.grokPlan?.percent == 10)
     }
 
-    // Acceptance 3: a failed Grok refresh is reported as "not configured" (#4, R5 will flip this).
+    // Acceptance 3: once opted in (#17), a failed Grok refresh is reported as "not configured" (#4, R5 will flip this).
     @Test func grokRefreshFailureLooksNotConfigured() async throws {
         let box = try Sandbox()
         try box.write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"}}"#)
@@ -254,6 +255,7 @@ struct LaunchPathTests {
         let transport = FakeTransport([Hosts.grok: [.unauthorized]])
         let runner = FakeProcessRunner()
         let services = ProviderServices(store: Store(), env: box.environment(transport: transport, runner: runner))
+        services.setGrokEnabled(true)
 
         await services.refreshGrok()
 
@@ -333,6 +335,7 @@ struct SeamBoundaryTests {
         (needle("SMApp", "Service"), ["Dependencies.swift"]),
         (needle("URL", "Session"), ["Dependencies.swift"]),
         (needle("/usr/bin/", "security"), ["Dependencies.swift"]),
+        (needle("(\".grok/", "auth.json\")"), ["Dependencies.swift"]),
         (needle("run", "Process("), ["Dependencies.swift", "Util.swift"]),
         (needle("app", "SupportDir"), ["Dependencies.swift", "Util.swift"]),
         // Hover.swift: debug-only log behind the `debugHover` default; out of scope for #12.

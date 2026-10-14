@@ -156,18 +156,21 @@ struct GrokPlan {
 /// (the CLI owns the file and its lock; this client never writes it).
 final class GrokClient {
     private let grokHome: URL
+    private let credentials: GrokCredentialSource
     private let transport: HTTPTransport
     private let runner: ProcessRunner
+    private let refreshLock = NSLock()
     private var lastRefresh: Date?
 
-    init(home: URL, transport: HTTPTransport, runner: ProcessRunner) {
+    init(home: URL, credentials: GrokCredentialSource, transport: HTTPTransport, runner: ProcessRunner) {
         self.grokHome = home.appendingPathComponent(".grok")
+        self.credentials = credentials
         self.transport = transport
         self.runner = runner
     }
 
     private func auth() -> (key: String, expires: Date?)? {
-        guard let data = try? Data(contentsOf: grokHome.appendingPathComponent("auth.json")),
+        guard let data = credentials.grokAuthJSON(),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         for case let entry as [String: Any] in json.values {
             if let key = entry.string("key"), !key.isEmpty { return (key, ISO.parse(entry.string("expires_at"))) }
@@ -176,8 +179,12 @@ final class GrokClient {
     }
 
     private func refreshToken() async {
-        if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return }
-        lastRefresh = Date()
+        let throttled: Bool = refreshLock.withLock {
+            if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return true }
+            lastRefresh = Date()
+            return false
+        }
+        if throttled { return }
         let bin = grokHome.appendingPathComponent("bin/grok").path
         guard FileManager.default.isExecutableFile(atPath: bin) else { return }
         let runner = runner
@@ -187,18 +194,28 @@ final class GrokClient {
         }.value
     }
 
-    func fetch() async throws -> GrokPlan {
+    /// `stillAllowed` is checked before every key read, every `grok models` run and immediately before every
+    /// request, so withdrawing consent stops the fetch at the next step (#17). A request already sent can't be recalled.
+    func fetch(stillAllowed: () async -> Bool) async throws -> GrokPlan {
+        func checkAllowed() async throws { if !(await stillAllowed()) { throw CancellationError() } }
+        try await checkAllowed()
         guard var a = auth() else { throw ClientError.notConfigured }
         if let exp = a.expires, exp < Date().addingTimeInterval(60) {
+            try await checkAllowed()
             await refreshToken()
+            try await checkAllowed()
             a = auth() ?? a
         }
         do {
+            try await checkAllowed()
             return try await request(a.key)
         } catch ClientError.http(401) {
+            try await checkAllowed()
             await refreshToken()
+            try await checkAllowed()
             guard let fresh = auth() else { throw ClientError.notConfigured }
             do {
+                try await checkAllowed()
                 return try await request(fresh.key)
             } catch ClientError.http(let code) where [401, 402, 403, 404].contains(code) {
                 // Logged in but no plan with billing access.

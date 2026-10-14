@@ -21,6 +21,8 @@ struct PopoverActions {
     var loginItem: LoginItemService
     /// Turns Claude plan limits on (from the consent card) or off (from Settings).
     var setClaudeLimits: (Bool) -> Void
+    /// Turns Grok credits on (from the consent card) or off (from Settings).
+    var setGrokCredits: (Bool) -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -41,7 +43,8 @@ struct PopoverView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 12) {
                     SystemGrid(store: store)
-                    LimitsCard(store: store, enableClaudeLimits: { actions.setClaudeLimits(true) })
+                    LimitsCard(store: store, enableClaudeLimits: { actions.setClaudeLimits(true) },
+                               enableGrokCredits: { actions.setGrokCredits(true) })
                 }
                 .frame(width: 330)
                 UsageCard(store: store)
@@ -383,9 +386,13 @@ struct BatteryCard: View {
 struct LimitsCard: View {
     @ObservedObject var store: Store
     var enableClaudeLimits: () -> Void
+    var enableGrokCredits: () -> Void
 
     /// The Claude section shows either the consent prompt or, once enabled, the account's limits.
     private var showsClaude: Bool { !store.claudeLimitsEnabled || store.claudeAvailable }
+    /// Grok consent is only shown when asked for from Settings, so the app never probes for Grok files to decide.
+    private var showsGrokConsent: Bool { !store.grokEnabled && store.grokConsentRequested }
+    private var showsGrok: Bool { showsGrokConsent || (store.grokEnabled && store.grokAvailable) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -402,10 +409,12 @@ struct LimitsCard: View {
                     Text("\(err), showing data from \(Fmt.ago(store.claudeLimits?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
-            if showsClaude && store.grokAvailable {
+            if showsClaude && showsGrok {
                 Divider().opacity(0.5)
             }
-            if store.grokAvailable {
+            if showsGrokConsent {
+                GrokCreditsConsent(enable: enableGrokCredits, cancel: { store.grokConsentRequested = false })
+            } else if store.grokEnabled && store.grokAvailable {
                 CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok,
                            trailing: store.grokPlan.map { $0.periodName.capitalized + " credits" })
                 if let p = store.grokPlan {
@@ -420,7 +429,7 @@ struct LimitsCard: View {
                     Text("\(err), showing data from \(Fmt.ago(store.grokPlan?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
-            if !showsClaude && !store.grokAvailable {
+            if !showsClaude && !showsGrok {
                 Text("No Claude Code or Grok account found").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
@@ -453,6 +462,31 @@ struct ClaudeLimitsConsent: View {
     }
 }
 
+/// Explains exactly what enabling Grok credits does before anything is read (#17).
+struct GrokCreditsConsent: View {
+    var enable: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CardHeader(title: "Grok", icon: "bolt.horizontal.circle", tint: .grok, trailing: "Off")
+            Text("Grok credits are off. To show them, this app reads the API key the Grok CLI stores in ~/.grok/auth.json "
+                 + "and sends it to cli-chat-proxy.grok.com/v1/billing: at launch, once a minute, after wake and when you refresh. "
+                 + "If the key has expired or is rejected, it runs ~/.grok/bin/grok models (at most once every 10 minutes, "
+                 + "even if you turn this off and on) so the CLI can refresh it; the CLI may update its own files, including auth.json. "
+                 + "This app never writes your Grok files itself. That endpoint is the Grok CLI's and may change. "
+                 + "Grok token usage works without this. You can turn it off in Settings.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Enable Grok credits", action: enable)
+                Button("Not now", action: cancel)
+            }
+            .controlSize(.small)
+        }
+    }
+}
+
 // MARK: - Combined token usage
 
 struct UsageCard: View {
@@ -460,7 +494,7 @@ struct UsageCard: View {
     @AppStorage("usage.metric") private var metric: DailyMetric = .cost
 
     var body: some View {
-        let grok = store.grokAvailable ? store.grokUsage : nil
+        let grok = store.localGrokUsage
         let combined = UsageSummary.combine(store.claudeUsage, grok)
         VStack(alignment: .leading, spacing: 10) {
             CardHeader(title: "Token usage", icon: "chart.bar.xaxis", tint: .claude, trailing: grok == nil ? "Claude Code" : "Claude + Grok")
@@ -570,7 +604,7 @@ struct Footer: View {
                     Toggle("Memory", isOn: $showMem)
                     Toggle("Battery", isOn: $showBattery)
                     Toggle("Claude limits", isOn: $showClaude)
-                    if store.grokAvailable { Toggle("Grok credits", isOn: $showGrok) }
+                    if store.grokEnabled && store.grokAvailable { Toggle("Grok credits", isOn: $showGrok) }
                 }
                 Picker("Update every", selection: $interval) {
                     Text("0.5 s").tag(0.5)
@@ -581,6 +615,11 @@ struct Footer: View {
                 Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 if store.claudeLimitsEnabled {
                     Button("Turn off Claude plan limits") { actions.setClaudeLimits(false) }
+                }
+                if store.grokEnabled {
+                    Button("Turn off Grok credits") { actions.setGrokCredits(false) }
+                } else {
+                    Button("Set up Grok credits…") { store.grokConsentRequested = true }
                 }
             } label: {
                 Label("Settings", systemImage: "gearshape")

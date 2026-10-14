@@ -85,12 +85,35 @@ final class DeferredTransport: HTTPTransport, @unchecked Sendable {
         return true
     }
 
+    /// Waits for `task` to finish. If it is still running after `timeout` (for example it sent a request nobody will
+    /// answer), closes the transport so it can finish, and returns false. Never waits unboundedly.
+    func join<T>(_ task: Task<T, Never>, timeout: TimeInterval = 2) async -> Bool {
+        let finished = Flag()
+        let watchdog = Task { [weak self] () -> Bool in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard !finished.isSet else { return false }
+            self?.close()
+            return true
+        }
+        _ = await task.value
+        finished.set()
+        watchdog.cancel()
+        return !(await watchdog.value)
+    }
+
     /// Answers the oldest pending request.
     func respond(_ response: FakeTransport.Response) {
         let (request, c) = lock.withLock { pending.removeFirst() }
         c.resume(returning: (response.body, HTTPURLResponse(url: request.url!, statusCode: response.status,
                                                             httpVersion: nil, headerFields: nil)!))
     }
+}
+
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
 }
 
 /// Records calls; never executes anything.
@@ -127,6 +150,52 @@ final class InMemoryPreferences: PreferenceStore {
     func set(_ value: Bool, forKey key: String) { values[key] = value }
 }
 
+/// Reads the sandbox's `~/.grok/auth.json` like the real source, and counts every read.
+final class CountingGrokAuth: GrokCredentialSource, @unchecked Sendable {
+    private let file: GrokAuthFile
+    private let lock = NSLock()
+    private var _reads = 0
+    init(home: URL) { file = GrokAuthFile(home: home) }
+    var reads: Int { lock.withLock { _reads } }
+    func grokAuthJSON() -> Data? {
+        lock.withLock { _reads += 1 }
+        return file.grokAuthJSON()
+    }
+}
+
+/// Like `CountingGrokAuth`, but the first read blocks (off the main actor) until `resume()` or a 2 s timeout,
+/// so a test can change consent while the key is being read.
+final class PausingGrokAuth: GrokCredentialSource, @unchecked Sendable {
+    private let file: GrokAuthFile
+    private let gate = DispatchSemaphore(value: 0)
+    private let entered = Flag()
+    private let lock = NSLock()
+    private var _reads = 0
+    init(home: URL) { file = GrokAuthFile(home: home) }
+    var reads: Int { lock.withLock { _reads } }
+
+    func grokAuthJSON() -> Data? {
+        let first: Bool = lock.withLock { _reads += 1; return _reads == 1 }
+        if first {
+            entered.set()
+            _ = gate.wait(timeout: .now() + 2)
+        }
+        return file.grokAuthJSON()
+    }
+
+    /// Waits until the first read has started; false after `timeout`.
+    func waitUntilReading(timeout: TimeInterval = 2) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !entered.isSet {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
+    }
+
+    func resume() { gate.signal() }
+}
+
 final class FakeLoginItem: LoginItemService {
     private(set) var registers = 0
     private(set) var unregisters = 0
@@ -157,10 +226,35 @@ final class Sandbox {
 
     func environment(transport: HTTPTransport, runner: FakeProcessRunner = FakeProcessRunner(),
                      credentials: FakeCredentialStore = FakeCredentialStore(nil),
+                     grokCredentials: GrokCredentialSource? = nil,
                      loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
         AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,
-                       credentials: credentials, loginItem: loginItem, preferences: preferences,
-                       home: home, appSupport: appSupport)
+                       credentials: credentials, grokCredentials: grokCredentials ?? CountingGrokAuth(home: home),
+                       loginItem: loginItem, preferences: preferences, home: home, appSupport: appSupport)
+    }
+
+    /// A synthetic Grok CLI install: auth.json with a canary key, an executable `bin/grok` that is never run,
+    /// and one local session usage file (150 tokens, $0.25) dated now.
+    @discardableResult
+    func installGrok(expiresIn: TimeInterval? = nil) throws -> URL {
+        let expiry = expiresIn.map { #","expires_at":"\#(ISO8601DateFormatter().string(from: Date().addingTimeInterval($0)))""# } ?? ""
+        try write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"\#(expiry)}}"#)
+        let ended = ISO8601DateFormatter().string(from: Date())
+        try write(".grok/sessions/proj/s1/usage.json", #"{"turns":[{"endedAt":"\#(ended)","inputTokens":100,"outputTokens":50,"#
+                  + #""cachedReadTokens":0,"cacheCreationTokens":0,"modelCalls":1,"costUsdTicks":2500000000,"totalTokens":150,"#
+                  + #""primaryModelId":"grok-test"}]}"#)
+        return try write(".grok/bin/grok", "#!/bin/sh\nexit 1\n", executable: true)
+    }
+
+    /// Path → contents of every file under `~/.grok`, to prove nothing was changed or removed.
+    func grokFiles() throws -> [String: Data] {
+        let root = home.appendingPathComponent(".grok")
+        guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [:] }
+        var out: [String: Data] = [:]
+        for case let url as URL in en where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+            out[url.path] = try Data(contentsOf: url)
+        }
+        return out
     }
 
     /// Writes `contents` to a path relative to the sandbox home, creating folders.
@@ -191,4 +285,20 @@ extension FakeTransport.Response {
     static let claudeUsage = json(#"{"limits":[{"kind":"session","percent":42,"resets_at":"2030-01-01T00:00:00Z"}]}"#)
     static let pricingTable = json(#"{"claude-test-1":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}"#)
     static let unauthorized = json("{}", status: 401)
+    static let grokBilling = json(#"{"config":{"creditUsagePercent":10}}"#)
+}
+
+/// Runs one ledger refresh and returns its summaries.
+func refreshLedger(_ ledger: Ledger) async -> (claude: UsageSummary, grok: UsageSummary) {
+    await withCheckedContinuation { c in
+        ledger.refresh(windowStart: nil, progress: { _ in }, completion: { claude, grok, _ in c.resume(returning: (claude, grok)) })
+    }
+}
+
+/// Returns the given answers in order, then repeats the last.
+final class Answers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Bool]
+    init(_ values: [Bool]) { self.values = values }
+    func next() -> Bool { lock.withLock { values.count > 1 ? values.removeFirst() : values[0] } }
 }
