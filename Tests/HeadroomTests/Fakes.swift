@@ -101,11 +101,14 @@ final class DeferredTransport: HTTPTransport, @unchecked Sendable {
         return !(await watchdog.value)
     }
 
-    /// Answers the oldest pending request.
-    func respond(_ response: FakeTransport.Response) {
-        let (request, c) = lock.withLock { pending.removeFirst() }
+    /// Answers the oldest pending request. Returns false (instead of crashing the test process) if none is pending,
+    /// e.g. after `join` closed the transport.
+    @discardableResult
+    func respond(_ response: FakeTransport.Response) -> Bool {
+        guard let (request, c) = lock.withLock({ pending.isEmpty ? nil : pending.removeFirst() }) else { return false }
         c.resume(returning: (response.body, HTTPURLResponse(url: request.url!, statusCode: response.status,
                                                             httpVersion: nil, headerFields: nil)!))
+        return true
     }
 }
 
