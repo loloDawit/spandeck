@@ -4,7 +4,7 @@ import Testing
 
 /// Drives the launch path against fakes (#12). These tests pin down *current* inherited behavior, including
 /// behavior the #3 audit flags as wrong; each such assertion names the remediation that will flip it.
-/// Nothing here touches the real Keychain, network, login items, home directory or standard defaults.
+/// Nothing here touches the real Keychain, network, login items, home directory or persistent preferences.
 @MainActor
 struct LaunchPathTests {
     private func refresh(_ ledger: Ledger) async -> (claude: UsageSummary, grok: UsageSummary) {
@@ -30,7 +30,7 @@ struct LaunchPathTests {
 
         // Login item registered without asking (#4, R1).
         #expect(login.registers == 1)
-        #expect(box.defaults.bool(forKey: "didRegisterLoginItem"))
+        #expect(box.preferences.bool(forKey: "didRegisterLoginItem"))
         // Keychain read and unofficial endpoint with no opt-in (#4, R2).
         #expect(creds.reads == 1)
         #expect(transport.hosts.sorted() == [Hosts.anthropic, Hosts.pricing])
@@ -67,11 +67,11 @@ struct LaunchPathTests {
     }
 
     // Acceptance 2: display toggles only hide gauges; collection continues (#4, R3 will flip this).
-    // R3 must read the toggles from `env.defaults` (`.standard` in `live`), not `Prefs`, or this test cannot flip.
+    // R3 must read the toggles from `env.preferences` (`UserDefaults.standard` in `live`), not `Prefs`, or this test cannot flip.
     @Test func displayTogglesDoNotGateCollection() async throws {
         let box = try Sandbox()
-        box.defaults.set(false, forKey: Prefs.showClaude)
-        box.defaults.set(false, forKey: Prefs.showGrok)
+        box.preferences.set(false, forKey: Prefs.showClaude)
+        box.preferences.set(false, forKey: Prefs.showGrok)
         try box.write(".grok/auth.json", #"{"default":{"key":"CANARY-GROK-KEY"}}"#)
         let transport = FakeTransport([Hosts.anthropic: [.claudeUsage],
                                        Hosts.grok: [.json(#"{"config":{"creditUsagePercent":10}}"#)]])
@@ -155,9 +155,12 @@ struct LaunchPathTests {
     }
 }
 
-/// Acceptance 6: real side-effecting APIs are reachable only from `AppEnvironment.live`, so tests built on
-/// `Sandbox` cannot touch the real Keychain, network, login items or home directory.
+/// Acceptance 6: real side-effecting APIs are reachable only from the live `AppEnvironment`, so tests built on
+/// `Sandbox` cannot touch the real Keychain, network, login items, preferences or home directory.
+/// Needles are assembled from fragments so this file contains none of them literally and needs no exemption.
 struct SeamBoundaryTests {
+    private static func needle(_ parts: String...) -> String { parts.joined() }
+
     private static let sources = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Sources/Headroom")
@@ -169,21 +172,25 @@ struct SeamBoundaryTests {
     }
 
     @Test(arguments: [
-        ("SMAppService", ["Dependencies.swift"]),
-        ("URLSession", ["Dependencies.swift"]),
-        ("/usr/bin/security", ["Dependencies.swift"]),
-        ("runProcess(", ["Dependencies.swift", "Util.swift"]),
-        ("appSupportDir", ["Dependencies.swift", "Util.swift"]),
+        (needle("SMApp", "Service"), ["Dependencies.swift"]),
+        (needle("URL", "Session"), ["Dependencies.swift"]),
+        (needle("/usr/bin/", "security"), ["Dependencies.swift"]),
+        (needle("run", "Process("), ["Dependencies.swift", "Util.swift"]),
+        (needle("app", "SupportDir"), ["Dependencies.swift", "Util.swift"]),
         // Hover.swift: debug-only log behind the `debugHover` default; out of scope for #12.
-        ("homeDir", ["Dependencies.swift", "Util.swift", "Hover.swift"]),
+        (needle("home", "Dir"), ["Dependencies.swift", "Util.swift", "Hover.swift"]),
     ])
     func sideEffectsOnlyInLiveEnvironment(_ needle: String, _ allowed: [String]) throws {
         #expect(try files(in: Self.sources, mentioning: needle) == Set(allowed))
     }
 
-    @Test(arguments: ["AppEnvironment.live", "Pricing.shared", "homeDir", "appSupportDir", "SMAppService", "runProcess("])
+    @Test(arguments: [
+        needle("AppEnvironment", ".live"), needle("Pricing", ".shared"), needle("home", "Dir"), needle("app", "SupportDir"),
+        needle("SMApp", "Service"), needle("run", "Process("), needle("URL", "Session"), needle("UserDefaults", "("),
+    ])
     func testsNeverUseLiveDependencies(_ needle: String) throws {
-        let offenders = try files(in: Self.tests, mentioning: needle).subtracting(["LaunchPathTests.swift"])
-        #expect(offenders.isEmpty)
+        // Every test file is scanned, including this one. KeepAwakeTests' use of the standard defaults
+        // and real power assertions predates #12 and is not matched by these needles.
+        #expect(try files(in: Self.tests, mentioning: needle).isEmpty)
     }
 }

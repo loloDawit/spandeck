@@ -61,6 +61,13 @@ final class FakeCredentialStore: CredentialStore {
     }
 }
 
+/// In-memory preferences; never touches a real defaults domain.
+final class InMemoryPreferences: PreferenceStore {
+    private var values: [String: Bool] = [:]
+    func bool(forKey key: String) -> Bool { values[key] ?? false }
+    func set(_ value: Bool, forKey key: String) { values[key] = value }
+}
+
 final class FakeLoginItem: LoginItemService {
     private(set) var registers = 0
     private(set) var unregisters = 0
@@ -69,13 +76,12 @@ final class FakeLoginItem: LoginItemService {
     func unregister() throws { unregisters += 1; isEnabled = false }
 }
 
-/// A throwaway home, Application Support and defaults domain per test; removed on deinit.
+/// A throwaway home and Application Support under a temp directory (removed on deinit), plus in-memory preferences.
 final class Sandbox {
     let root: URL
     let home: URL
     let appSupport: URL
-    let defaults: UserDefaults
-    private let suite: String
+    let preferences = InMemoryPreferences()
 
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("spandeck-tests-\(UUID().uuidString)")
@@ -83,12 +89,9 @@ final class Sandbox {
         appSupport = root.appendingPathComponent("appsupport")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        suite = "spandeck-tests-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)!
     }
 
     deinit {
-        defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -96,7 +99,7 @@ final class Sandbox {
                      credentials: FakeCredentialStore = FakeCredentialStore(nil),
                      loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
         AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,
-                       credentials: credentials, loginItem: loginItem, defaults: defaults,
+                       credentials: credentials, loginItem: loginItem, preferences: preferences,
                        home: home, appSupport: appSupport)
     }
 

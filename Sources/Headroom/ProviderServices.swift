@@ -10,7 +10,7 @@ final class ProviderServices {
     private let claudeClient: ClaudeLimitsClient
     private let grokClient: GrokClient
     private let loginItem: LoginItemService
-    private let defaults: UserDefaults
+    private let preferences: PreferenceStore
     private var claudeBackoffUntil = Date.distantPast
 
     init(store: Store, env: AppEnvironment) {
@@ -20,7 +20,7 @@ final class ProviderServices {
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, transport: env.providerTransport, runner: env.processRunner)
         loginItem = env.loginItem
-        defaults = env.defaults
+        preferences = env.preferences
     }
 
     /// Loads prices (possibly starting a download, returned for tests) and registers the login item on first launch.
@@ -28,8 +28,8 @@ final class ProviderServices {
     func start() -> Task<Void, Never>? {
         let download = pricing.load()
         // Registered without asking on first launch; tracked in #4 (R1).
-        if !defaults.bool(forKey: "didRegisterLoginItem") {
-            defaults.set(true, forKey: "didRegisterLoginItem")
+        if !preferences.bool(forKey: "didRegisterLoginItem") {
+            preferences.set(true, forKey: "didRegisterLoginItem")
             try? loginItem.register()
         }
         return download

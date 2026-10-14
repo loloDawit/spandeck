@@ -56,6 +56,13 @@ struct MainAppLoginItem: LoginItemService {
     func unregister() throws { try SMAppService.mainApp.unregister() }
 }
 
+protocol PreferenceStore: AnyObject {
+    func bool(forKey key: String) -> Bool
+    func set(_ value: Bool, forKey key: String)
+}
+
+extension UserDefaults: PreferenceStore {}
+
 // MARK: - Environment
 
 struct AppEnvironment {
@@ -66,7 +73,7 @@ struct AppEnvironment {
     var processRunner: ProcessRunner
     var credentials: CredentialStore
     var loginItem: LoginItemService
-    var defaults: UserDefaults
+    var preferences: PreferenceStore
     var home: URL
     var appSupport: URL
 
@@ -84,7 +91,7 @@ struct AppEnvironment {
             processRunner: runner,
             credentials: KeychainCredentialStore(runner: runner),
             loginItem: MainAppLoginItem(),
-            defaults: .standard,
+            preferences: UserDefaults.standard,
             home: homeDir,
             appSupport: appSupportDir)
     }

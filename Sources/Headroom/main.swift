@@ -4,7 +4,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store = Store()
     private let sampler = SystemSampler()
-    private let env = AppEnvironment.live
+    /// Lazy so the live environment (and its Application Support mkdir) is built during launch, as before.
+    private lazy var env = AppEnvironment.live
     private lazy var services = ProviderServices(store: store, env: env)
     private var ledger: Ledger { services.ledger }
     private let keepAwake = KeepAwake()
