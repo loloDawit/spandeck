@@ -246,6 +246,27 @@ struct PricingTests {
         #expect(abs(try #require(rig.pricing.cost(model: "claude-synth-1", Agg(input: 100))) - 2e-4) < 1e-15)
     }
 
+    /// The verified file is saved but its date can't be set: still a success, in memory and after relaunch, so the
+    /// app never reports a failure for prices that will load next time.
+    @Test func dateFailureAfterSaveIsStillSuccess() async throws {
+        struct DateFailed: Error {}
+        let data = Self.upstream()
+        let box = try Sandbox()
+        let pricing = Pricing(directory: box.appSupport, transport: FakeTransport([Hosts.pricing: [.init(status: 200, body: data)]]),
+                              pin: Self.pin(for: data), bundle: Self.bundle(),
+                              now: { Date(timeIntervalSince1970: 1_800_000_000) }, setDate: { _, _ in throw DateFailed() })
+        pricing.load()
+
+        let info = try await pricing.update().get()
+
+        #expect(info.source == .downloaded && pricing.info == info)
+        #expect(abs(try #require(pricing.cost(model: "claude-synth-1", Agg(input: 100))) - 2e-4) < 1e-15)
+        let saved = box.appSupport.appendingPathComponent("pricing-source.json")
+        #expect(try Data(contentsOf: saved) == data)
+        let relaunch = Pricing(directory: box.appSupport, transport: FakeTransport(), pin: Self.pin(for: data), bundle: Self.bundle())
+        #expect(relaunch.load().source == .downloaded)
+    }
+
     // MARK: Effect on usage
 
     /// New prices change cost estimates already shown, without new transcript data or a re-read.

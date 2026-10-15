@@ -157,14 +157,20 @@ final class Pricing: @unchecked Sendable {
     private let pin: PricingPin
     private let bundle: PricingBundle
     private let now: @Sendable () -> Date
+    /// Sets the saved file's date (display only). Injectable so tests can make it fail.
+    private let setDate: @Sendable (Date, URL) throws -> Void
 
     init(directory: URL, transport: HTTPTransport, pin: PricingPin = PricingSnapshot.pin,
-         bundle: PricingBundle = PricingSnapshot.bundled, now: @escaping @Sendable () -> Date = { Date() }) {
+         bundle: PricingBundle = PricingSnapshot.bundled, now: @escaping @Sendable () -> Date = { Date() },
+         setDate: @escaping @Sendable (Date, URL) throws -> Void = { date, url in
+             try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+         }) {
         self.file = directory.appendingPathComponent("pricing-source.json")
         self.transport = transport
         self.pin = pin
         self.bundle = bundle
         self.now = now
+        self.setDate = setDate
     }
 
     var info: PricingInfo { lock.withLock { _info } }
@@ -213,11 +219,12 @@ final class Pricing: @unchecked Sendable {
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: file, options: .atomic)
-            // The retrieval time shown is the file's date; it isn't trusted for anything.
-            try FileManager.default.setAttributes([.modificationDate: time], ofItemAtPath: file.path)
         } catch {
             return .failure(.writeFailed)
         }
+        // Best effort: the date is only shown, never part of the integrity check. Once the verified file is saved the
+        // update has succeeded, so a failure here must not report one (it would load on the next launch anyway).
+        try? setDate(time, file)
         let retrieved = ISO8601DateFormatter().string(from: time)
         return .success(install(t, PricingInfo(source: .downloaded, revision: pin.revision, retrieved: retrieved)))
     }
