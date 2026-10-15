@@ -79,7 +79,7 @@ enum SnapshotRenderer {
         do {
             try SnapshotOutput.write(images, in: folder)
         } catch {
-            log("--snapshot: couldn't write to \(folder.path): \(error). Nothing was written.")
+            log("--snapshot: " + SnapshotOutput.describe(error, folder: folder))
             return 73
         }
         log("--snapshot: wrote \(images.map(\.name).joined(separator: ", ")) (synthetic data) to \(folder.path)")
@@ -209,9 +209,18 @@ enum SnapshotFixture {
     }
 }
 
-/// The output folder must already exist as a real folder (not a symlink), and is never created or chmodded. Images
-/// go to temporary files first (O_EXCL, O_NOFOLLOW) and are renamed into place only once all were written, so a
-/// failure leaves nothing behind and a symlink at a file name is replaced, never followed.
+/// Why writing the images failed, and whether the folder was left as it was.
+enum SnapshotWriteError: Error, Equatable {
+    /// Every earlier output was restored; the folder is as it was.
+    case unchanged(Int32)
+    /// Restoring failed too: some outputs may have been replaced or removed.
+    case partial(Int32)
+}
+
+/// The output folder must already exist as a real folder (not a symlink), and is never created or chmodded. Writing is
+/// all or nothing: images go to temporary files (O_EXCL, O_NOFOLLOW); then any existing outputs are moved aside, the
+/// new ones renamed into place, and the old ones deleted only once every rename worked. On a failure the new files are
+/// removed and the old ones moved back. A symlink at a file name is moved aside like a file, never followed.
 enum SnapshotOutput {
     static func check(_ folder: URL) -> String? {
         var st = stat()
@@ -221,14 +230,39 @@ enum SnapshotOutput {
         return nil
     }
 
-    static func write(_ files: [(name: String, data: Data)], in folder: URL) throws {
+    static func describe(_ error: Error, folder: URL) -> String {
+        switch error as? SnapshotWriteError {
+        case .partial(let code)?:
+            return "couldn't finish writing to \(folder.path) (\(String(cString: strerror(code)))), and couldn't restore "
+                + "it either: some images there may have been replaced or removed."
+        case .unchanged(let code)?:
+            return "couldn't write to \(folder.path) (\(String(cString: strerror(code)))). Nothing was written."
+        case nil:
+            return "couldn't write to \(folder.path): \(error). Nothing was written."
+        }
+    }
+
+    /// `move` is rename(2); a test seam for a failure part way through.
+    static func write(_ files: [(name: String, data: Data)], in folder: URL,
+                      move: (String, String) -> Int32 = { rename($0, $1) }) throws {
         var temps: [(temp: String, final: String)] = []
-        var done = false
-        defer { if !done { temps.forEach { unlink($0.temp) } } }
+        var asides: [(aside: String, final: String)] = []
+        var committed: [String] = []
+
+        /// Undoes everything so far; false if something couldn't be undone.
+        func rollBack() -> Bool {
+            var restored = true
+            for final in committed where unlink(final) != 0 { restored = false }
+            for a in asides.reversed() where move(a.aside, a.final) != 0 { restored = false }
+            for t in temps { unlink(t.temp) } // already gone once committed
+            return restored
+        }
+        func fail(_ code: Int32) -> SnapshotWriteError { rollBack() ? .unchanged(code) : .partial(code) }
+
         for file in files {
             let temp = folder.appendingPathComponent(".\(file.name).tmp-\(UUID().uuidString)").path
             let fd = open(temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
-            guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            guard fd >= 0 else { throw fail(errno) }
             temps.append((temp, folder.appendingPathComponent(file.name).path))
             let ok = file.data.withUnsafeBytes { buf -> Bool in
                 var offset = 0
@@ -241,12 +275,20 @@ enum SnapshotOutput {
             }
             let code = errno
             close(fd)
-            guard ok else { throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+            guard ok else { throw fail(code) }
         }
         for t in temps {
-            guard rename(t.temp, t.final) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            var st = stat()
+            guard lstat(t.final, &st) == 0 else { continue }
+            let aside = folder.appendingPathComponent(".\(URL(fileURLWithPath: t.final).lastPathComponent).old-\(UUID().uuidString)").path
+            guard move(t.final, aside) == 0 else { throw fail(errno) }
+            asides.append((aside, t.final))
         }
-        done = true
+        for t in temps {
+            guard move(t.temp, t.final) == 0 else { throw fail(errno) }
+            committed.append(t.final)
+        }
+        for a in asides { unlink(a.aside) }
     }
 }
 #endif

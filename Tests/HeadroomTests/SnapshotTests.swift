@@ -157,4 +157,77 @@ struct SnapshotTests {
         #expect(throws: (any Error).self) { try SnapshotOutput.write(files, in: out) }
         #expect(try Self.files(out).isEmpty)
     }
+
+    // MARK: All or nothing (review of #39)
+
+    private static func write(_ folder: URL, _ name: String, _ text: String) throws {
+        try Data(text.utf8).write(to: folder.appendingPathComponent(name))
+    }
+    private static func read(_ folder: URL, _ name: String) throws -> String {
+        try String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8)
+    }
+    private static func setImmutable(_ url: URL, _ on: Bool) throws {
+        try FileManager.default.setAttributes([.immutable: on], ofItemAtPath: url.path)
+    }
+
+    /// An immutable second output: the first, already in place, is restored and nothing else changes.
+    @Test func immutableOutputLeavesFolderUnchanged() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "strip-light.png", "old light")
+        try Self.write(out, "strip-dark.png", "old dark")
+        let dark = out.appendingPathComponent("strip-dark.png")
+        try Self.setImmutable(dark, true)
+        defer { try? Self.setImmutable(dark, false) }
+
+        let r = Self.run(["Headroom", "--snapshot", out.path])
+        #expect(r.code == 73 && r.log.first?.hasSuffix("Nothing was written.") == true, "\(r.log)")
+        #expect(try Self.read(out, "strip-light.png") == "old light" && Self.read(out, "strip-dark.png") == "old dark")
+        #expect(try Self.files(out) == ["strip-dark.png", "strip-light.png"]) // no popover, temp or set-aside file
+    }
+
+    /// A rename failing at the commit step, after two new images are in place (one replacing an old file, one new),
+    /// removes both and restores the old one.
+    @Test func commitFailureRestoresEverything() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "a.png", "old a")
+        var commits = 0
+        let failThirdCommit: (String, String) -> Int32 = { from, to in
+            if from.contains(".tmp-") {
+                commits += 1
+                if commits == 3 { errno = EPERM; return -1 }
+            }
+            return rename(from, to)
+        }
+        let files: [(name: String, data: Data)] = [("a.png", Data("new a".utf8)), ("b.png", Data("new b".utf8)),
+                                                   ("c.png", Data("new c".utf8))]
+        #expect(throws: SnapshotWriteError.unchanged(EPERM)) {
+            try SnapshotOutput.write(files, in: out, move: failThirdCommit)
+        }
+        #expect(try Self.files(out) == ["a.png"] && Self.read(out, "a.png") == "old a")
+
+        // Success replaces the old outputs and leaves no set-aside copies.
+        try SnapshotOutput.write(files, in: out)
+        #expect(try Self.files(out) == ["a.png", "b.png", "c.png"] && Self.read(out, "a.png") == "new a")
+    }
+
+    /// If the old file can't be put back either, the error says the folder may have changed.
+    @Test func failedRestoreReportedAsPartial() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "a.png", "old a")
+        let failCommitAndRestore: (String, String) -> Int32 = { from, to in
+            if from.contains(".tmp-") || from.contains(".old-") { errno = EPERM; return -1 }
+            return rename(from, to)
+        }
+        var caught: Error?
+        do { try SnapshotOutput.write([("a.png", Data("new a".utf8))], in: out, move: failCommitAndRestore) } catch { caught = error }
+        #expect(caught as? SnapshotWriteError == .partial(EPERM))
+        let text = SnapshotOutput.describe(try #require(caught), folder: out)
+        #expect(text.contains("may have been replaced or removed") && !text.contains("Nothing was written"))
+    }
 }
