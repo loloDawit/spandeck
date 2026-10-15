@@ -405,6 +405,9 @@ final class Ledger {
     /// Version 4 (R8): `files` and `seen` are keyed by opaque ids. Version 3 keyed them by raw paths and ids.
     private struct State: Codable {
         var version = 4
+        /// An opaque id of a fixed input under the key the ids were made with, so a cache is only loaded with that key
+        /// (a restored old cache next to a newer key would otherwise re-read and double count everything).
+        var keyCheck = ""
         var files: [String: FileMark] = [:]
         var seen: [String: Seen] = [:]
         var hours: [Int: [String: Agg]] = [:]
@@ -471,6 +474,7 @@ final class Ledger {
     }
 
     private func fileID(_ path: String) -> String { opaqueID("file", path) }
+    private var keyCheck: String { opaqueID("key-check") }
     private func messageID(_ id: String, _ request: String) -> String { opaqueID("message", id, request) }
 
     private var claudeRoots: [URL] {
@@ -826,7 +830,8 @@ final class Ledger {
     // MARK: Cache
 
     /// Loads the key, then the cache (R8). Anything else at the cache path is deleted at once and the transcripts are
-    /// re-indexed: a version 3 cache (raw paths and ids), a corrupt file, a cache whose key is gone, or a symlink.
+    /// re-indexed: a version 3 cache (raw paths and ids), a corrupt file, a cache whose key is gone or different, or a
+    /// symlink.
     /// If the folder can't be made owner-only nothing is read, and usage is kept in memory with a fresh key.
     private func loadCache() {
         key = SymmetricKey(size: .bits256)
@@ -846,7 +851,8 @@ final class Ledger {
         let data: Data?
         do { data = try storage.read(Self.cacheName) } catch { data = Data() } // unreadable: discard
         guard let data else { return }
-        if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version {
+        if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version,
+           s.keyCheck == keyCheck {
             state = s
             return
         }
@@ -858,6 +864,7 @@ final class Ledger {
     /// Writes the key (once) and then the cache, both owner-only. On failure nothing is written elsewhere; the issue
     /// is reported and the save retried later.
     private func saveCache() {
+        state.keyCheck = keyCheck
         guard let data = try? JSONEncoder().encode(state) else { return }
         lastSave = Date()
         do {

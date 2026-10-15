@@ -257,8 +257,8 @@ struct LedgerCacheTests {
         let file = try rig.transcript([Self.line(id: "msg_\(Self.messageCanary)", req: "req_\(Self.requestCanary)")])
         let hour = Int(Date().timeIntervalSince1970 / 3600)
         let v3 = #"{"version":3,"files":{"\#(file.path)":{"offset":5}},"seen":{"msg_\#(Self.messageCanary):req_\#(Self.requestCanary)":"#
-            + #"{"hour":\#(hour),"parts":{"claude-test-1":{"input":999,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}},"#
-            + #""hours":{"\#(hour)":{"claude-test-1":{"input":999,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}}"#
+            + #"{"hour":\#(hour),"parts":{"claude-test-1":{"input":987654321,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}},"#
+            + #""hours":{"\#(hour)":{"claude-test-1":{"input":987654321,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}}"#
         try Data(v3.utf8).write(to: rig.cacheURL)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: rig.cacheURL.path)
         let transcripts = try rig.box.snapshot(".claude")
@@ -267,7 +267,7 @@ struct LedgerCacheTests {
         #expect(await Self.tokens(ledger) == 150) // re-indexed; nothing from the old cache
         #expect(ledger.cacheIssue == nil)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
-        #expect(!cache.contains(Self.messageCanary) && !cache.contains(Self.userCanary) && !cache.contains("999"))
+        #expect(!cache.contains(Self.messageCanary) && !cache.contains(Self.userCanary) && !cache.contains("987654321"))
         #expect(try rig.cacheJSON()["version"] as? Int == 4 && Self.mode(rig.cacheURL) == 0o600)
         #expect(try rig.box.snapshot(".claude") == transcripts) // transcripts untouched
     }
@@ -299,6 +299,38 @@ struct LedgerCacheTests {
         try Data("{not json".utf8).write(to: rig.cacheURL)
         #expect(await Self.tokens(rig.ledger()) == 150)
         #expect(try rig.cacheJSON()["version"] as? Int == 4)
+    }
+
+    /// A cache next to a different key (e.g. an old cache restored after a clear made a new key) is rebuilt, not
+    /// loaded: its ids would all miss and every transcript would be counted again on top of its totals.
+    @Test func cacheWithOtherKeyRebuilt() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let first = rig.ledger()
+        #expect(await Self.tokens(first) == 150)
+        try Data(repeating: 7, count: 32).write(to: rig.keyURL)
+
+        #expect(await Self.tokens(rig.ledger()) == 150)
+        #expect(await Self.tokens(rig.ledger()) == 150) // the rebuilt cache loads with the file's key
+        #expect(try Data(contentsOf: rig.keyURL) == Data(repeating: 7, count: 32))
+    }
+
+    /// An old cache that can't be deleted is reported; usage is still counted from the transcripts.
+    @Test func undeletableLegacyCacheReported() async throws {
+        let rig = try Rig()
+        try Data(#"{"version":3,"files":{},"seen":{},"hours":{}}"#.utf8).write(to: rig.cacheURL)
+        try Self.setImmutable(rig.cacheURL, true)
+        defer { try? Self.setImmutable(rig.cacheURL, false) }
+
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 0) // nothing to save yet, so the load's report stands
+        #expect(ledger.cacheIssue == .legacyNotRemoved(.io(EPERM)))
+        #expect(FileManager.default.fileExists(atPath: rig.cacheURL.path))
+
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        #expect(await Self.tokens(ledger) == 150)
+        ledger.flush()
+        #expect(ledger.cacheIssue == .notSaved(.io(EPERM))) // the new cache can't replace it either
     }
 
     // MARK: Clearing
@@ -400,6 +432,22 @@ struct LedgerCacheTests {
         #expect(services.store.claudeUsage?.month.tokens == 150)
     }
 
+    /// If only the key can't be deleted, the clear still drops usage but says the key remained.
+    @Test func undeletableKeyReported() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let services = ProviderServices(store: Store(), env: rig.box.environment(transport: FakeTransport()))
+        await services.refreshUsage(windowStart: nil)
+        try Self.setImmutable(rig.keyURL, true)
+        defer { try? Self.setImmutable(rig.keyURL, false) }
+
+        await services.clearUsageCache()
+        #expect(services.store.usageCacheResult == LedgerClearFailure.key(.io(EPERM)).text)
+        #expect(services.store.usageCacheResult != UsageCacheText.cleared)
+        #expect(services.store.claudeUsage == nil)
+        #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+    }
+
     /// Test 22: clearing and rebuilding touch no Keychain, network, CLI or login item.
     @Test func clearHasNoOtherSideEffects() async throws {
         let rig = try Rig()
@@ -432,6 +480,11 @@ struct LedgerCacheTests {
         #expect(before.coverage == .partial && before.knownTokens == 150 && before.unknownTokens == 150)
         #expect(await Self.clear(ledger) == nil)
         #expect(await refreshLedger(ledger).claude.month.cost == before)
+    }
+
+    /// The user immutable flag (chflags uchg): unlink and rename onto the file fail with EPERM in a folder we own.
+    private static func setImmutable(_ url: URL, _ on: Bool) throws {
+        try FileManager.default.setAttributes([.immutable: on], ofItemAtPath: url.path)
     }
 
     private static func files(under root: URL) throws -> [String] {

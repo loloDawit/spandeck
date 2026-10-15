@@ -25,6 +25,7 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 | `seen` | opaque message id → hour + token counts per model | Count a streamed message once as it grows, and a message repeated in a resumed session once |
 | `hours` | hour → model → token counts | Totals, windows and cost estimates |
 | `version` | `4` | A different version is never loaded |
+| `keyCheck` | opaque id of a fixed input under the key | The cache is loaded only with the key it was written under. Otherwise, for example with an old cache restored from a backup after a clear made a new key, every id would miss and everything would be counted twice; such a cache is deleted and rebuilt |
 
 **Not stored:**
 - transcript paths, project folder names or your user name;
@@ -54,7 +55,7 @@ What it doesn't protect against:
 ## Upgrading from a version 3 cache
 Version 3 stored raw paths and ids, and SpanDeck doesn't try to convert them. When it finds a version 3 cache, it deletes it before reading anything else and re-indexes the transcripts still on disk. That's a one-time full read, after which totals and deduplication are the same as before. The same happens to:
 - a corrupt cache;
-- a cache whose key is missing;
+- a cache whose key is missing or different;
 - a symlink at the cache path (the link is removed, never its target);
 - leftover temporary files.
 
