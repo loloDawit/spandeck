@@ -36,7 +36,8 @@ struct PricingTests {
         init(transport: HTTPTransport = FakeTransport(), pin: PricingPin, bundle: PricingBundle = PricingTests.bundle()) throws {
             box = try Sandbox()
             self.transport = transport
-            pricing = Pricing(directory: box.appSupport, transport: transport, pin: pin, bundle: bundle)
+            pricing = Pricing(directory: box.appSupport, transport: transport, pin: pin, bundle: bundle,
+                              now: { Date(timeIntervalSince1970: 1_800_000_000) })
         }
         var installed: URL { box.appSupport.appendingPathComponent("pricing-snapshot.json") }
         func files() throws -> [String] { try FileManager.default.contentsOfDirectory(atPath: box.appSupport.path).sorted() }
@@ -106,6 +107,9 @@ struct PricingTests {
     }
 
     // MARK: Explicit download
+    //
+    // `FakeTransport` answers at once, so awaiting `update()` directly can't hang. Tests on `DeferredTransport` wait
+    // only through bounded helpers (`awaitRequests`, `join`).
 
     @Test func downloadFetchesOnlyThePinnedRevision() async throws {
         let data = Self.upstream()
@@ -115,7 +119,7 @@ struct PricingTests {
         rig.pricing.load()
         let before = rig.pricing.generation
 
-        let result = await rig.pricing.update(now: Date(timeIntervalSince1970: 1_800_000_000))
+        let result = await rig.pricing.update()
 
         let info = try result.get()
         #expect(info.source == .downloaded && info.revision == Self.revisionB && info.retrieved == "2027-01-15T08:00:00Z")
@@ -162,7 +166,10 @@ struct PricingTests {
                       #"{"claude-x":{"input_cost_per_token":-1,"output_cost_per_token":1e-6}}"#,
                       #"{"claude-x":{"input_cost_per_token":false,"output_cost_per_token":1e-6}}"#,
                       #"{"claude-x":{"input_cost_per_token":"1e-6","output_cost_per_token":1e-6}}"#,
-                      #"{"claude-x":{"input_cost_per_token":0.5,"output_cost_per_token":1e-6}}"#])
+                      #"{"claude-x":{"input_cost_per_token":0.5,"output_cost_per_token":1e-6}}"#,
+                      // Input and output fine; only a cache price is out of range.
+                      #"{"claude-x":{"input_cost_per_token":1e-6,"output_cost_per_token":1e-6,"cache_read_input_token_cost":-1}}"#,
+                      #"{"claude-x":{"input_cost_per_token":1e-6,"output_cost_per_token":1e-6,"cache_creation_input_token_cost_above_1hr":0.01}}"#])
     func pinnedButInvalidIsRejected(_ body: String) async throws {
         let data = Data(body.utf8)
         let rig = try Rig(transport: FakeTransport([Hosts.pricing: [.init(status: 200, body: data)]]), pin: Self.pin(for: data))
