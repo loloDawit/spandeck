@@ -11,7 +11,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 | Order | Item | Milestone | Status | Notes |
 |---|---|---|---|---|
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
-| Next 1 | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | In progress, #36 | Small and independent. |
+| Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
 | Next 2 | R11: SHA-pin actions, least `permissions`, signing / notarization plan | M0 | Pending, #37 | Workflow and doc change only. Validate with local lint; don't run hosted CI without the owner's approval. |
 | Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Open | Last unmet acceptance item of #3. Needs a supported Mac and a dedicated account. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
@@ -30,13 +30,13 @@ From the security inventory in #3 ([`audits/0003-security-inventory.md`](audits/
 | R5 | Grok failures shown, not hidden as "not configured" | #21 → #22 | M1 | Merged [mocked] |
 | R6 | Built-in pinned, verified pricing snapshot; no request at launch | #27 → #28 | M1 | Merged [mocked] |
 | R7 | Unknown price is not $0; totals carry coverage | #30 → #31 | M0 | Merged [mocked]; rendered UI unverified |
-| R8 | Cache: opaque ids, `0600`/`0700`, migration, clear action | #33 | M1 | **Done** (#34) |
+| R8 | Cache: opaque ids, `0600`/`0700`, migration, clear action | #33 → #34 | M1 | Merged [mocked] |
 | R9 | Honest User-Agent; back off after HTTP 401 | #24 → #25 | M1 | Merged [mocked] |
-| R10 | `--snapshot` limited to debug builds or synthetic data | #36 | M1 | **In progress** |
-| R11 | CI / release hardening | to be created | M0 | **Pending** |
+| R10 | `--snapshot` limited to debug builds or synthetic data | #36 → #39 | M1 | Merged [mocked]; binaries not run |
+| R11 | CI / release hardening | #37 | M0 | **Pending** |
 | R12 | Injectable dependencies and mocked launch tests | #12 → #14 | M0 | Merged |
 
-Done: 11 of 12 remediations (R1–R9, R12). Pending: R10 (#36), R11 (#37).
+Done: 11 of 12 remediations (R1–R10, R12). Pending: R11 (#37).
 
 ## M0 — Security and accounting baseline (in progress)
 
@@ -61,12 +61,12 @@ The remediation series landed here because the #3 audit found these changes safe
 - [x] Explicit permission model; no credential extraction on default startup. *R1, R2, R4 (#15, #17); collection follows the menu-bar toggles (R3, #19); honest identity and 401 backoff (R9, #24) [mocked].*
 - [ ] Opt-in login-item registration and reversible integration installation. *Login item opt-in done (#15). Integration lifecycle spec is part of #4; no integrations exist yet.*
 - [ ] Storage / retention policy, data classification and migration / versioning. *R8 merged (#34): cache schema v4, retention and migration documented in `USAGE_CACHE.md`; the rest of #5 is open.*
-- [ ] No data written outside SpanDeck's own storage without consent. *R10 pending.*
+- [ ] No data written outside SpanDeck's own storage without consent. *R10 merged (#39): `--snapshot` is refused in release builds and writes only synthetic images in debug builds; not verified at OS level.*
 - [ ] Extract adapters and reconciliation behind testable interfaces without changing working UI behavior. *Test seams exist (R12); extraction waits on the #9 ADR.*
 - [ ] Document unsupported or unauthorized quota sources. *Partly in the #3 audit; capability matrix in #4, #10.*
 - [x] No network request at default launch. *R6 (#27) [mocked].*
 
-**Exit:** the default experience has no unauthorized collection, secrets access, or persistent settings mutations. *Status: met in source and mocked tests for credentials, quota requests, login item and launch egress; R10 remains (R8 merged in #34), and nothing is confirmed at OS level yet.*
+**Exit:** the default experience has no unauthorized collection, secrets access, or persistent settings mutations. *Status: met in source and mocked tests for credentials, quota requests, login item and launch egress; R8 and R10 merged (#34, #39), and nothing is confirmed at OS level yet.*
 
 ## M2 — Claude observability (not started)
 
@@ -107,7 +107,7 @@ Nothing should be published as a SpanDeck release until these are cleared:
 
 1. **No OS-level evidence.** Every safety claim so far is [mocked] or code-level (#3, audit §7 Phase 2).
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
-3. **`--snapshot` can write real usage data to any path** until R10 merges (#36; in review).
+3. ~~**`--snapshot` can write real usage data to any path** until R10 merges (#36).~~ Resolved in source by R10 (#39); not verified by running a release binary.
 4. **No CI run and no signing or notarization.** Hosted CI is unavailable for budget reasons; R11 and #11 are open.
 5. **No accounting regression fixtures or performance baseline** (#6, #8), so M0 cannot exit.
 
@@ -122,7 +122,7 @@ Nothing should be published as a SpanDeck release until these are cleared:
 #4 (consent / integration lifecycle) ─► M1 reversible integrations, M2 telemetry adapters
 #8 (performance) ─► M4 regression budget
 #11 + R11 ─► M4 signed release
-R10 ─► M1 exit (R8 done, #34)
+M1 exit (R8 done #34, R10 done #39)
 ```
 
 ## Working agreements
