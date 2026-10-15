@@ -2,7 +2,7 @@
 """Regenerates Sources/Headroom/PricingSnapshot.swift from one pinned LiteLLM commit (R6).
 
 Usage:
-    scripts/update-pricing-snapshot.py COMMIT_SHA SOURCE_SHA256 [--file PATH] [--retrieved YYYY-MM-DDTHH:MM:SSZ]
+    scripts/update-pricing-snapshot.py COMMIT_SHA SOURCE_SHA256 --retrieved YYYY-MM-DDTHH:MM:SSZ [--file PATH] [--out PATH]
 
 1. Gets model_prices_and_context_window.json at exactly COMMIT_SHA (never a branch), or reads PATH if given.
 2. Refuses to continue unless the file's SHA-256 equals SOURCE_SHA256. Review the upstream diff first and take the
@@ -10,6 +10,10 @@ Usage:
 3. Extracts the Claude entries with the same rules as `Pricing.extract` in Ledger.swift, validates them and writes a
    deterministic Swift file (sorted keys, fixed formatting) with the source URL, commit, checksums, retrieval time and
    the LiteLLM MIT notice.
+
+The output depends only on the arguments and the file's bytes: the same invocation always produces the same Swift
+file. `--retrieved` is therefore required (record when you fetched the file you reviewed) instead of defaulting to
+the current time. `scripts/test_update_pricing_snapshot.py` checks this.
 
 The output is reviewed and committed like code. The app never fetches a newer revision on its own.
 """
@@ -19,7 +23,7 @@ import json
 import math
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 REPO = "BerriAI/litellm"
@@ -90,8 +94,13 @@ def main():
     ap.add_argument("commit")
     ap.add_argument("sha256")
     ap.add_argument("--file")
-    ap.add_argument("--retrieved", default=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    ap.add_argument("--retrieved", required=True, help="UTC time the reviewed file was fetched, e.g. 2026-10-15T02:39:52Z")
+    ap.add_argument("--out", default=str(OUT))
     a = ap.parse_args()
+    try:
+        datetime.strptime(a.retrieved, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        sys.exit("--retrieved must be UTC like 2026-10-15T02:39:52Z")
     if len(a.commit) != 40 or any(c not in "0123456789abcdef" for c in a.commit):
         sys.exit("commit must be a full 40-character lowercase SHA, not a branch or tag")
     url = f"https://raw.githubusercontent.com/{REPO}/{a.commit}/{PATH}"
@@ -110,8 +119,9 @@ def main():
     for k, v in {"COMMIT": a.commit, "SOURCE_SHA": digest, "RETRIEVED": a.retrieved, "TABLE_SHA": table_sha,
                  "COUNT": str(len(table)), "REPO": REPO, "TABLE_JSON": table_json}.items():
         swift = swift.replace("@" + k + "@", v)
-    OUT.write_text(swift)
-    print(f"wrote {OUT.relative_to(OUT.parent.parent.parent)}: {len(table)} entries, source {digest}, table {table_sha}")
+    out = Path(a.out)
+    out.write_text(swift)
+    print(f"wrote {out}: {len(table)} entries, source {digest}, table {table_sha}")
 
 
 if __name__ == "__main__":
