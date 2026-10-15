@@ -33,14 +33,10 @@ enum StatusRenderer {
             add(.battery, battery(b))
         }
         if Prefs.bool(Prefs.showClaude), store.claudeAvailable {
-            let l = store.claudeLimits
-            add(.claude, gauges(symbol: "sparkle", fallback: "CC",
-                                   values: [l?.session?.percent, l?.weekly?.percent, l?.model?.percent]))
+            add(.claude, gauges(symbol: "sparkle", fallback: "CC", values: claudeGauge(store)))
         }
         if Prefs.bool(Prefs.showGrok), store.grokAvailable {
-            // A stale plan (kept through a temporary failure) is not drawn as current; the popover explains (#21).
-            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK",
-                              values: [store.grokFailure == nil ? store.grokPlan?.percent : nil]))
+            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK", values: grokGauge(store)))
         }
         if store.awake {
             add(.awake, icon("cup.and.saucer.fill", "AW"))
@@ -67,6 +63,18 @@ enum StatusRenderer {
         image.isTemplate = true
         lastSegments = segmentRanges(segments, kinds: kinds)
         return image
+    }
+
+    /// Claude's session, weekly and model percentages. Limits kept through a failure (a 401 pause, 429, 5xx) are not
+    /// drawn as current; the popover shows the error and when they were fetched (#25 review).
+    static func claudeGauge(_ store: Store) -> [Double?] {
+        guard store.claudeError == nil, let l = store.claudeLimits else { return [nil, nil, nil] }
+        return [l.session?.percent, l.weekly?.percent, l.model?.percent]
+    }
+
+    /// A stale plan (kept through a temporary failure) is not drawn as current; the popover explains (#21).
+    static func grokGauge(_ store: Store) -> [Double?] {
+        [store.grokFailure == nil ? store.grokPlan?.percent : nil]
     }
 
     /// Horizontal extent of each item in the last rendered strip, for hover hit testing.

@@ -202,7 +202,9 @@ final class ProviderServices {
     }
 
     /// Fetches Grok credits if the user opted in and the gauge isn't hidden, unless paused after the key was still
-    /// rejected following recovery (R9). Hiding it mid-fetch stops the fetch at its next step, like withdrawing consent.
+    /// rejected following recovery (R9). Hiding it mid-fetch stops the fetch at its next step, like withdrawing consent;
+    /// so does a newer refresh starting. A pause is only set by the newest refresh, so no older one can read the key,
+    /// run `grok models` or send a request during it (#25 review).
     @MainActor func refreshGrok() async {
         guard grokCollecting else { return }
         if let pause = grokAuthPause, now() < pause.until {
@@ -217,13 +219,13 @@ final class ProviderServices {
         let refresh = grokRefreshesStarted
         let isCurrent = { @MainActor [weak self] () -> Bool in
             guard let self else { return false }
-            return self.grokCollecting && self.grokConsentGeneration == generation
+            return self.grokCollecting && self.grokConsentGeneration == generation && self.grokRefreshesStarted == refresh
         }
         let result: Result<GrokPlan, Error>
         do { result = .success(try await grokClient.fetch(stillAllowed: { await MainActor.run { isCurrent() } })) } catch { result = .failure(error) }
         // Drop the result if the user changed their choice while the request was in flight (even off and on again),
         // or if a newer refresh started meanwhile: that one publishes instead.
-        guard isCurrent(), refresh == grokRefreshesStarted else { return }
+        guard isCurrent() else { return }
         switch result {
         case .success(let plan):
             store.grokPlan = plan

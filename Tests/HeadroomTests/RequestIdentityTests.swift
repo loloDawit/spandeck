@@ -353,7 +353,8 @@ struct RequestIdentityTests {
         _ = await next.value
     }
 
-    /// Same for Grok: the older refresh's 401 runs its recovery, is rejected again, and must not pause.
+    /// Same for Grok: the older refresh's 401 arrives after a newer success. Superseded, it stops before its recovery
+    /// (no `grok models`, key re-read or retry) and doesn't pause.
     @Test func olderGrokRejectionCannotPauseAfterNewerSuccess() async throws {
         let transport = DeferredTransport()
         defer { transport.close() }
@@ -365,16 +366,77 @@ struct RequestIdentityTests {
         guard await transport.awaitRequests(2, from: second) else { Issue.record("second refresh never started a request"); return }
         #expect(transport.respond(.grokBilling, newest: true))
         #expect(await transport.join(second))
+        let reads = rig.auth.reads
         #expect(transport.respond(.unauthorized))
-        guard await transport.awaitRequests(3, from: first) else { Issue.record("no retry after recovery"); return }
-        #expect(transport.respond(.unauthorized))
-        #expect(await transport.join(first))
+        #expect(await transport.join(first), "the superseded refresh sent a retry")
+        #expect(transport.started == 2 && rig.runner.calls.isEmpty && rig.auth.reads == reads)
         #expect(rig.store.grokPlan?.percent == 10 && rig.store.grokFailure == nil)
 
         let next = Task { await rig.services.refreshGrok() }
-        #expect(await transport.awaitRequests(4, from: next), "the older rejection paused Grok")
+        #expect(await transport.awaitRequests(3, from: next), "the older rejection paused Grok")
         transport.close()
         _ = await next.value
+    }
+
+    /// #25 review: A is in flight; B starts later, is rejected after recovery and pauses Grok; then A's first 401
+    /// arrives. A must not re-read the key, run `grok models` or retry during the pause.
+    @Test func olderGrokRefreshCannotRetryDuringNewerPause() async throws {
+        let transport = DeferredTransport()
+        defer { transport.close() }
+        let rig = try Rig(transport: transport)
+
+        let a = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(1, from: a) else { Issue.record("A never started a request"); return }
+        let b = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(2, from: b) else { Issue.record("B never started a request"); return }
+        #expect(transport.respond(.unauthorized, newest: true)) // B's first request
+        guard await transport.awaitRequests(3, from: b) else { Issue.record("B never retried after recovery"); return }
+        #expect(transport.respond(.unauthorized, newest: true)) // B's retry: rejected, paused
+        #expect(await transport.join(b))
+        #expect(rig.store.grokFailure == .authRejected(.succeeded) && rig.runner.calls.count == 1)
+        let reads = rig.auth.reads
+
+        #expect(transport.respond(.unauthorized)) // A's first request, answered during B's pause
+        #expect(await transport.join(a), "A sent a retry during the pause")
+
+        #expect(transport.started == 3 && rig.auth.reads == reads && rig.runner.calls.count == 1)
+        #expect(rig.store.grokFailure == .authRejected(.succeeded))
+        await rig.services.refreshGrok() // still paused
+        #expect(transport.started == 3)
+    }
+
+    // MARK: Menu-bar gauge
+
+    /// #25 review: limits kept through a 401 pause aren't drawn as current in the menu bar; the popover keeps them
+    /// with the error and their fetch time.
+    @Test func claudeGaugeBlankWhilePaused() async throws {
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage, .unauthorized, .claudeUsage]])
+        let rig = try Rig(transport: transport)
+
+        await rig.services.refreshClaude()
+        #expect(StatusRenderer.claudeGauge(rig.store) == [42, nil, nil])
+
+        await rig.services.refreshClaude()
+        #expect(rig.store.claudeError?.contains("HTTP 401") == true && rig.store.claudeLimits?.session?.percent == 42)
+        #expect(StatusRenderer.claudeGauge(rig.store) == [nil, nil, nil])
+
+        rig.clock.advance(ProviderServices.claudeAuthPause - 1)
+        await rig.services.refreshClaude()
+        #expect(StatusRenderer.claudeGauge(rig.store) == [nil, nil, nil] && transport.requests.count == 2)
+
+        rig.clock.advance(1)
+        await rig.services.refreshClaude()
+        #expect(rig.store.claudeError == nil && StatusRenderer.claudeGauge(rig.store) == [42, nil, nil])
+    }
+
+    @Test(arguments: [429, 500])
+    func claudeGaugeBlankOnOtherErrors(_ status: Int) async throws {
+        let transport = FakeTransport([Hosts.anthropic: [.claudeUsage, .json("{}", status: status)]])
+        let rig = try Rig(transport: transport)
+        await rig.services.refreshClaude()
+        await rig.services.refreshClaude(force: true)
+
+        #expect(rig.store.claudeLimits != nil && StatusRenderer.claudeGauge(rig.store) == [nil, nil, nil])
     }
 
     // MARK: Isolation and local usage
