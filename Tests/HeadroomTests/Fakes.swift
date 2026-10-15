@@ -289,8 +289,11 @@ final class Sandbox {
     }
 
     /// Path → contents of every file under `~/.grok`, to prove nothing was changed or removed.
-    func grokFiles() throws -> [String: Data] {
-        let root = home.appendingPathComponent(".grok")
+    func grokFiles() throws -> [String: Data] { try snapshot(".grok") }
+
+    /// Path → contents of every file under a folder of the sandbox home.
+    func snapshot(_ relative: String) throws -> [String: Data] {
+        let root = home.appendingPathComponent(relative)
         guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [:] }
         var out: [String: Data] = [:]
         for case let url as URL in en where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {

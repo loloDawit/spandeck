@@ -1,0 +1,441 @@
+import Foundation
+import Testing
+@testable import Headroom
+
+/// R8: the usage cache keeps no transcript paths, message or request ids, or content; it is owner-only; a version 3
+/// cache is deleted and re-indexed; and clearing it is safe while the app runs. Synthetic transcripts only, under a
+/// throwaway sandbox. Every Claude line is 100 input + 50 output tokens unless a test says otherwise.
+@MainActor
+struct LedgerCacheTests {
+    nonisolated static let userCanary = "CANARYUSER9q2w"
+    nonisolated static let projectCanary = "CANARYPROJ4e5r"
+    nonisolated static let messageCanary = "CANARYMSG7f3a"
+    nonisolated static let requestCanary = "CANARYREQ1b8c"
+    nonisolated static let promptCanary = "CANARY-PROMPT-6d0e"
+    nonisolated static let toolCanary = "CANARY-TOOL-ARG-3k7m"
+    nonisolated static let projectDir = ".claude/projects/-Users-\(userCanary)-\(projectCanary)"
+
+    /// One assistant line with explicit ids, token counts and content.
+    nonisolated static func line(id: String, req: String, output: Int = 50, model: String = "claude-test-1", date: Date = Date(),
+                     text: String = "x") -> String {
+        let ts = ISO8601DateFormatter().string(from: date)
+        return #"{"type":"assistant","timestamp":"\#(ts)","requestId":"\#(req)","message":{"id":"\#(id)","model":"\#(model)","#
+            + #""content":[{"type":"text","text":"\#(text)"},{"type":"tool_use","name":"Bash","input":{"command":"\#(toolCanary)"}}],"#
+            + #""usage":{"input_tokens":100,"output_tokens":\#(output),"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#
+    }
+
+    private struct Rig {
+        let box: Sandbox
+        let pricing: Pricing
+        var storage: PrivateDirectory?
+
+        init(storage: ((URL) -> PrivateDirectory)? = nil) throws {
+            box = try Sandbox()
+            pricing = Pricing(directory: box.appSupport, transport: FakeTransport())
+            pricing.load()
+            self.storage = storage?(box.appSupport)
+        }
+
+        /// A new ledger over the same home and Application Support, as after a relaunch.
+        func ledger() -> Ledger { Ledger(home: box.home, appSupport: box.appSupport, pricing: pricing, storage: storage) }
+
+        var cacheURL: URL { box.appSupport.appendingPathComponent(Ledger.cacheName) }
+        var keyURL: URL { box.appSupport.appendingPathComponent(Ledger.keyName) }
+
+        func cacheJSON() throws -> [String: Any] {
+            try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as? [String: Any])
+        }
+
+        @discardableResult
+        func transcript(_ lines: [String], file: String = "s1.jsonl", newline: Bool = true) throws -> URL {
+            try box.write("\(LedgerCacheTests.projectDir)/\(file)", lines.joined(separator: "\n") + (newline ? "\n" : ""))
+        }
+    }
+
+    private static func mode(_ url: URL) throws -> Int {
+        try #require(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber).intValue & 0o777
+    }
+
+    private static func tokens(_ ledger: Ledger) async -> Int { await refreshLedger(ledger).claude.month.tokens }
+
+    private static func clear(_ ledger: Ledger) async -> LedgerClearFailure? {
+        await withCheckedContinuation { c in ledger.clearCache { c.resume(returning: $0) } }
+    }
+
+    // MARK: What is stored
+
+    /// Tests 1-4: no absolute path, user or project name, message or request id, prompt or tool content.
+    @Test func cacheHoldsNoPathsIdsOrContent() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_\(Self.messageCanary)", req: "req_\(Self.requestCanary)", text: Self.promptCanary)])
+        try rig.box.write("\(Self.projectDir)/s1/subagents/agent-1.jsonl",
+                          Self.line(id: "msg_sub", req: "req_sub", text: Self.promptCanary) + "\n")
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 300)
+
+        let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
+        let key = try Data(contentsOf: rig.keyURL)
+        for canary in [Self.userCanary, Self.projectCanary, Self.messageCanary, Self.requestCanary, Self.promptCanary,
+                       Self.toolCanary, rig.box.root.lastPathComponent, "s1.jsonl", "agent-1", "subagents", "msg_", "req_",
+                       ".claude", "Users"] {
+            #expect(!cache.contains(canary), "\(canary)")
+            #expect(!String(decoding: key, as: UTF8.self).contains(canary), "\(canary)")
+        }
+        #expect(!cache.contains("/") && !cache.contains("\\/")) // no path at all, escaped or not
+        let json = try rig.cacheJSON()
+        #expect(json["version"] as? Int == 4)
+        let ids = Array((json["files"] as? [String: Any] ?? [:]).keys) + Array((json["seen"] as? [String: Any] ?? [:]).keys)
+        #expect(ids.count == 4 && Set(ids).count == 4)
+        #expect(ids.allSatisfy { $0.count == 32 && $0.allSatisfy(\.isHexDigit) })
+        #expect(key.count == 32)
+    }
+
+    /// Tests 5-6: a relaunch reuses the same ids and offsets: nothing is read again and nothing is counted twice.
+    @Test func relaunchKeepsIdsAndOffsets() async throws {
+        let rig = try Rig()
+        let file = try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let first = rig.ledger()
+        #expect(await Self.tokens(first) == 150)
+        first.flush()
+        let before = try rig.cacheJSON()
+
+        // Same size, different message id: only a ledger that ignored the saved offset would count it.
+        try Data((Self.line(id: "msg_B", req: "req_A") + "\n").utf8).write(to: file)
+        let second = rig.ledger()
+        #expect(await Self.tokens(second) == 150)
+        second.flush()
+        let after = try rig.cacheJSON()
+        #expect(Set((before["files"] as? [String: Any] ?? [:]).keys) == Set((after["files"] as? [String: Any] ?? [:]).keys))
+        #expect(Set((before["seen"] as? [String: Any] ?? [:]).keys) == Set((after["seen"] as? [String: Any] ?? [:]).keys))
+
+        // New data after the relaunch is still counted once.
+        try rig.transcript([Self.line(id: "msg_B", req: "req_A"), Self.line(id: "msg_C", req: "req_C")])
+        #expect(await Self.tokens(second) == 300)
+    }
+
+    /// Test 7: different files and different messages keep different ids; the same message in two files counts once.
+    @Test func distinctInputsStayDistinct() async throws {
+        let rig = try Rig()
+        // The last two only differ in where the id ends and the request id starts.
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), Self.line(id: "msg_A", req: "req_B"),
+                            Self.line(id: "msg_AB", req: "req_X"), Self.line(id: "msg_ABreq_", req: "X")])
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")], file: "s2.jsonl") // a resumed session repeats it
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 4 * 150)
+        ledger.flush()
+        let json = try rig.cacheJSON()
+        #expect((json["files"] as? [String: Any])?.count == 2)
+        #expect((json["seen"] as? [String: Any])?.count == 4)
+    }
+
+    /// Test 8: a streamed message logged again with growing counts is counted once, also across a relaunch.
+    @Test func streamingGrowthCountedOnce() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_S", req: "req_S", output: 50), Self.line(id: "msg_S", req: "req_S", output: 80)])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 180)
+        ledger.flush()
+
+        try rig.transcript([Self.line(id: "msg_S", req: "req_S", output: 50), Self.line(id: "msg_S", req: "req_S", output: 80),
+                            Self.line(id: "msg_S", req: "req_S", output: 120)])
+        #expect(await Self.tokens(rig.ledger()) == 220)
+    }
+
+    /// Test 9: a partial last line waits for its newline; a rewritten, shorter file is re-read without double counting.
+    @Test func partialAndRewrittenFiles() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), Self.line(id: "msg_B", req: "req_B")], newline: false)
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), Self.line(id: "msg_B", req: "req_B")])
+        #expect(await Self.tokens(ledger) == 300)
+        ledger.flush()
+
+        // Rewritten shorter (e.g. compacted): earlier lines are skipped by their ids, a new one is counted.
+        try rig.transcript([Self.line(id: "msg_C", req: "req_C")])
+        let relaunched = rig.ledger()
+        #expect(await Self.tokens(relaunched) == 450)
+        try rig.transcript([Self.line(id: "msg_C", req: "req_C"), Self.line(id: "msg_A", req: "req_A")])
+        #expect(await Self.tokens(relaunched) == 450)
+    }
+
+    // MARK: Permissions
+
+    /// Tests 10-12: 0700 folder, 0600 cache and key, kept when a 0644 file is replaced; no temp file left.
+    @Test func ownerOnlyModes() async throws {
+        let rig = try Rig()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.box.appSupport.path)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let ledger = rig.ledger()
+        _ = await Self.tokens(ledger)
+        #expect(try Self.mode(rig.box.appSupport) == 0o700)
+        #expect(try Self.mode(rig.cacheURL) == 0o600 && Self.mode(rig.keyURL) == 0o600)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: rig.cacheURL.path)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), Self.line(id: "msg_B", req: "req_B")])
+        _ = await Self.tokens(ledger)
+        ledger.flush()
+        #expect(try Self.mode(rig.cacheURL) == 0o600)
+        let items = try FileManager.default.contentsOfDirectory(atPath: rig.box.appSupport.path)
+        #expect(!items.contains { $0.contains(".tmp-") })
+    }
+
+    /// Test 13: a permissive cache and key from an earlier run are tightened when loaded, before any save.
+    @Test func permissiveFilesTightenedOnLoad() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let ledger = rig.ledger()
+        _ = await Self.tokens(ledger)
+        for url in [rig.cacheURL, rig.keyURL, rig.box.appSupport] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        let relaunched = rig.ledger()
+        #expect(await Self.tokens(relaunched) == 150)
+        #expect(try Self.mode(rig.box.appSupport) == 0o700)
+        #expect(try Self.mode(rig.cacheURL) == 0o600 && Self.mode(rig.keyURL) == 0o600)
+    }
+
+    /// Test 14: if the folder can't be made owner-only, nothing is written (there or anywhere else) and it's reported.
+    @Test func failedTighteningWritesNothing() async throws {
+        let rig = try Rig(storage: { url in
+            var d = PrivateDirectory(url: url)
+            d.setMode = { _, _ in -1 }
+            return d
+        })
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rig.box.appSupport.path)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150) // usage still counted, in memory
+        ledger.flush()
+        #expect(ledger.cacheIssue == .notSaved(.permissions))
+        #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+        #expect(!FileManager.default.fileExists(atPath: rig.keyURL.path))
+        #expect(try Self.files(under: rig.box.root).allSatisfy { !$0.contains("claude-ledger") })
+        #expect(try Self.mode(rig.box.appSupport) == 0o755)
+    }
+
+    /// A symlinked cache folder is never written through, read or cleared.
+    @Test func symlinkedFolderRefused() async throws {
+        let rig = try Rig()
+        let elsewhere = rig.box.root.appendingPathComponent("elsewhere")
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data("unrelated".utf8).write(to: elsewhere.appendingPathComponent(Ledger.cacheName))
+        try FileManager.default.removeItem(at: rig.box.appSupport)
+        try FileManager.default.createSymbolicLink(at: rig.box.appSupport, withDestinationURL: elsewhere)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        ledger.flush()
+        #expect(ledger.cacheIssue == .notSaved(.unsafeLocation))
+        #expect(await Self.clear(ledger) == .cache(.unsafeLocation))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path) == [Ledger.cacheName])
+        #expect(try String(contentsOf: elsewhere.appendingPathComponent(Ledger.cacheName), encoding: .utf8) == "unrelated")
+    }
+
+    /// A symlink at the cache path is removed (the link, not its target) and never read.
+    @Test func symlinkedCacheFileRemovedNotFollowed() async throws {
+        let rig = try Rig()
+        let target = rig.box.root.appendingPathComponent("target.json")
+        try Data("keep me".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: rig.cacheURL, withDestinationURL: target)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        ledger.flush()
+        #expect(try String(contentsOf: target, encoding: .utf8) == "keep me")
+        #expect(try FileManager.default.attributesOfItem(atPath: rig.cacheURL.path)[.type] as? FileAttributeType == .typeRegular)
+        #expect(try Self.mode(rig.cacheURL) == 0o600) // a regular file now
+    }
+
+    // MARK: Migration
+
+    /// Tests 15-16: a version 3 cache (raw paths and ids) is deleted and the transcripts re-indexed into version 4,
+    /// with the same totals; its bytes don't survive.
+    @Test func legacyCacheReplaced() async throws {
+        let rig = try Rig()
+        let file = try rig.transcript([Self.line(id: "msg_\(Self.messageCanary)", req: "req_\(Self.requestCanary)")])
+        let hour = Int(Date().timeIntervalSince1970 / 3600)
+        let v3 = #"{"version":3,"files":{"\#(file.path)":{"offset":5}},"seen":{"msg_\#(Self.messageCanary):req_\#(Self.requestCanary)":"#
+            + #"{"hour":\#(hour),"parts":{"claude-test-1":{"input":999,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}},"#
+            + #""hours":{"\#(hour)":{"claude-test-1":{"input":999,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":1}}}}"#
+        try Data(v3.utf8).write(to: rig.cacheURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: rig.cacheURL.path)
+        let transcripts = try rig.box.snapshot(".claude")
+
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150) // re-indexed; nothing from the old cache
+        #expect(ledger.cacheIssue == nil)
+        let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
+        #expect(!cache.contains(Self.messageCanary) && !cache.contains(Self.userCanary) && !cache.contains("999"))
+        #expect(try rig.cacheJSON()["version"] as? Int == 4 && Self.mode(rig.cacheURL) == 0o600)
+        #expect(try rig.box.snapshot(".claude") == transcripts) // transcripts untouched
+    }
+
+    /// The old cache is deleted when found, even if the new one is never saved.
+    @Test func legacyCacheDeletedBeforeAnySave() async throws {
+        let rig = try Rig()
+        try Data(#"{"version":3,"files":{"/Users/\#(Self.userCanary)/x.jsonl":{"offset":1}},"seen":{},"hours":{}}"#.utf8)
+            .write(to: rig.cacheURL)
+        let ledger = rig.ledger() // no transcripts: nothing to save
+        #expect(await Self.tokens(ledger) == 0)
+        #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+    }
+
+    /// A corrupt cache, or a version 4 cache whose key is gone, is deleted and rebuilt; leftover temp files go too.
+    @Test func unusableCacheRebuilt() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let first = rig.ledger()
+        _ = await Self.tokens(first)
+        try FileManager.default.removeItem(at: rig.keyURL)
+        let temp = rig.box.appSupport.appendingPathComponent(".\(Ledger.cacheName).tmp-leftover")
+        try Data("partial".utf8).write(to: temp)
+
+        #expect(await Self.tokens(rig.ledger()) == 150)
+        #expect(!FileManager.default.fileExists(atPath: temp.path))
+        #expect(FileManager.default.fileExists(atPath: rig.keyURL.path))
+
+        try Data("{not json".utf8).write(to: rig.cacheURL)
+        #expect(await Self.tokens(rig.ledger()) == 150)
+        #expect(try rig.cacheJSON()["version"] as? Int == 4)
+    }
+
+    // MARK: Clearing
+
+    /// Test 17: only the cache, its key and temp files are deleted; price files, other files and transcripts stay.
+    @Test func clearRemovesOnlyCacheFiles() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        for name in ["pricing-source.json", "pricing.json", "unrelated.txt"] {
+            try Data(name.utf8).write(to: rig.box.appSupport.appendingPathComponent(name))
+        }
+        try Data("partial".utf8).write(to: rig.box.appSupport.appendingPathComponent(".\(Ledger.keyName).tmp-x"))
+        let ledger = rig.ledger()
+        _ = await Self.tokens(ledger)
+        let transcripts = try rig.box.snapshot(".claude")
+
+        #expect(await Self.clear(ledger) == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rig.box.appSupport.path).sorted()
+                == ["pricing-source.json", "pricing.json", "unrelated.txt"])
+        #expect(try rig.box.snapshot(".claude") == transcripts)
+    }
+
+    /// Tests 19-20: quitting right after a clear writes nothing; the next refresh rebuilds every file, including ones
+    /// not touched recently, with correct totals and a new key.
+    @Test func clearThenQuitWritesNothingAndRebuildIsComplete() async throws {
+        let rig = try Rig()
+        let cold = try rig.transcript([Self.line(id: "msg_A", req: "req_A")], file: "old.jsonl")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-6 * 3600)], ofItemAtPath: cold.path)
+        try rig.transcript([Self.line(id: "msg_B", req: "req_B")])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 300)
+        let oldKey = try Data(contentsOf: rig.keyURL)
+        // Counted but not saved yet (saves are at most every 10 minutes): the clear must drop it too.
+        try rig.transcript([Self.line(id: "msg_B", req: "req_B"), Self.line(id: "msg_C", req: "req_C")])
+        #expect(await Self.tokens(ledger) == 450)
+
+        #expect(await Self.clear(ledger) == nil)
+        ledger.flush() // what quitting does
+        #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+        #expect(!FileManager.default.fileExists(atPath: rig.keyURL.path))
+
+        #expect(await Self.tokens(ledger) == 450)
+        ledger.flush()
+        #expect(try Data(contentsOf: rig.keyURL) != oldKey)
+        #expect(await Self.tokens(rig.ledger()) == 450)
+    }
+
+    /// Test 18: after a clear, totals come only from the transcripts on disk, never from memory or old summaries.
+    @Test func clearNeverResurrectsOldTotals() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        try FileManager.default.removeItem(at: rig.box.home.appendingPathComponent(".claude"))
+
+        // A refresh queued just before the clear runs first; the clear then removes what it saved.
+        ledger.refresh(windowStart: nil, progress: { _ in }, completion: { _, _, _ in })
+        #expect(await Self.clear(ledger) == nil)
+        ledger.flush()
+        #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+        #expect(await Self.tokens(ledger) == 0)
+        #expect(await Self.tokens(rig.ledger()) == 0)
+    }
+
+    /// A refresh that started before a clear can't publish its totals afterwards; the next one publishes the rebuild.
+    @Test func staleRefreshNotPublishedAfterClear() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let services = ProviderServices(store: Store(), env: rig.box.environment(transport: FakeTransport()))
+        let stale = Task { @MainActor in await services.refreshUsage(windowStart: nil) }
+        await Task.yield() // the refresh is queued on the ledger before the clear
+        await services.clearUsageCache()
+        #expect(await stale.value == nil)
+        #expect(services.store.claudeUsage == nil && services.store.usageUpdated == nil)
+        #expect(services.store.usageCacheResult == UsageCacheText.cleared)
+
+        #expect(await services.refreshUsage(windowStart: nil) != nil)
+        #expect(services.store.claudeUsage?.month.tokens == 150)
+    }
+
+    /// Test 7 of #6: a failed delete reports failure and changes nothing.
+    @Test func failedClearChangesNothing() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let services = ProviderServices(store: Store(), env: rig.box.environment(transport: FakeTransport()))
+        await services.refreshUsage(windowStart: nil)
+        services.ledger.flush()
+        let cache = try Data(contentsOf: rig.cacheURL)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: rig.box.appSupport.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rig.box.appSupport.path) }
+        await services.clearUsageCache()
+        #expect(services.store.usageCacheResult == LedgerClearFailure.cache(.io(EACCES)).text)
+        #expect(services.store.usageCacheResult?.contains("Nothing was cleared") == true)
+        #expect(services.store.claudeUsage?.month.tokens == 150)
+        #expect(try Data(contentsOf: rig.cacheURL) == cache)
+        // In-memory state was kept too: a refresh doesn't count the transcript again.
+        await services.refreshUsage(windowStart: nil)
+        #expect(services.store.claudeUsage?.month.tokens == 150)
+    }
+
+    /// Test 22: clearing and rebuilding touch no Keychain, network, CLI or login item.
+    @Test func clearHasNoOtherSideEffects() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        try rig.box.installGrok()
+        let transport = FakeTransport(), runner = FakeProcessRunner(), creds = FakeCredentialStore(nil), login = FakeLoginItem()
+        let grokAuth = CountingGrokAuth(home: rig.box.home)
+        let services = ProviderServices(store: Store(), env: rig.box.environment(
+            transport: transport, runner: runner, credentials: creds, grokCredentials: grokAuth, loginItem: login))
+        let grokFiles = try rig.box.grokFiles()
+
+        await services.refreshUsage(windowStart: nil)
+        await services.clearUsageCache()
+        await services.refreshUsage(windowStart: nil)
+        services.ledger.flush()
+
+        #expect(services.store.claudeUsage?.month.tokens == 150 && services.store.grokUsage?.month.tokens == 150)
+        #expect(transport.requests.isEmpty && runner.calls.isEmpty && creds.reads == 0 && grokAuth.reads == 0)
+        #expect(login.registers == 0 && login.unregisters == 0)
+        #expect(try rig.box.grokFiles() == grokFiles)
+    }
+
+    /// Test 21: R7 cost coverage is the same after a clear and rebuild.
+    @Test func costCoverageSurvivesRebuild() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A", model: "claude-haiku-4-5-20251001"),
+                            Self.line(id: "msg_B", req: "req_B", model: "claude-test-1")])
+        let ledger = rig.ledger()
+        let before = await refreshLedger(ledger).claude.month.cost
+        #expect(before.coverage == .partial && before.knownTokens == 150 && before.unknownTokens == 150)
+        #expect(await Self.clear(ledger) == nil)
+        #expect(await refreshLedger(ledger).claude.month.cost == before)
+    }
+
+    private static func files(under root: URL) throws -> [String] {
+        guard let en = FileManager.default.enumerator(atPath: root.path) else { return [] }
+        return en.compactMap { $0 as? String }
+    }
+}
