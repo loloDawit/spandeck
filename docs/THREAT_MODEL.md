@@ -11,7 +11,7 @@ Boundaries:
 1. macOS process -> login Keychain, through `/usr/bin/security`.
 2. Process -> `~/.claude/projects`, `~/.config/claude/projects`, and Grok local files.
 3. Process -> external provider endpoints and, only on an explicit user download, the pinned GitHub-hosted LiteLLM price file (#27).
-4. Process -> `~/Library/Application Support/Headroom` cached usage records.
+4. Process -> `~/Library/Application Support/Headroom` cached usage records. Since R8 (#33): no paths or message/request ids (opaque keyed ids), owner-only modes, user-clearable; see [USAGE_CACHE.md](USAGE_CACHE.md).
 5. Process -> ServiceManagement login-item registration.
 6. Proposed future telemetry -> local adapter/store/UI.
 
@@ -24,7 +24,7 @@ Boundaries:
 | Accidental exfiltration | Provider HTTPS calls; LiteLLM prices are built in, with only a user-started, pinned, checksum-verified download (#27) | Egress inventory/allowlist; no telemetry; privacy tests |
 | Wrong or inflated numbers | Late streaming records, missing request IDs, overlap across adapters, unknown prices | Provenance and stable identity, fixture coverage, distinguish unknown from zero |
 | Supply-chain tampering | New upstream source, release DMG not yet Developer ID notarized | Pin reviewed commits, audit CI/dependencies, sign/notarize and verify releases |
-| Local disclosure | Usage history/cache and backups accessible to local account/processes | Data minimization, permissions, retention/deletion, avoid storing identifiers where not required |
+| Local disclosure | Usage history/cache and backups accessible to local account/processes | **R8 (#33):** cache holds opaque ids, not paths or ids; `0700`/`0600`; v3 caches deleted; Settings ▸ Clear cached usage data. Still readable by any process running as the user (key stored alongside) and included in backups; deletion isn't secure erasure |
 | Instrumentation conflicts | Proposed future hooks or status-line changes could overwrite user settings | Never mutate silently; backup, consent, merge semantics, reversible uninstall |
 | Excessive resource use | Frequent timers and long session files | Measure and budget scan CPU/memory, bounded indexing/retention, cancellation |
 
