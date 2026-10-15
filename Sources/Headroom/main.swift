@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var timers: [Timer] = []
     private var tick = 0
     private var currentInterval = 0.0
-    private var snapshotDir: URL?
     private var hover: HoverController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,10 +34,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         services.start()
 
-        if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
-            snapshotDir = URL(fileURLWithPath: CommandLine.arguments[i + 1])
-        }
-
         startSampling()
         sample()
         refreshLimits()
@@ -48,9 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.refreshUsage() },
         ]
         timers.forEach { $0.tolerance = 2 }
-        if snapshotDir != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in self?.writeSnapshots() }
-        }
 
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -229,46 +221,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 }
 
-// MARK: - Snapshot mode (`Headroom --snapshot <dir>`): renders the strip and popover to PNGs, then exits.
-
-extension AppDelegate {
-    @MainActor fileprivate func writeSnapshots() {
-        guard let dir = snapshotDir else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let strip = StatusRenderer.render(store)
-        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            let scale: CGFloat = 4
-            let size = NSSize(width: strip.size.width * scale, height: strip.size.height * scale)
-            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
-                                       bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-            NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
-                (appearance == .darkAqua ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
-                NSRect(origin: .zero, size: size).fill()
-                strip.draw(in: NSRect(origin: .zero, size: size))
-            }
-            NSGraphicsContext.restoreGraphicsState()
-            try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("strip-\(name).png"))
-        }
-        print("strip width pt:", strip.size.width)
-
-        let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
-                                                              setGrokCredits: { _ in }, quotaSwitchChanged: { _, _ in },
-                                                              updatePricing: {}, clearUsageCache: {}))
-            .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
-            .environment(\.colorScheme, .dark)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        if let cg = renderer.cgImage {
-            try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?
-                .write(to: dir.appendingPathComponent("popover.png"))
-        }
-        ledger.flush()
-        exit(0)
-    }
-}
+// `--snapshot <folder>` (R10) is handled here, before the app delegate or any live service exists: debug builds
+// render a synthetic store and exit, release builds refuse it. See `SnapshotMode`.
+if let code = SnapshotMode.run(arguments: CommandLine.arguments) { exit(code) }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

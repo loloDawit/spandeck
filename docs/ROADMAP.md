@@ -11,7 +11,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 | Order | Item | Milestone | Status | Notes |
 |---|---|---|---|---|
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
-| Next 1 | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Pending, #36 | Small and independent. |
+| Next 1 | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | In progress, #36 | Small and independent. |
 | Next 2 | R11: SHA-pin actions, least `permissions`, signing / notarization plan | M0 | Pending, #37 | Workflow and doc change only. Validate with local lint; don't run hosted CI without the owner's approval. |
 | Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Open | Last unmet acceptance item of #3. Needs a supported Mac and a dedicated account. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
@@ -32,7 +32,7 @@ From the security inventory in #3 ([`audits/0003-security-inventory.md`](audits/
 | R7 | Unknown price is not $0; totals carry coverage | #30 → #31 | M0 | Merged [mocked]; rendered UI unverified |
 | R8 | Cache: opaque ids, `0600`/`0700`, migration, clear action | #33 | M1 | **Done** (#34) |
 | R9 | Honest User-Agent; back off after HTTP 401 | #24 → #25 | M1 | Merged [mocked] |
-| R10 | `--snapshot` limited to debug builds or synthetic data | to be created | M1 | **Pending** |
+| R10 | `--snapshot` limited to debug builds or synthetic data | #36 | M1 | **In progress** |
 | R11 | CI / release hardening | to be created | M0 | **Pending** |
 | R12 | Injectable dependencies and mocked launch tests | #12 → #14 | M0 | Merged |
 
@@ -107,7 +107,7 @@ Nothing should be published as a SpanDeck release until these are cleared:
 
 1. **No OS-level evidence.** Every safety claim so far is [mocked] or code-level (#3, audit §7 Phase 2).
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
-3. **`--snapshot` can write real usage data to any path** until R10.
+3. **`--snapshot` can write real usage data to any path** until R10 merges (#36; in review).
 4. **No CI run and no signing or notarization.** Hosted CI is unavailable for budget reasons; R11 and #11 are open.
 5. **No accounting regression fixtures or performance baseline** (#6, #8), so M0 cannot exit.
 

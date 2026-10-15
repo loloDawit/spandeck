@@ -7,6 +7,7 @@ SpanDeck is a fork of [sandrich/headroom](https://github.com/sandrich/headroom),
 2. Open or select an issue, and check its status and owner in the [project](docs/PROJECT_MANAGEMENT.md). Describe behavior, data-source assumptions, risk, and acceptance criteria. Give the issue and your PR the matching milestone (`M0`–`M4`).
 3. Branch from `main` with a descriptive topic name. Do not implement unrelated changes in one PR.
 4. Run `swift test` and `swift build` on macOS 14+ with appropriate Swift/Xcode toolchain. Record any unavailable checks honestly.
+   For screenshots, a debug build renders synthetic data only: `swift run Headroom --snapshot <existing folder>` writes `strip-light.png`, `strip-dark.png` and `popover.png`, then exits without starting the app. Release builds refuse `--snapshot` (R10, #36).
 5. Describe evidence for changed accounting semantics and attach synthetic fixture coverage.
 6. Submit a PR; do not merge with failing checks or unresolved credential/privacy risks.
 
