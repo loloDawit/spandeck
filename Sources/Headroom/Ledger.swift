@@ -376,7 +376,7 @@ final class Ledger {
         var seen: [String: Seen] = [:]
         var hours: [Int: [String: Agg]] = [:]
     }
-    private struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
+    struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
     static let retentionDays = 32
@@ -641,24 +641,37 @@ final class Ledger {
                           cacheWrite5m: t.int("cacheCreationTokens"), cacheRead: cached,
                           calls: t.int("modelCalls"), costTicks: t.optionalInt("costUsdTicks"))
             // Resumed and forked sessions repeat inherited turns, so dedupe on content. The key (unchanged by R7) reads
-            // a missing cost as 0; that only affects which turns are the same, not their cost.
+            // a missing cost as 0, so a turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns`
+            // decides which copy counts.
             let key = "\(ended)|\(t.int("totalTokens"))|\(t.int("costUsdTicks"))"
             return GrokTurn(key: key, hour: Int(date.timeIntervalSince1970 / 3600),
                             model: t.string("primaryModelId") ?? "grok", agg: agg)
         }
     }
 
+    /// One turn per dedupe key, chosen the same way whatever order the files and turns are read in (R7): a copy that
+    /// reports a cost wins over one that doesn't, then the lowest model and token counts. Otherwise whether a turn's
+    /// cost is known would depend on which file came first.
+    static func uniqueGrokTurns(_ turns: [GrokTurn]) -> [GrokTurn] {
+        func rank(_ t: GrokTurn) -> (Int, String, Int, Int, Int, Int) {
+            (t.agg.costTicks == nil ? 1 : 0, t.model, t.agg.input, t.agg.output, t.agg.cacheWrite5m, t.agg.cacheRead)
+        }
+        var best: [String: GrokTurn] = [:]
+        for t in turns {
+            if let b = best[t.key], rank(b) < rank(t) || (rank(b) == rank(t) && b.agg.calls <= t.agg.calls) { continue }
+            best[t.key] = t
+        }
+        return Array(best.values)
+    }
+
     private func grokHours() -> [Int: [String: Agg]] {
-        var seen = Set<String>()
         var hours: [Int: [String: Agg]] = [:]
-        for f in grokFiles.values {
-            for t in f.turns where seen.insert(t.key).inserted {
-                var a = hours[t.hour, default: [:]][t.model, default: Agg()]
-                a.add(t.agg)
-                // A turn without a reported cost stays unknown after merging with turns that have one (R7).
-                if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
-                hours[t.hour, default: [:]][t.model] = a
-            }
+        for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
+            var a = hours[t.hour, default: [:]][t.model, default: Agg()]
+            a.add(t.agg)
+            // A turn without a reported cost stays unknown after merging with turns that have one (R7).
+            if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
+            hours[t.hour, default: [:]][t.model] = a
         }
         return hours
     }

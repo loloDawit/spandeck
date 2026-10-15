@@ -79,10 +79,18 @@ struct CostCompletenessTests {
         #expect(Fmt.cost(Self.cost(4.25, 10, 5)) == "≥$4.25")
         #expect(Fmt.cost(Self.cost(0, 0, 5)) == "n/a")
         #expect(Fmt.cost(Self.cost(0.003, 10)) == "<$0.01") // tiny but real is not shown as free
-        #expect(Fmt.cost(Self.cost(0.003, 10, 5)) == "≥$0.00")
+        // A partial cost shows its known part rounded down (it's a lower bound), keeping a tiny amount visible.
+        #expect(Fmt.cost(Self.cost(0.003, 10, 5)) == "≥$0.003")
+        #expect(Fmt.cost(Self.cost(0.0099, 10, 5)) == "≥$0.009")
+        #expect(Fmt.cost(Self.cost(3e-10, 10, 5)) == "≥$0.0000000003") // one Grok tick unit
+        #expect(Fmt.cost(Self.cost(0, 10, 5)) == "≥$0.00")                // known part really is $0
+        #expect(Fmt.cost(Self.cost(4.249, 10, 5)) == "≥$4.24" && Fmt.cost(Self.cost(0.29, 10, 5)) == "≥$0.29")
+        #expect(Fmt.cost(Self.cost(150.9, 10, 5)) == "≥$150" && Fmt.cost(Self.cost(1999, 10, 5)) == "≥$1.9k")
         #expect(Fmt.usd(0.005) == "$0.01" && Fmt.usd(0) == "$0.00")
-        #expect(Fmt.costDetail(Self.cost(4.25, 10, 500_000)).contains("Partial estimate: $4.25 known"))
-        #expect(Fmt.costDetail(Self.cost(0, 0, 500_000)).hasPrefix("Cost unavailable"))
+        #expect(Fmt.costDetail(Self.cost(4.25, 10, 500_000)) == "Partial estimate: $4.25 known; cost unknown for 500.0K tokens")
+        #expect(Fmt.costDetail(Self.cost(0.003, 10, 5)).contains("$0.003 known"))
+        #expect(Fmt.costDetail(Self.cost(0, 0, 500_000)) == "Cost unavailable: cost unknown for 500.0K tokens")
+        #expect(!Fmt.costDetail(Self.cost(0, 0, 5)).contains("price")) // could be Grok, which has no price list
     }
 
     // MARK: Golden fixtures
@@ -276,6 +284,51 @@ struct CostCompletenessTests {
         #expect(rows["grok-test"] == Self.cost(0, 0, 150)) // missing: unknown
         #expect(rows["grok-zero"] == Self.cost(0, 150))    // reported 0: a real $0
         #expect(grok.month.cost == Self.cost(0, 150, 150) && Fmt.cost(grok.month.cost) == "≥$0.00")
+    }
+
+    /// A turn without a cost and a copy of it reporting $0 share a dedupe key. The copy that reports a cost counts,
+    /// whichever is read first, so coverage doesn't depend on file order.
+    @Test func grokDuplicateChoiceIgnoresOrder() {
+        func turn(_ ticks: Int?, _ model: String = "grok-test") -> Ledger.GrokTurn {
+            Ledger.GrokTurn(key: "t|150|0", hour: 1, model: model,
+                            agg: Agg(input: 100, output: 50, calls: 1, costTicks: ticks))
+        }
+        let turns = [turn(nil), turn(0), turn(nil, "grok-a")]
+        for order in [turns, turns.reversed(), [turns[1], turns[2], turns[0]], [turns[2], turns[0], turns[1]]] {
+            let kept = Ledger.uniqueGrokTurns(order)
+            #expect(kept.count == 1 && kept[0].agg.costTicks == 0 && kept[0].model == "grok-test")
+        }
+        // With no reported cost anywhere, the choice is still fixed (lowest model), and the cost stays unknown.
+        for order in [[turn(nil, "grok-b"), turn(nil, "grok-a")], [turn(nil, "grok-a"), turn(nil, "grok-b")]] {
+            let kept = Ledger.uniqueGrokTurns(order)
+            #expect(kept.count == 1 && kept[0].model == "grok-a" && kept[0].agg.costTicks == nil)
+        }
+    }
+
+    @Test func grokDuplicateAcrossSessionsCountsOnce() async throws {
+        let now = Date()
+        for (missing, zero) in [("a", "b"), ("b", "a")] {
+            let rig = try Rig()
+            try rig.box.writeGrokUsage(session: missing, turns: [(now, nil, "grok-test")])
+            try rig.box.writeGrokUsage(session: zero, turns: [(now, 0, "grok-test")])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 150 && grok.month.cost == Self.cost(0, 150), "\(missing) \(grok.month.cost)")
+        }
+    }
+
+    /// The note names an unpriced Claude model and a Grok model with missing costs as different causes.
+    @Test func coverageNoteSeparatesCauses() throws {
+        var s = UsageSummary(monthStart: Date())
+        s.models = [ModelRow(model: "claude-new-9", tokens: 150, cost: Self.cost(0, 0, 150)),
+                    ModelRow(model: "grok-test", tokens: 150, cost: Self.cost(0, 0, 150))]
+        s.month.cost = Self.cost(0, 0, 300)
+        let note = try #require(PricingText.coverageNote(s))
+        #expect(note.contains("no price for claude-new-9;"))
+        #expect(note.contains("the Grok CLI reported no cost for some grok-test turns"))
+        #expect(!note.contains("no price for grok"))
+        s.models.removeFirst()
+        #expect(PricingText.coverageNote(s)?.contains("no price") == false)
+        #expect(PricingText.unpricedRule.contains("some Grok turns have no reported cost"))
     }
 
     // MARK: Compatibility

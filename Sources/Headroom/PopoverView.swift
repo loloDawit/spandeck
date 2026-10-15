@@ -706,17 +706,25 @@ enum PricingText {
         }
     }
 
-    /// R7: what happens to usage without a price, and where Grok amounts come from.
-    static let unpricedRule = "Models missing from that list (often newer ones) aren't priced: totals that include them "
-        + "show ≥ (priced part only) or n/a, never $0. Grok amounts are as reported by the Grok CLI."
+    /// R7: what happens to usage without a known cost, and where Grok amounts come from.
+    static let unpricedRule = "Models missing from that list (often newer ones) aren't priced, and some Grok turns have "
+        + "no reported cost: totals that include either show ≥ (known part only) or n/a, never $0. Grok amounts are as "
+        + "reported by the Grok CLI."
 
-    /// Why the 30-day estimate is incomplete, naming the models; nil when every cost is known.
+    /// Why the 30-day estimate is incomplete, naming the models; nil when every cost is known. An unpriced Claude model
+    /// and a Grok model whose turns reported no cost are different causes, so they're named separately.
     static func coverageNote(_ summary: UsageSummary) -> String? {
         let models = summary.uncostedModels
         guard !models.isEmpty else { return nil }
-        let shown = models.prefix(3).joined(separator: ", ") + (models.count > 3 ? " and \(models.count - 3) more" : "")
-        return "≥ partial estimate, n/a no estimate: no price for \(shown). "
-            + "\(Fmt.costDetail(summary.month.cost)) over 30 days. On the chart, \"?\" marks days with unpriced usage."
+        func list(_ m: [String]) -> String {
+            m.prefix(3).joined(separator: ", ") + (m.count > 3 ? " and \(m.count - 3) more" : "")
+        }
+        let grok = models.filter { modelFamily($0) == "Grok" }, priced = models.filter { modelFamily($0) != "Grok" }
+        var causes: [String] = []
+        if !priced.isEmpty { causes.append("no price for \(list(priced))") }
+        if !grok.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(grok)) turns") }
+        return "≥ partial estimate, n/a no estimate: " + causes.joined(separator: "; ") + ". "
+            + "\(Fmt.costDetail(summary.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
     }
 
     static var downloadDisclosure: String {

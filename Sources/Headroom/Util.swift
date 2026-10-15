@@ -23,18 +23,31 @@ enum Fmt {
     static func cost(_ c: CostEstimate) -> String {
         switch c.coverage {
         case .complete: return usd(c.known)
-        case .partial: return c.known < 0.005 ? "≥$0.00" : "≥" + usd(c.known)
+        case .partial: return "≥" + lowerBound(c.known)
         case .unavailable: return "n/a"
         }
     }
 
-    /// Spelled out, for help text and accessibility.
+    /// The known part of a partial cost, rounded down so it stays a lower bound. Below a cent it keeps its first
+    /// significant digit ("$0.003") instead of reading as $0.00.
+    static func lowerBound(_ v: Double) -> String {
+        func down(_ x: Double, _ scale: Double) -> Double { (x * scale + 1e-9).rounded(.down) / scale }
+        if v >= 1000 { return String(format: "$%.1fk", down(v / 1000, 10)) }
+        if v >= 100 { return String(format: "$%.0f", down(v, 1)) }
+        if v >= 0.01 || v <= 0 { return String(format: "$%.2f", down(max(v, 0), 100)) }
+        // Grok reports in 1e-10 USD ticks, so 10 digits always keeps a reported amount.
+        let digits = min(Int((-log10(v)).rounded(.up)), 10)
+        return String(format: "$%.\(digits)f", down(v, pow(10, Double(digits))))
+    }
+
+    /// Spelled out, for help text and accessibility. The unknown part may be a model without a price (Claude) or a
+    /// turn the Grok CLI reported no cost for, so the wording doesn't say which.
     static func costDetail(_ c: CostEstimate) -> String {
         switch c.coverage {
         case .complete: return "\(usd(c.known)) estimated"
         case .partial:
-            return "Partial estimate: \(usd(c.known)) known; \(tokens(c.unknownTokens)) tokens have no price"
-        case .unavailable: return "Cost unavailable: no price for \(tokens(c.unknownTokens)) tokens"
+            return "Partial estimate: \(lowerBound(c.known)) known; cost unknown for \(tokens(c.unknownTokens)) tokens"
+        case .unavailable: return "Cost unavailable: cost unknown for \(tokens(c.unknownTokens)) tokens"
         }
     }
 
