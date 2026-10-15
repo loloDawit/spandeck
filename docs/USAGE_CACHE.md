@@ -79,8 +79,9 @@ The clear runs on the ledger's serial queue, so it can't interleave with a refre
 - The next refresh re-reads all transcripts and saves a fresh cache under the new key. That's expected, since the transcripts are still there.
 
 **If something fails:**
+- Leftover temporary files are listed before anything is deleted. If the folder can't be listed (for example, it is writable but not readable), nothing is deleted and the failure is shown.
 - If the cache can't be deleted, nothing is reset and the failure is shown.
-- If only the key can't be deleted, that is shown too.
+- If the key or a temporary file can't be deleted after the cache is gone, that is shown, not success.
 
 ## Backups and erasure
 `~/Library/Application Support` is part of your home folder, so Time Machine and other backups include these files unless you exclude them; SpanDeck doesn't. Deleting a file (by clearing, migrating or replacing it) removes it from the folder, but it is not secure erasure:
