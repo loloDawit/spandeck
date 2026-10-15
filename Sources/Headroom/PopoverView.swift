@@ -606,7 +606,7 @@ struct UsageCard: View {
                 }
                 DailyChart(summary: u, metric: metric, height: 190)
                 ModelList(models: Array(u.models.prefix(8)), families: Array(Set(u.bars.map(\.family))).sorted())
-                if let note = PricingText.coverageNote(u) {
+                if let note = PricingText.coverageNote(claude: store.claudeUsage, grok: grok) {
                     Text(note).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } else {
@@ -712,19 +712,19 @@ enum PricingText {
         + "reported by the Grok CLI."
 
     /// Why the 30-day estimate is incomplete, naming the models; nil when every cost is known. An unpriced Claude model
-    /// and a Grok model whose turns reported no cost are different causes, so they're named separately.
-    static func coverageNote(_ summary: UsageSummary) -> String? {
-        let models = summary.uncostedModels
-        guard !models.isEmpty else { return nil }
+    /// and a Grok model whose turns reported no cost are different causes, so they're named separately. The cause comes
+    /// from which summary a model is in, never from its name (a Grok model ID can be any string).
+    static func coverageNote(claude: UsageSummary?, grok: UsageSummary?) -> String? {
         func list(_ m: [String]) -> String {
             m.prefix(3).joined(separator: ", ") + (m.count > 3 ? " and \(m.count - 3) more" : "")
         }
-        let grok = models.filter { modelFamily($0) == "Grok" }, priced = models.filter { modelFamily($0) != "Grok" }
+        let priced = claude?.uncostedModels ?? [], reported = grok?.uncostedModels ?? []
+        guard !priced.isEmpty || !reported.isEmpty, let total = UsageSummary.combine(claude, grok) else { return nil }
         var causes: [String] = []
         if !priced.isEmpty { causes.append("no price for \(list(priced))") }
-        if !grok.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(grok)) turns") }
+        if !reported.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(reported)) turns") }
         return "≥ partial estimate, n/a no estimate: " + causes.joined(separator: "; ") + ". "
-            + "\(Fmt.costDetail(summary.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
+            + "\(Fmt.costDetail(total.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
     }
 
     static var downloadDisclosure: String {

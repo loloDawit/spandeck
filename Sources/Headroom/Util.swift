@@ -31,13 +31,19 @@ enum Fmt {
     /// The known part of a partial cost, rounded down so it stays a lower bound. Below a cent it keeps its first
     /// significant digit ("$0.003") instead of reading as $0.00.
     static func lowerBound(_ v: Double) -> String {
-        func down(_ x: Double, _ scale: Double) -> Double { (x * scale + 1e-9).rounded(.down) / scale }
-        if v >= 1000 { return String(format: "$%.1fk", down(v / 1000, 10)) }
-        if v >= 100 { return String(format: "$%.0f", down(v, 1)) }
-        if v >= 0.01 || v <= 0 { return String(format: "$%.2f", down(max(v, 0), 100)) }
+        // Truncates the value's decimal form in Decimal arithmetic: scaling the Double (v * 1000) can land on either
+        // side of a decimal boundary, and nudging it up to compensate can show more than is known.
+        func down(_ digits: Int, per unit: Decimal = 1) -> Double {
+            var d = (Decimal(string: v.description, locale: Locale(identifier: "en_US_POSIX")) ?? 0) / unit, r = Decimal()
+            NSDecimalRound(&r, &d, digits, .down)
+            return NSDecimalNumber(decimal: r).doubleValue
+        }
+        if v >= 1000 { return String(format: "$%.1fk", down(1, per: 1000)) }
+        if v >= 100 { return String(format: "$%.0f", down(0)) }
+        if v >= 0.01 || v <= 0 { return String(format: "$%.2f", max(down(2), 0)) }
         // Grok reports in 1e-10 USD ticks, so 10 digits always keeps a reported amount.
         let digits = min(Int((-log10(v)).rounded(.up)), 10)
-        return String(format: "$%.\(digits)f", down(v, pow(10, Double(digits))))
+        return String(format: "$%.\(digits)f", down(digits))
     }
 
     /// Spelled out, for help text and accessibility. The unknown part may be a model without a price (Claude) or a

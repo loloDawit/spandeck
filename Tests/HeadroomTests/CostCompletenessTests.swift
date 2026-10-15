@@ -86,6 +86,11 @@ struct CostCompletenessTests {
         #expect(Fmt.cost(Self.cost(0, 10, 5)) == "≥$0.00")                // known part really is $0
         #expect(Fmt.cost(Self.cost(4.249, 10, 5)) == "≥$4.24" && Fmt.cost(Self.cost(0.29, 10, 5)) == "≥$0.29")
         #expect(Fmt.cost(Self.cost(150.9, 10, 5)) == "≥$150" && Fmt.cost(Self.cost(1999, 10, 5)) == "≥$1.9k")
+        // Just below a display boundary: never shown above the known amount.
+        #expect(Fmt.lowerBound(0.0049999999995) == "$0.004" && Fmt.lowerBound(0.0099999999999) == "$0.009")
+        #expect(Fmt.lowerBound(0.0199999999999) == "$0.01" && Fmt.lowerBound(99.9999999999) == "$99.99")
+        #expect(Fmt.lowerBound(199.99999999999) == "$199" && Fmt.lowerBound(1999.9999999999) == "$1.9k")
+        #expect(Fmt.lowerBound(0.001) == "$0.001" && Fmt.lowerBound(0.00001) == "$0.00001" && Fmt.lowerBound(0.15) == "$0.15")
         #expect(Fmt.usd(0.005) == "$0.01" && Fmt.usd(0) == "$0.00")
         #expect(Fmt.costDetail(Self.cost(4.25, 10, 500_000)) == "Partial estimate: $4.25 known; cost unknown for 500.0K tokens")
         #expect(Fmt.costDetail(Self.cost(0.003, 10, 5)).contains("$0.003 known"))
@@ -148,7 +153,7 @@ struct CostCompletenessTests {
         #expect(combined.month.tokens == both.knownTokens + both.unknownTokens)
         // The explanation names exactly the models whose cost isn't fully known.
         let uncosted = combined.models.filter { $0.cost.coverage != .complete }.map(\.model).sorted()
-        #expect(combined.uncostedModels == uncosted && (PricingText.coverageNote(combined) == nil) == uncosted.isEmpty)
+        #expect(combined.uncostedModels == uncosted && (PricingText.coverageNote(claude: claude, grok: grok) == nil) == uncosted.isEmpty)
     }
 
     // MARK: Aggregation
@@ -316,18 +321,25 @@ struct CostCompletenessTests {
         }
     }
 
-    /// The note names an unpriced Claude model and a Grok model with missing costs as different causes.
-    @Test func coverageNoteSeparatesCauses() throws {
-        var s = UsageSummary(monthStart: Date())
-        s.models = [ModelRow(model: "claude-new-9", tokens: 150, cost: Self.cost(0, 0, 150)),
-                    ModelRow(model: "grok-test", tokens: 150, cost: Self.cost(0, 0, 150))]
-        s.month.cost = Self.cost(0, 0, 300)
-        let note = try #require(PricingText.coverageNote(s))
+    /// The note names an unpriced Claude model and a Grok model with missing costs as different causes, by which
+    /// provider the usage came from: a Grok model ID needn't contain "grok".
+    @Test func coverageNoteSeparatesCauses() async throws {
+        let rig = try Rig()
+        try rig.claude([("claude-new-9", Date())])
+        try rig.box.writeGrokUsage(session: "a", turns: [(Date(), nil, "model-alpha")])
+        let (claude, grok) = await rig.summaries()
+
+        let note = try #require(PricingText.coverageNote(claude: claude, grok: grok))
         #expect(note.contains("no price for claude-new-9;"))
-        #expect(note.contains("the Grok CLI reported no cost for some grok-test turns"))
-        #expect(!note.contains("no price for grok"))
-        s.models.removeFirst()
-        #expect(PricingText.coverageNote(s)?.contains("no price") == false)
+        #expect(note.contains("the Grok CLI reported no cost for some model-alpha turns"))
+        #expect(!note.contains("no price for model-alpha"))
+        #expect(note.contains("Cost unavailable: cost unknown for 300 tokens over 30 days"))
+
+        let grokOnly = try #require(PricingText.coverageNote(claude: nil, grok: grok))
+        #expect(!grokOnly.contains("no price") && grokOnly.contains("model-alpha"))
+        let claudeOnly = try #require(PricingText.coverageNote(claude: claude, grok: nil))
+        #expect(claudeOnly.contains("no price for claude-new-9.") && !claudeOnly.contains("Grok CLI"))
+        #expect(PricingText.coverageNote(claude: nil, grok: nil) == nil)
         #expect(PricingText.unpricedRule.contains("some Grok turns have no reported cost"))
     }
 
