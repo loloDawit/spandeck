@@ -153,9 +153,11 @@ struct GrokErrorStateTests {
         let rig = try Rig(transport: transport)
         await rig.services.refreshGrok()
         let fetchedAt = try #require(rig.store.grokPlan?.fetchedAt)
+        #expect(StatusRenderer.grokGauge(rig.store) == [10])
 
         await rig.services.refreshGrok()
 
+        #expect(StatusRenderer.grokGauge(rig.store) == [nil]) // the stale plan isn't drawn as current
         #expect(rig.store.grokFailure == expected && expected.isTemporary)
         #expect(rig.store.grokPlan?.fetchedAt == fetchedAt) // the old plan, not a new one
         #expect(rig.section == .plan(.init(staleBecause: expected)))

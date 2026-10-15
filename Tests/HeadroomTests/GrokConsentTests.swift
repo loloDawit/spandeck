@@ -179,9 +179,11 @@ struct GrokConsentTests {
         let rig = try Rig(transport: transport)
         rig.services.setGrokEnabled(true)
 
+        // Each request is sent before the next refresh starts: a newer refresh stops an older one that hasn't sent yet.
         let a = Task { await rig.services.refreshGrok() }
+        guard await transport.awaitRequests(1, from: a) else { Issue.record("first refresh never started a request"); return }
         let b = Task { await rig.services.refreshGrok() }
-        guard await transport.awaitRequests(2, from: Task { await a.value; await b.value }) else {
+        guard await transport.awaitRequests(2, from: b) else {
             Issue.record("both refreshes should have started a request"); return
         }
         rig.services.setGrokEnabled(false)

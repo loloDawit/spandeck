@@ -254,10 +254,12 @@ final class Sandbox {
     func environment(transport: HTTPTransport, runner: FakeProcessRunner = FakeProcessRunner(),
                      credentials: FakeCredentialStore = FakeCredentialStore(nil),
                      grokCredentials: GrokCredentialSource? = nil,
-                     loginItem: FakeLoginItem = FakeLoginItem()) -> AppEnvironment {
-        AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,
-                       credentials: credentials, grokCredentials: grokCredentials ?? CountingGrokAuth(home: home),
-                       loginItem: loginItem, preferences: preferences, home: home, appSupport: appSupport)
+                     loginItem: FakeLoginItem = FakeLoginItem(), clock: TestClock? = nil) -> AppEnvironment {
+        var env = AppEnvironment(providerTransport: transport, pricingTransport: transport, processRunner: runner,
+                                 credentials: credentials, grokCredentials: grokCredentials ?? CountingGrokAuth(home: home),
+                                 loginItem: loginItem, preferences: preferences, home: home, appSupport: appSupport)
+        if let clock { env.now = { clock.now } }
+        return env
     }
 
     /// A synthetic Grok CLI install: auth.json with a canary key, an executable `bin/grok` that is never run,
@@ -322,6 +324,15 @@ func refreshLedger(_ ledger: Ledger) async -> (claude: UsageSummary, grok: Usage
     await withCheckedContinuation { c in
         ledger.refresh(windowStart: nil, progress: { _ in }, completion: { claude, grok, _ in c.resume(returning: (claude, grok)) })
     }
+}
+
+/// Synthetic time for retry pauses and throttles: starts at the real time and moves only when advanced, so tests
+/// never sleep for minutes.
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = Date()
+    var now: Date { lock.withLock { current } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { current = current.addingTimeInterval(seconds) } }
 }
 
 /// Returns the given answers in order, then repeats the last.
