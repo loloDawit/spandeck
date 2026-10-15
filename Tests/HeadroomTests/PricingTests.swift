@@ -160,7 +160,7 @@ struct PricingTests {
     /// A file that is exactly the pinned one but holds no valid Claude prices is rejected after the checksum passes.
     @Test(arguments: ["{}", "[]", "not json", #"{"gpt-x":{"input_cost_per_token":1,"output_cost_per_token":1}}"#,
                       #"{"claude-x":{"input_cost_per_token":-1,"output_cost_per_token":1e-6}}"#,
-                      #"{"claude-x":{"input_cost_per_token":true,"output_cost_per_token":1e-6}}"#,
+                      #"{"claude-x":{"input_cost_per_token":false,"output_cost_per_token":1e-6}}"#,
                       #"{"claude-x":{"input_cost_per_token":"1e-6","output_cost_per_token":1e-6}}"#,
                       #"{"claude-x":{"input_cost_per_token":0.5,"output_cost_per_token":1e-6}}"#])
     func pinnedButInvalidIsRejected(_ body: String) async throws {
@@ -217,10 +217,21 @@ struct PricingTests {
         #expect(rig.pricing.info == working)
 
         try FileManager.default.removeItem(at: rig.installed)
-        for damaged in ["{\"format\":1,\"revi", #"{"format":1,"revision":"\#(Self.revisionB)","sourceSHA256":"00","retrieved":"x","table":{}}"#] {
-            try Data(damaged.utf8).write(to: rig.installed)
-            #expect(rig.pricing.load().source == .bundled)
+        let pinned = Self.pin(for: data)
+        let table = #"{"claude-synth-1":{"input":0.0005,"output":0.0005,"cacheWrite":0,"cacheWrite1h":0,"cacheRead":0}}"#
+        func saved(_ revision: String, _ sha: String, _ table: String) -> String {
+            #"{"format":1,"revision":"\#(revision)","sourceSHA256":"\#(sha)","retrieved":"x","table":\#(table)}"#
         }
+        for damaged in ["{\"format\":1,\"revi",                                      // truncated
+                        saved(Self.revisionB, pinned.sourceSHA256, "{}"),              // empty table
+                        saved(String(repeating: "c", count: 40), pinned.sourceSHA256, table), // another revision
+                        saved(Self.revisionB, String(repeating: "0", count: 64), table)] {   // another file
+            try Data(damaged.utf8).write(to: rig.installed)
+            #expect(rig.pricing.load().source == .bundled, "\(damaged)")
+        }
+        // Control: the same envelope for the pinned revision and file is accepted.
+        try Data(saved(Self.revisionB, pinned.sourceSHA256, table).utf8).write(to: rig.installed)
+        #expect(rig.pricing.load().source == .downloaded)
     }
 
     // MARK: Effect on usage
