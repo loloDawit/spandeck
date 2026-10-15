@@ -275,6 +275,19 @@ final class Sandbox {
         return try write(".grok/bin/grok", "#!/bin/sh\nexit 1\n", executable: true)
     }
 
+    /// A synthetic Grok session usage file. Each turn is 100 input + 50 output tokens; `ticks` nil omits
+    /// `costUsdTicks` entirely (a turn that reported no cost).
+    @discardableResult
+    func writeGrokUsage(session: String, turns: [(date: Date, ticks: Int?, model: String)]) throws -> URL {
+        let lines = turns.enumerated().map { i, t in
+            let cost = t.ticks.map { #","costUsdTicks":\#($0)"# } ?? ""
+            return #"{"endedAt":"\#(ISO8601DateFormatter().string(from: t.date))","inputTokens":100,"outputTokens":50,"#
+                + #""cachedReadTokens":0,"cacheCreationTokens":0,"modelCalls":1,"totalTokens":\#(150 + i)\#(cost),"#
+                + #""primaryModelId":"\#(t.model)"}"#
+        }
+        return try write(".grok/sessions/proj/\(session)/usage.json", #"{"turns":["# + lines.joined(separator: ",") + "]}")
+    }
+
     /// Path → contents of every file under `~/.grok`, to prove nothing was changed or removed.
     func grokFiles() throws -> [String: Data] {
         let root = home.appendingPathComponent(".grok")
@@ -296,9 +309,10 @@ final class Sandbox {
         return url
     }
 
-    /// One synthetic Claude Code assistant line with usage, timestamped now, with `canary` in the message body.
-    static func transcriptLine(model: String, id: String, canary: String) -> String {
-        let ts = ISO8601DateFormatter().string(from: Date())
+    /// One synthetic Claude Code assistant line with usage (100 input + 50 output tokens), timestamped `date`
+    /// (default now), with `canary` in the message body.
+    static func transcriptLine(model: String, id: String, canary: String, date: Date = Date()) -> String {
+        let ts = ISO8601DateFormatter().string(from: date)
         return #"{"type":"assistant","timestamp":"\#(ts)","requestId":"req_\#(id)","message":{"id":"msg_\#(id)","model":"\#(model)","content":[{"type":"text","text":"\#(canary)"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#
     }
 }

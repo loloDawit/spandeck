@@ -11,9 +11,50 @@ enum Fmt {
 
     static func usd(_ v: Double?) -> String {
         guard let v else { return "n/a" }
+        // A real but tiny cost isn't shown as $0.00, which reads as free (R7).
+        if v > 0 && v < 0.005 { return "<$0.01" }
         if v >= 1000 { return String(format: "$%.1fk", v / 1000) }
         if v >= 100 { return String(format: "$%.0f", v) }
         return String(format: "$%.2f", v)
+    }
+
+    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part is a lower
+    /// bound), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
+    static func cost(_ c: CostEstimate) -> String {
+        switch c.coverage {
+        case .complete: return usd(c.known)
+        case .partial: return "≥" + lowerBound(c.known)
+        case .unavailable: return "n/a"
+        }
+    }
+
+    /// The known part of a partial cost, rounded down so it stays a lower bound. Below a cent it keeps its first
+    /// significant digit ("$0.003") instead of reading as $0.00.
+    static func lowerBound(_ v: Double) -> String {
+        // Truncates the value's decimal form in Decimal arithmetic: scaling the Double (v * 1000) can land on either
+        // side of a decimal boundary, and nudging it up to compensate can show more than is known.
+        func down(_ digits: Int, per unit: Decimal = 1) -> Double {
+            var d = (Decimal(string: v.description, locale: Locale(identifier: "en_US_POSIX")) ?? 0) / unit, r = Decimal()
+            NSDecimalRound(&r, &d, digits, .down)
+            return NSDecimalNumber(decimal: r).doubleValue
+        }
+        if v >= 1000 { return String(format: "$%.1fk", down(1, per: 1000)) }
+        if v >= 100 { return String(format: "$%.0f", down(0)) }
+        if v >= 0.01 || v <= 0 { return String(format: "$%.2f", max(down(2), 0)) }
+        // Grok reports in 1e-10 USD ticks, so 10 digits always keeps a reported amount.
+        let digits = min(Int((-log10(v)).rounded(.up)), 10)
+        return String(format: "$%.\(digits)f", down(digits))
+    }
+
+    /// Spelled out, for help text and accessibility. The unknown part may be a model without a price (Claude) or a
+    /// turn the Grok CLI reported no cost for, so the wording doesn't say which.
+    static func costDetail(_ c: CostEstimate) -> String {
+        switch c.coverage {
+        case .complete: return "\(usd(c.known)) estimated"
+        case .partial:
+            return "Partial estimate: \(lowerBound(c.known)) known; cost unknown for \(tokens(c.unknownTokens)) tokens"
+        case .unavailable: return "Cost unavailable: cost unknown for \(tokens(c.unknownTokens)) tokens"
+        }
     }
 
     static func gb(_ b: UInt64) -> String {
@@ -102,6 +143,11 @@ func runProcess(_ path: String, _ args: [String], timeout: TimeInterval = 10, ca
 
 extension Dictionary where Key == String, Value == Any {
     func int(_ k: String) -> Int { (self[k] as? NSNumber)?.intValue ?? 0 }
+    /// nil when the key is missing or not a number (JSON booleans are rejected), so absent data isn't read as 0.
+    func optionalInt(_ k: String) -> Int? {
+        guard let n = self[k] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        return n.intValue
+    }
     func double(_ k: String) -> Double? { (self[k] as? NSNumber)?.doubleValue }
     func dict(_ k: String) -> [String: Any]? { self[k] as? [String: Any] }
     func string(_ k: String) -> String? { self[k] as? String }

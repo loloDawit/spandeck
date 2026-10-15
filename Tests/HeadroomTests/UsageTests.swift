@@ -36,17 +36,17 @@ struct UsageTests {
     @Test func combineSummaries() throws {
         let day = Date(timeIntervalSince1970: 1_760_000_000)
         var claude = UsageSummary()
-        claude.today = Totals(tokens: 100, cost: 1)
-        claude.window = Totals(tokens: 40, cost: 0.4)
-        claude.models = [ModelRow(model: "claude-opus-5-5", tokens: 100, cost: 1)]
-        claude.bars = [DayBar(day: day, family: "Opus", tokens: 100, cost: 1)]
+        claude.today = Totals(tokens: 100, cost: CostEstimate(known: 1, knownTokens: 100))
+        claude.window = Totals(tokens: 40, cost: CostEstimate(known: 0.4, knownTokens: 40))
+        claude.models = [ModelRow(model: "claude-opus-5-5", tokens: 100, cost: CostEstimate(known: 1, knownTokens: 100))]
+        claude.bars = [DayBar(day: day, family: "Opus", tokens: 100, cost: CostEstimate(known: 1, knownTokens: 100))]
         var grok = UsageSummary()
-        grok.today = Totals(tokens: 300, cost: 0.5)
-        grok.models = [ModelRow(model: "grok-4.6-build", tokens: 300, cost: 0.5)]
-        grok.bars = [DayBar(day: day, family: "Grok", tokens: 300, cost: 0.5)]
+        grok.today = Totals(tokens: 300, cost: CostEstimate(known: 0.5, knownTokens: 300))
+        grok.models = [ModelRow(model: "grok-4.6-build", tokens: 300, cost: CostEstimate(known: 0.5, knownTokens: 300))]
+        grok.bars = [DayBar(day: day, family: "Grok", tokens: 300, cost: CostEstimate(known: 0.5, knownTokens: 300))]
 
         let both = try #require(UsageSummary.combine(claude, grok))
-        #expect(both.today.tokens == 400 && both.today.cost == 1.5)
+        #expect(both.today.tokens == 400 && both.today.cost == CostEstimate(known: 1.5, knownTokens: 400))
         #expect(both.window?.tokens == 40)
         #expect(both.models.map(\.model) == ["grok-4.6-build", "claude-opus-5-5"])
         #expect(both.bars.map(\.family) == ["Grok", "Opus"])

@@ -365,7 +365,7 @@ struct GrokErrorStateTests {
         #expect(rig.store.grokFailure == .authRejected(.succeeded))
         #expect(rig.store.claudeLimits?.session?.percent == 42 && rig.store.claudeError == nil && rig.claude.reads == 1)
         #expect(usage.claude.today.tokens == 150)
-        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == 0.25)
+        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == CostEstimate(known: 0.25, knownTokens: 150))
     }
 
     // MARK: UI selection and copy

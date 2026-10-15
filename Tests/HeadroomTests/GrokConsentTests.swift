@@ -41,7 +41,7 @@ struct GrokConsentTests {
         #expect(!rig.store.grokEnabled && rig.store.grokPlan == nil && !rig.store.grokAvailable)
         // Local usage accounting is independent of consent.
         #expect(rig.store.localGrokUsage?.today.tokens == 150)
-        #expect(rig.store.localGrokUsage?.today.cost == 0.25)
+        #expect(rig.store.localGrokUsage?.today.cost == CostEstimate(known: 0.25, knownTokens: 150))
         #expect(try rig.box.grokFiles() == before)
     }
 

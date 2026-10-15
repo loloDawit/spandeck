@@ -12,6 +12,9 @@ struct Agg: Codable {
     var calls = 0
     /// Exact provider cost in 1e-10 USD ticks (Grok reports this; Claude cost comes from pricing).
     var costTicks: Int?
+    /// Grok only: tokens of merged turns that reported no cost (R7). Optional so ledger caches written before it still
+    /// decode; never set for Claude, whose missing costs come from the price table at summary time.
+    var uncostedTokens: Int?
 
     var total: Int { input + output + cacheWrite5m + cacheWrite1h + cacheRead }
 
@@ -35,9 +38,44 @@ struct Agg: Codable {
     }
 }
 
+/// A cost with its coverage (R7): the sum of the costs that are known, and how many tokens had a known or an unknown
+/// cost. A missing price is never counted as $0. Claude costs are estimates at LiteLLM list prices; Grok costs are what
+/// the Grok CLI reported. Neither is a bill.
+struct CostEstimate: Equatable, Sendable {
+    enum Coverage: Equatable, Sendable {
+        /// Every token's cost is known (including no usage at all, and costs that are really zero).
+        case complete
+        /// Some tokens have a known cost and some don't; `known` is a lower bound.
+        case partial
+        /// There is usage but none of its cost is known.
+        case unavailable
+    }
+
+    var known = 0.0
+    var knownTokens = 0
+    var unknownTokens = 0
+
+    static let zero = CostEstimate()
+
+    var coverage: Coverage {
+        if unknownTokens == 0 { return .complete }
+        return knownTokens == 0 && known == 0 ? .unavailable : .partial
+    }
+
+    /// The amount when complete; nil when any of it is unknown.
+    var value: Double? { coverage == .complete ? known : nil }
+
+    static func + (a: CostEstimate, b: CostEstimate) -> CostEstimate {
+        CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens + b.knownTokens,
+                     unknownTokens: a.unknownTokens + b.unknownTokens)
+    }
+
+    static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
+}
+
 struct Totals {
     var tokens = 0
-    var cost = 0.0
+    var cost = CostEstimate.zero
 }
 
 struct DayBar: Identifiable {
@@ -45,14 +83,14 @@ struct DayBar: Identifiable {
     var day: Date
     var family: String
     var tokens: Int
-    var cost: Double
+    var cost: CostEstimate
 }
 
 struct ModelRow: Identifiable {
     var id: String { model }
     var model: String
     var tokens: Int
-    var cost: Double?
+    var cost: CostEstimate
 }
 
 struct UsageSummary {
@@ -70,6 +108,7 @@ extension UsageSummary {
     static func combine(_ a: UsageSummary?, _ b: UsageSummary?) -> UsageSummary? {
         guard var r = a ?? b else { return nil }
         guard let a, let b else { return r }
+        // Estimates add field by field, so one provider's incomplete cost keeps the combined total incomplete (R7).
         func add(_ x: Totals, _ y: Totals) -> Totals { Totals(tokens: x.tokens + y.tokens, cost: x.cost + y.cost) }
         r.today = add(a.today, b.today)
         r.week = add(a.week, b.week)
@@ -77,6 +116,19 @@ extension UsageSummary {
         r.bars = (a.bars + b.bars).sorted { ($0.day, $0.family) < ($1.day, $1.family) }
         r.models = (a.models + b.models).sorted { $0.tokens > $1.tokens }
         return r
+    }
+}
+
+extension UsageSummary {
+    /// Models whose cost isn't fully known in the 30 days (R7), for the explanation under the totals.
+    var uncostedModels: [String] { models.filter { $0.cost.coverage != .complete }.map(\.model).sorted() }
+
+    /// Days whose cost isn't fully known, with the known part, so the chart can mark them instead of drawing what
+    /// looks like a complete (or zero) cost.
+    var incompleteCostDays: [(day: Date, known: Double)] {
+        var days: [Date: CostEstimate] = [:]
+        for b in bars { days[b.day, default: .zero] += b.cost }
+        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value.known) }.sorted { $0.day < $1.day }
     }
 }
 
@@ -278,8 +330,23 @@ final class Pricing: @unchecked Sendable {
 
     private var resolved: [String: Price?] = [:]
 
-    func cost(model: String, _ a: Agg) -> Double? {
-        if let ticks = a.costTicks { return Double(ticks) / 1e10 }
+    /// The cost of `a` and its coverage (R7). Reported Grok ticks are used as they are; turns that reported none are
+    /// unknown. Otherwise the price table decides; a model without a price is unknown, never $0. Tokens-free usage
+    /// has nothing unknown.
+    func estimate(model: String, _ a: Agg) -> CostEstimate {
+        if let ticks = a.costTicks {
+            let unknown = min(a.uncostedTokens ?? 0, a.total)
+            return CostEstimate(known: Double(ticks) / 1e10, knownTokens: a.total - unknown, unknownTokens: unknown)
+        }
+        if a.uncostedTokens != nil { return CostEstimate(unknownTokens: a.total) } // Grok, no turn reported a cost
+        guard let c = listCost(model: model, a) else { return CostEstimate(unknownTokens: a.total) }
+        return CostEstimate(known: c, knownTokens: a.total)
+    }
+
+    /// The cost if fully known, else nil.
+    func cost(model: String, _ a: Agg) -> Double? { estimate(model: model, a).value }
+
+    private func listCost(model: String, _ a: Agg) -> Double? {
         let p: Price? = lock.withLock {
             if let hit = resolved[model] { return hit }
             var p = table[model]
@@ -309,7 +376,7 @@ final class Ledger {
         var seen: [String: Seen] = [:]
         var hours: [Int: [String: Agg]] = [:]
     }
-    private struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
+    struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
     static let retentionDays = 32
@@ -572,21 +639,39 @@ final class Ledger {
             let cached = t.int("cachedReadTokens")
             let agg = Agg(input: max(t.int("inputTokens") - cached, 0), output: t.int("outputTokens"),
                           cacheWrite5m: t.int("cacheCreationTokens"), cacheRead: cached,
-                          calls: t.int("modelCalls"), costTicks: t.int("costUsdTicks"))
-            // Resumed and forked sessions repeat inherited turns, so dedupe on content.
+                          calls: t.int("modelCalls"), costTicks: t.optionalInt("costUsdTicks"))
+            // Resumed and forked sessions repeat inherited turns, so dedupe on content. The key (unchanged by R7) reads
+            // a missing cost as 0, so a turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns`
+            // decides which copy counts.
             let key = "\(ended)|\(t.int("totalTokens"))|\(t.int("costUsdTicks"))"
             return GrokTurn(key: key, hour: Int(date.timeIntervalSince1970 / 3600),
                             model: t.string("primaryModelId") ?? "grok", agg: agg)
         }
     }
 
+    /// One turn per dedupe key, chosen the same way whatever order the files and turns are read in (R7): a copy that
+    /// reports a cost wins over one that doesn't, then the lowest model and token counts. Otherwise whether a turn's
+    /// cost is known would depend on which file came first.
+    static func uniqueGrokTurns(_ turns: [GrokTurn]) -> [GrokTurn] {
+        func rank(_ t: GrokTurn) -> (Int, String, Int, Int, Int, Int) {
+            (t.agg.costTicks == nil ? 1 : 0, t.model, t.agg.input, t.agg.output, t.agg.cacheWrite5m, t.agg.cacheRead)
+        }
+        var best: [String: GrokTurn] = [:]
+        for t in turns {
+            if let b = best[t.key], rank(b) < rank(t) || (rank(b) == rank(t) && b.agg.calls <= t.agg.calls) { continue }
+            best[t.key] = t
+        }
+        return Array(best.values)
+    }
+
     private func grokHours() -> [Int: [String: Agg]] {
-        var seen = Set<String>()
         var hours: [Int: [String: Agg]] = [:]
-        for f in grokFiles.values {
-            for t in f.turns where seen.insert(t.key).inserted {
-                hours[t.hour, default: [:]][t.model, default: Agg()].add(t.agg)
-            }
+        for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
+            var a = hours[t.hour, default: [:]][t.model, default: Agg()]
+            a.add(t.agg)
+            // A turn without a reported cost stays unknown after merging with turns that have one (R7).
+            if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
+            hours[t.hour, default: [:]][t.model] = a
         }
         return hours
     }
@@ -604,15 +689,14 @@ final class Ledger {
         var s = UsageSummary(monthStart: monthStart)
         if windowHour != nil { s.window = Totals() }
         var bars: [String: DayBar] = [:]
-        var models: [String: (Int, Double?)] = [:]
+        var models: [String: (Int, CostEstimate)] = [:]
 
         for (hour, byModel) in hours {
             let date = Date(timeIntervalSince1970: Double(hour) * 3600)
             guard date >= monthStart else { continue }
             let day = cal.startOfDay(for: date)
             for (model, a) in byModel {
-                let cost = pricing.cost(model: model, a)
-                let c = cost ?? 0
+                let c = pricing.estimate(model: model, a)
                 let t = a.total
                 s.month.tokens += t; s.month.cost += c
                 if date >= weekStart { s.week.tokens += t; s.week.cost += c }
@@ -621,13 +705,13 @@ final class Ledger {
 
                 let family = modelFamily(model)
                 let key = "\(day.timeIntervalSince1970)-\(family)"
-                var bar = bars[key] ?? DayBar(day: day, family: family, tokens: 0, cost: 0)
+                var bar = bars[key] ?? DayBar(day: day, family: family, tokens: 0, cost: .zero)
                 bar.tokens += t; bar.cost += c
                 bars[key] = bar
 
-                var m = models[model] ?? (0, 0)
+                var m = models[model] ?? (0, .zero)
                 m.0 += t
-                m.1 = (m.1 != nil && cost != nil) ? m.1! + cost! : nil
+                m.1 += c
                 models[model] = m
             }
         }

@@ -469,6 +469,6 @@ struct RequestIdentityTests {
         rig.store.grokUsage = usage.grok
 
         #expect(usage.claude.today.tokens == 150)
-        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == 0.25)
+        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == CostEstimate(known: 0.25, knownTokens: 150))
     }
 }

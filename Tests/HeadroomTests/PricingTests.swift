@@ -279,12 +279,12 @@ struct PricingTests {
         let ledger = Ledger(home: rig.box.home, appSupport: rig.box.appSupport, pricing: rig.pricing)
 
         let before = await refreshLedger(ledger).claude
-        #expect(abs(before.today.cost - (100 * 1e-6 + 50 * 2e-6)) < 1e-15)
+        #expect(abs(before.today.cost.known - (100 * 1e-6 + 50 * 2e-6)) < 1e-15 && before.today.cost.coverage == .complete)
         _ = try await rig.pricing.update().get()
         let after = await refreshLedger(ledger).claude
 
         #expect(after.today.tokens == 150)
-        #expect(abs(after.today.cost - (100 * 2e-6 + 50 * 4e-6)) < 1e-15)
+        #expect(abs(after.today.cost.known - (100 * 2e-6 + 50 * 4e-6)) < 1e-15 && after.today.cost.coverage == .complete)
     }
 
     /// The app's download action: with the built-in snapshot verified it sends nothing, and it never touches provider
@@ -309,7 +309,8 @@ struct PricingTests {
     @Test func copyCallsCostsEstimatesAndDisclosesTheDownload() {
         let bundled = PricingText.summary(PricingInfo(source: .bundled, revision: Self.revisionA, retrieved: "2026-10-15T02:39:52Z"))
         #expect(bundled.contains("estimates") && bundled.contains("not your Anthropic bill") && bundled.contains("aaaaaaa"))
-        #expect(bundled.contains("2026-10-15") && bundled.contains("built in") && bundled.contains("$0"))
+        #expect(bundled.contains("2026-10-15") && bundled.contains("built in"))
+        #expect(bundled.contains("never $0") && bundled.contains("n/a") && bundled.contains("Grok CLI"))
         #expect(PricingText.summary(.unavailable).contains("can't be estimated"))
 
         let disclosure = PricingText.downloadDisclosure

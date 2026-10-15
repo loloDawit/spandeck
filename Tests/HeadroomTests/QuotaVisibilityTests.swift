@@ -362,8 +362,8 @@ struct QuotaVisibilityTests {
 
         #expect(transport.requests.isEmpty)
         #expect(usage.claude.today.tokens == 150)
-        #expect(usage.claude.today.cost > 0)
-        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == 0.25)
+        #expect(usage.claude.today.cost.known > 0 && usage.claude.today.cost.coverage == .complete)
+        #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == CostEstimate(known: 0.25, knownTokens: 150))
     }
 
     // 10. Upgrade: saved switches are honored at launch; absent keys mean "shown"; launch applies no extra refresh.

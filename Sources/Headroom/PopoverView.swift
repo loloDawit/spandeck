@@ -194,8 +194,9 @@ struct StatTile: View {
             Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
             Text(totals.map { Fmt.tokens($0.tokens) } ?? "--")
                 .font(.system(size: 16, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(totals.map { Fmt.usd($0.cost) } ?? " ")
+            Text(totals.map { Fmt.cost($0.cost) } ?? " ")
                 .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(.secondary)
+                .help(totals.map { Fmt.costDetail($0.cost) } ?? "")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
@@ -218,11 +219,21 @@ struct DailyChart: View {
     var body: some View {
         let today = Calendar.current.startOfDay(for: Date())
         let end = Calendar.current.date(byAdding: .day, value: 1, to: today)!
-        Chart(summary.bars) { b in
-            BarMark(x: .value("Day", b.day, unit: .day),
-                    y: .value(metric.rawValue, metric == .cost ? b.cost : Double(b.tokens) / 1e6))
-                .foregroundStyle(by: .value("Model", b.family))
-                .cornerRadius(1.5)
+        Chart {
+            ForEach(summary.bars) { b in
+                BarMark(x: .value("Day", b.day, unit: .day), y: .value(metric.rawValue, value(b)))
+                    .foregroundStyle(by: .value("Model", b.family))
+                    .cornerRadius(1.5)
+            }
+            // R7: a day whose cost isn't fully known shows only its priced part, marked "?" so it doesn't read as a
+            // complete (or zero) cost. Token bars are unaffected.
+            if metric == .cost {
+                ForEach(summary.incompleteCostDays, id: \.day) { d in
+                    PointMark(x: .value("Day", d.day, unit: .day), y: .value(metric.rawValue, d.known))
+                        .symbolSize(0)
+                        .annotation(position: .top, spacing: 1) { Text("?").font(.system(size: 9, weight: .bold)) }
+                }
+            }
         }
         .chartForegroundStyleScale(domain: families, range: families.enumerated().map { Palette.familyColor($1, index: $0) })
         .chartXScale(domain: summary.monthStart...end)
@@ -244,6 +255,8 @@ struct DailyChart: View {
         .chartLegend(position: .bottom, alignment: .leading, spacing: 6)
         .frame(height: height)
     }
+
+    private func value(_ b: DayBar) -> Double { metric == .cost ? b.cost.known : Double(b.tokens) / 1e6 }
 }
 
 // MARK: - System
@@ -576,7 +589,8 @@ struct UsageCard: View {
                 HStack {
                     Text("Claude 5h window").foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(Fmt.tokens(w.tokens)) tokens  \(Fmt.usd(w.cost))").monospacedDigit()
+                    Text("\(Fmt.tokens(w.tokens)) tokens  \(Fmt.cost(w.cost))").monospacedDigit()
+                        .help(Fmt.costDetail(w.cost))
                 }
                 .font(.system(size: 11))
             }
@@ -592,6 +606,9 @@ struct UsageCard: View {
                 }
                 DailyChart(summary: u, metric: metric, height: 190)
                 ModelList(models: Array(u.models.prefix(8)), families: Array(Set(u.bars.map(\.family))).sorted())
+                if let note = PricingText.coverageNote(claude: store.claudeUsage, grok: grok) {
+                    Text(note).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 Text(store.indexing ?? "Reading usage...").font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -613,12 +630,13 @@ struct ProviderRow: View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 6, height: 6)
             Text(name).frame(width: 46, alignment: .leading)
-            ForEach([summary?.today, summary?.week, summary?.month].indices, id: \.self) { i in
-                let t = [summary?.today, summary?.week, summary?.month][i]
-                Text(t.map { "\(Fmt.tokens($0.tokens)) \(Fmt.usd($0.cost))" } ?? "--")
+            ForEach(0..<3, id: \.self) { i in
+                let t: Totals? = [summary?.today, summary?.week, summary?.month][i]
+                Text(t.map { "\(Fmt.tokens($0.tokens)) \(Fmt.cost($0.cost))" } ?? "--")
                     .monospacedDigit().foregroundStyle(.secondary)
                     .lineLimit(1).minimumScaleFactor(0.75)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help(t.map { Fmt.costDetail($0.cost) } ?? "")
             }
         }
         .font(.system(size: 10))
@@ -637,7 +655,8 @@ struct ModelList: View {
                     Text(m.model).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Text(Fmt.tokens(m.tokens)).monospacedDigit().foregroundStyle(.secondary)
-                    Text(Fmt.usd(m.cost)).monospacedDigit().frame(width: 52, alignment: .trailing)
+                    Text(Fmt.cost(m.cost)).monospacedDigit().frame(width: 52, alignment: .trailing)
+                        .help(Fmt.costDetail(m.cost))
                 }
                 .font(.system(size: 10))
             }
@@ -677,13 +696,35 @@ enum PricingText {
         switch info.source {
         case .bundled:
             return "Costs are estimates at list prices from LiteLLM \(short(info.revision)) (reviewed \(date), built in), "
-                + "not your Anthropic bill. Models without a listed price count as $0."
+                + "not your Anthropic bill. " + unpricedRule
         case .downloaded:
             return "Costs are estimates at list prices from LiteLLM \(short(info.revision)) (downloaded \(date)), "
-                + "not your Anthropic bill. Models without a listed price count as $0."
+                + "not your Anthropic bill. " + unpricedRule
         case .unavailable:
-            return "Claude costs can't be estimated: no verified price list. Claude models count as $0."
+            return "Claude costs can't be estimated: no verified price list, so Claude costs show n/a. "
+                + "Grok amounts are as reported by the Grok CLI."
         }
+    }
+
+    /// R7: what happens to usage without a known cost, and where Grok amounts come from.
+    static let unpricedRule = "Models missing from that list (often newer ones) aren't priced, and some Grok turns have "
+        + "no reported cost: totals that include either show ≥ (known part only) or n/a, never $0. Grok amounts are as "
+        + "reported by the Grok CLI."
+
+    /// Why the 30-day estimate is incomplete, naming the models; nil when every cost is known. An unpriced Claude model
+    /// and a Grok model whose turns reported no cost are different causes, so they're named separately. The cause comes
+    /// from which summary a model is in, never from its name (a Grok model ID can be any string).
+    static func coverageNote(claude: UsageSummary?, grok: UsageSummary?) -> String? {
+        func list(_ m: [String]) -> String {
+            m.prefix(3).joined(separator: ", ") + (m.count > 3 ? " and \(m.count - 3) more" : "")
+        }
+        let priced = claude?.uncostedModels ?? [], reported = grok?.uncostedModels ?? []
+        guard !priced.isEmpty || !reported.isEmpty, let total = UsageSummary.combine(claude, grok) else { return nil }
+        var causes: [String] = []
+        if !priced.isEmpty { causes.append("no price for \(list(priced))") }
+        if !reported.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(reported)) turns") }
+        return "≥ partial estimate, n/a no estimate: " + causes.joined(separator: "; ") + ". "
+            + "\(Fmt.costDetail(total.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
     }
 
     static var downloadDisclosure: String {
