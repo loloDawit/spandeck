@@ -34,7 +34,7 @@ final class ProviderServices {
 
     init(store: Store, env: AppEnvironment) {
         self.store = store
-        pricing = Pricing(directory: env.appSupport, transport: env.pricingTransport)
+        pricing = Pricing(directory: env.appSupport, transport: env.pricingTransport, now: env.now)
         ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,

@@ -163,13 +163,15 @@ final class Pricing: @unchecked Sendable {
     private let transport: HTTPTransport
     private let pin: PricingPin
     private let bundle: PricingBundle
+    private let now: @Sendable () -> Date
 
     init(directory: URL, transport: HTTPTransport, pin: PricingPin = PricingSnapshot.pin,
-         bundle: PricingBundle = PricingSnapshot.bundled) {
+         bundle: PricingBundle = PricingSnapshot.bundled, now: @escaping @Sendable () -> Date = { Date() }) {
         self.file = directory.appendingPathComponent("pricing-snapshot.json")
         self.transport = transport
         self.pin = pin
         self.bundle = bundle
+        self.now = now
     }
 
     var info: PricingInfo { lock.withLock { _info } }
@@ -195,7 +197,7 @@ final class Pricing: @unchecked Sendable {
 
     /// The one explicit download: the pinned revision only, verified before it is parsed, validated, and written
     /// atomically before it replaces anything. On any failure the prices in use stay as they are.
-    func update(now: Date = Date()) async -> Result<PricingInfo, PricingUpdateError> {
+    func update() async -> Result<PricingInfo, PricingUpdateError> {
         let start: PricingUpdateError? = lock.withLock {
             if _info.source != .unavailable && _info.revision == pin.revision { return .alreadyCurrent }
             if updating { return .inProgress }
@@ -214,7 +216,7 @@ final class Pricing: @unchecked Sendable {
         guard Self.sha256(data) == pin.sourceSHA256 else { return .failure(.checksumMismatch) }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let t = Self.extract(json), Self.valid(t) else { return .failure(.invalidData) }
-        let retrieved = ISO8601DateFormatter().string(from: now)
+        let retrieved = ISO8601DateFormatter().string(from: now())
         let saved = Installed(revision: pin.revision, sourceSHA256: pin.sourceSHA256, retrieved: retrieved, table: t)
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
