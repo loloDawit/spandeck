@@ -216,7 +216,8 @@ for row in "${ROWS[@]}"; do
   if gh api "repos/$REPO/issues/$parent/sub_issues?per_page=100" --jq '.[].number' | grep -qx "$num"; then
     continue
   fi
-  current=$(gh api "repos/$REPO/issues/$num/parent" --jq '.number' 2>/dev/null || true)
+  # A 404 (no parent) still prints its JSON body on stdout, so only trust the output when gh succeeds.
+  current=$(gh api "repos/$REPO/issues/$num/parent" --jq '.number' 2>/dev/null) || current=""
   if [[ -n "$current" ]]; then
     warn "#$num is already a sub-issue of #$current; left unchanged"
     continue
