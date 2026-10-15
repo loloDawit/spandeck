@@ -5,7 +5,7 @@ Status: current-source inventory plus proposed target; no refactor has happened 
 ## Present fork baseline (Headroom v1.1)
 - `Sources/Headroom/main.swift`: lifecycle, menu bar, timers.
 - `Dependencies.swift`, `ProviderServices.swift`: injectable Keychain/network/process/login-item/preferences seams (#12) and the launch path, including the Claude plan-limits consent (#15) and the menu-bar switches that pause quota polling (#19).
-- `Clients.swift`: Claude OAuth Keychain read (opt-in); unofficial usage endpoint; Grok token/file integration (opt-in, #17), with typed failures (`GrokError`, `GrokRefresh`) that the popover's `GrokSection` shows instead of hiding Grok (#21).
+- `Clients.swift`: Claude OAuth Keychain read (opt-in); unofficial usage endpoint; Grok token/file integration (opt-in, #17), with typed failures (`GrokError`, `GrokRefresh`) that the popover's `GrokSection` shows instead of hiding Grok (#21). Both quota requests send `ProviderRequest.userAgent` (#24); `ProviderServices` pauses a provider after a 401 using the injectable clock `AppEnvironment.now`.
 - `Ledger.swift`: local Claude JSONL/Grok usage scanning, deduplication, price lookup, disk cache.
 - `Store.swift`, `StatusRenderer.swift`, `PopoverView.swift`, `Hover.swift`: state and UI.
 - `SystemSampler.swift`, `Consumers.swift`: hardware and per-process metrics.
