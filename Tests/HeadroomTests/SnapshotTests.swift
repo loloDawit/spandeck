@@ -288,4 +288,31 @@ struct SnapshotTests {
         #expect(try Self.read(out, "a.png") == "new a")
         #expect(SnapshotOutput.describe(try #require(caught), folder: out).contains("couldn't remove a previous copy"))
     }
+
+    /// A folder found after an earlier output was set aside, and that output can't be put back: reported as partial,
+    /// never as "Nothing was written".
+    @Test func occupiedNameWithFailedRestoreIsPartial() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "a.png", "old a")
+        var planted = false
+        let plantThenFailRestore: (String, String) -> Int32 = { from, to in
+            if from.contains(".old-") { errno = EPERM; return -1 } // putting a.png back fails
+            if !planted {
+                planted = true
+                try? FileManager.default.createDirectory(at: out.appendingPathComponent("b.png"), withIntermediateDirectories: true)
+            }
+            return rename(from, to)
+        }
+        var caught: Error?
+        do {
+            try SnapshotOutput.write([("a.png", Data("new a".utf8)), ("b.png", Data("new b".utf8))], in: out,
+                                     move: plantThenFailRestore)
+        } catch { caught = error }
+        #expect(caught as? SnapshotWriteError == .partial(EEXIST))
+        let text = SnapshotOutput.describe(try #require(caught), folder: out)
+        #expect(!text.contains("Nothing was written") && text.contains("may have been replaced or removed"))
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("a.png").path)) // really hidden
+    }
 }

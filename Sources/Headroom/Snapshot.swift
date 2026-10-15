@@ -300,7 +300,8 @@ enum SnapshotOutput {
             var st = stat()
             guard lstat(t.final, &st) == 0 else { continue }
             guard replaceable(t.final) else {
-                _ = rollBack()
+                // "Nothing was written" only if every earlier set-aside output was put back.
+                guard rollBack() else { throw SnapshotWriteError.partial(EEXIST) }
                 throw SnapshotWriteError.occupied(URL(fileURLWithPath: t.final).lastPathComponent)
             }
             let aside = folder.appendingPathComponent(".\(URL(fileURLWithPath: t.final).lastPathComponent).old-\(UUID().uuidString)").path
