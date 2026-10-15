@@ -268,8 +268,8 @@ struct LaunchPathTests {
         #expect(GrokSection.select(services.store) == .failure(.authRejected(.succeeded)))
     }
 
-    // Acceptance 4: the ledger cache keeps transcript paths (#5, R8) but never transcript content.
-    @Test func ledgerCacheKeepsPathsNotContent() async throws {
+    // Acceptance 4, flipped by R8: the ledger cache keeps neither transcript paths nor content (#5, #33).
+    @Test func ledgerCacheKeepsNoPathsOrContent() async throws {
         let box = try Sandbox()
         let canary = "CANARY-PROMPT-7f3a"
         try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
@@ -282,8 +282,9 @@ struct LaunchPathTests {
         let cache = try Data(contentsOf: box.appSupport.appendingPathComponent("claude-ledger.json"))
         let json = try #require(try JSONSerialization.jsonObject(with: cache) as? [String: Any])
         let files = try #require(json["files"] as? [String: Any])
-        #expect(files.keys.contains { $0.hasSuffix("-Users-synthetic-proj/s1.jsonl") })
-        #expect(!String(decoding: cache, as: UTF8.self).contains(canary))
+        #expect(files.count == 1 && !files.keys.contains { $0.contains("synthetic-proj") || $0.contains("s1.jsonl") })
+        let text = String(decoding: cache, as: UTF8.self)
+        #expect(!text.contains(canary) && !text.contains("synthetic-proj") && !text.contains("msg_1") && !text.contains("req_1"))
     }
 
     // Acceptance 5, flipped by R6: launch downloads nothing; offline, a model in the built-in snapshot is priced.
