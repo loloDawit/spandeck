@@ -39,7 +39,7 @@ struct PricingTests {
             pricing = Pricing(directory: box.appSupport, transport: transport, pin: pin, bundle: bundle,
                               now: { Date(timeIntervalSince1970: 1_800_000_000) })
         }
-        var installed: URL { box.appSupport.appendingPathComponent("pricing-snapshot.json") }
+        var installed: URL { box.appSupport.appendingPathComponent("pricing-source.json") }
         func files() throws -> [String] { try FileManager.default.contentsOfDirectory(atPath: box.appSupport.path).sorted() }
     }
 
@@ -208,7 +208,7 @@ struct PricingTests {
 
         let info = try result.get()
         #expect(info.source == .downloaded && transport.started == 1)
-        #expect(try rig.files() == ["pricing-snapshot.json"])
+        #expect(try rig.files() == ["pricing-source.json"])
         #expect(Pricing(directory: rig.box.appSupport, transport: FakeTransport(), pin: Self.pin(for: data),
                         bundle: Self.bundle()).load().source == .downloaded)
     }
@@ -224,21 +224,26 @@ struct PricingTests {
         #expect(rig.pricing.info == working)
 
         try FileManager.default.removeItem(at: rig.installed)
+        // #28 review: a saved file is trusted only if its bytes still hash to the compiled pin. Altered prices that
+        // stay in range, or metadata claiming the pin, don't make it trusted.
         let pinned = Self.pin(for: data)
-        let table = #"{"claude-synth-1":{"input":0.0005,"output":0.0005,"cacheWrite":0,"cacheWrite1h":0,"cacheRead":0}}"#
-        func saved(_ revision: String, _ sha: String, _ table: String) -> String {
-            #"{"format":1,"revision":"\#(revision)","sourceSHA256":"\#(sha)","retrieved":"x","table":\#(table)}"#
+        let altered = Data(String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: #""input_cost_per_token":2e-06"#, with: #""input_cost_per_token":0.0005"#).utf8)
+        #expect(altered != data && Pricing.table(fromSource: altered) != nil) // still a valid, in-range table
+        let claimsPin = #"{"format":1,"revision":"\#(Self.revisionB)","sourceSHA256":"\#(pinned.sourceSHA256)","retrieved":"x","table":{"claude-synth-1":{"input":0.0005,"output":0.0005,"cacheWrite":0,"cacheWrite1h":0,"cacheRead":0}}}"#
+        for damaged in [Data("{\"claude-synth-1\":".utf8), altered, Data(claimsPin.utf8), Data()] {
+            try damaged.write(to: rig.installed)
+            #expect(rig.pricing.load().source == .bundled, "\(String(decoding: damaged, as: UTF8.self))")
+            #expect(abs(try #require(rig.pricing.cost(model: "claude-synth-1", Agg(input: 100))) - 1e-4) < 1e-15)
         }
-        for damaged in ["{\"format\":1,\"revi",                                      // truncated
-                        saved(Self.revisionB, pinned.sourceSHA256, "{}"),              // empty table
-                        saved(String(repeating: "c", count: 40), pinned.sourceSHA256, table), // another revision
-                        saved(Self.revisionB, String(repeating: "0", count: 64), table)] {   // another file
-            try Data(damaged.utf8).write(to: rig.installed)
-            #expect(rig.pricing.load().source == .bundled, "\(damaged)")
-        }
-        // Control: the same envelope for the pinned revision and file is accepted.
-        try Data(saved(Self.revisionB, pinned.sourceSHA256, table).utf8).write(to: rig.installed)
+        // The leftover envelope file from earlier builds of this PR is ignored too.
+        try Data(claimsPin.utf8).write(to: rig.box.appSupport.appendingPathComponent("pricing-snapshot.json"))
+        try FileManager.default.removeItem(at: rig.installed)
+        #expect(rig.pricing.load().source == .bundled)
+        // Control: the exact pinned bytes are accepted.
+        try data.write(to: rig.installed)
         #expect(rig.pricing.load().source == .downloaded)
+        #expect(abs(try #require(rig.pricing.cost(model: "claude-synth-1", Agg(input: 100))) - 2e-4) < 1e-15)
     }
 
     // MARK: Effect on usage

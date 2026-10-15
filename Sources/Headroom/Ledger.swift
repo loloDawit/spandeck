@@ -145,20 +145,13 @@ final class Pricing: @unchecked Sendable {
     /// USD per token above which a price is treated as malformed ($1,000 per million tokens).
     static let maxPrice = 1e-3
 
-    private struct Installed: Codable {
-        var format = 1
-        var revision: String
-        var sourceSHA256: String
-        var retrieved: String
-        var table: [String: Price]
-    }
-
     private let lock = NSLock()
     private var table: [String: Price] = [:]
     private var _info = PricingInfo.unavailable
     private var _generation = 0
     private var updating = false
-    /// Where an explicitly downloaded snapshot is kept; distinct from the legacy `pricing.json`.
+    /// The explicitly downloaded upstream file, kept byte for byte so its SHA-256 can be checked against the compiled
+    /// pin on every load (#28 review). Distinct from the legacy `pricing.json`.
     private let file: URL
     private let transport: HTTPTransport
     private let pin: PricingPin
@@ -167,7 +160,7 @@ final class Pricing: @unchecked Sendable {
 
     init(directory: URL, transport: HTTPTransport, pin: PricingPin = PricingSnapshot.pin,
          bundle: PricingBundle = PricingSnapshot.bundled, now: @escaping @Sendable () -> Date = { Date() }) {
-        self.file = directory.appendingPathComponent("pricing-snapshot.json")
+        self.file = directory.appendingPathComponent("pricing-source.json")
         self.transport = transport
         self.pin = pin
         self.bundle = bundle
@@ -178,14 +171,15 @@ final class Pricing: @unchecked Sendable {
     /// Changes whenever the table in use changes, so cached cost summaries are recomputed.
     var generation: Int { lock.withLock { _generation } }
 
-    /// Installs local prices: a downloaded snapshot of the pinned revision if one verifies, else the built-in
-    /// snapshot if it verifies, else none (costs unavailable). Never touches the network.
+    /// Installs local prices: the downloaded pinned file if its bytes still have the pinned SHA-256 and yield a valid
+    /// table, else the built-in snapshot if it verifies, else none (costs unavailable). Nothing stored next to the
+    /// download is trusted; only the compiled pin. Never touches the network.
     @discardableResult
     func load() -> PricingInfo {
-        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Installed.self, from: data),
-           saved.format == 1, saved.revision == pin.revision, saved.sourceSHA256 == pin.sourceSHA256,
-           Self.valid(saved.table) {
-            return install(saved.table, PricingInfo(source: .downloaded, revision: saved.revision, retrieved: saved.retrieved))
+        if let data = try? Data(contentsOf: file), Self.sha256(data) == pin.sourceSHA256, let t = Self.table(fromSource: data) {
+            let saved = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now()
+            return install(t, PricingInfo(source: .downloaded, revision: pin.revision,
+                                          retrieved: ISO8601DateFormatter().string(from: saved)))
         }
         let text = Data(bundle.tableJSON.utf8)
         if Self.sha256(text) == bundle.tableSHA256, let t = try? JSONDecoder().decode([String: Price].self, from: text),
@@ -214,16 +208,17 @@ final class Pricing: @unchecked Sendable {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { return .failure(.http(status)) }
         guard Self.sha256(data) == pin.sourceSHA256 else { return .failure(.checksumMismatch) }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let t = Self.extract(json), Self.valid(t) else { return .failure(.invalidData) }
-        let retrieved = ISO8601DateFormatter().string(from: now())
-        let saved = Installed(revision: pin.revision, sourceSHA256: pin.sourceSHA256, retrieved: retrieved, table: t)
+        guard let t = Self.table(fromSource: data) else { return .failure(.invalidData) }
+        let time = now()
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(saved).write(to: file, options: .atomic)
+            try data.write(to: file, options: .atomic)
+            // The retrieval time shown is the file's date; it isn't trusted for anything.
+            try FileManager.default.setAttributes([.modificationDate: time], ofItemAtPath: file.path)
         } catch {
             return .failure(.writeFailed)
         }
+        let retrieved = ISO8601DateFormatter().string(from: time)
         return .success(install(t, PricingInfo(source: .downloaded, revision: pin.revision, retrieved: retrieved)))
     }
 
@@ -235,6 +230,13 @@ final class Pricing: @unchecked Sendable {
             _generation += 1
         }
         return info
+    }
+
+    /// The validated Claude table in an upstream LiteLLM file, or nil.
+    static func table(fromSource data: Data) -> [String: Price]? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let t = extract(json), valid(t)
+        else { return nil }
+        return t
     }
 
     /// Claude entries with input and output prices; missing cache prices use Anthropic's usual multiples. The same
