@@ -342,9 +342,12 @@ struct LedgerCacheTests {
         for name in ["pricing-source.json", "pricing.json", "unrelated.txt"] {
             try Data(name.utf8).write(to: rig.box.appSupport.appendingPathComponent(name))
         }
-        try Data("partial".utf8).write(to: rig.box.appSupport.appendingPathComponent(".\(Ledger.keyName).tmp-x"))
         let ledger = rig.ledger()
         _ = await Self.tokens(ledger)
+        // Planted after launch (which sweeps leftovers), so only the clear can remove them.
+        for name in [".\(Ledger.keyName).tmp-x", ".\(Ledger.cacheName).tmp-y"] {
+            try Data("partial".utf8).write(to: rig.box.appSupport.appendingPathComponent(name))
+        }
         let transcripts = try rig.box.snapshot(".claude")
 
         #expect(await Self.clear(ledger) == nil)
