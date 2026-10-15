@@ -96,6 +96,9 @@ struct AppEnvironment {
     var preferences: PreferenceStore
     var home: URL
     var appSupport: URL
+    /// Time source for retry pauses (Claude 401/429, Grok 401) and the `grok models` throttle, so tests can advance
+    /// time instead of sleeping. Credential expiry checks still use the system clock.
+    var now: @Sendable () -> Date = { Date() }
 
     static var live: AppEnvironment {
         let providerSession: URLSession = {

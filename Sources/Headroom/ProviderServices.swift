@@ -10,7 +10,19 @@ final class ProviderServices {
     private let claudeClient: ClaudeLimitsClient
     private let grokClient: GrokClient
     private let preferences: PreferenceStore
+    private let now: @Sendable () -> Date
     private var claudeBackoffUntil = Date.distantPast
+    /// R9: after a provider rejects the credential, no credential read or request until the pause ends. Unlike the 429
+    /// backoff, `force` doesn't skip it and consent or switch changes don't clear it, so nothing resends a rejected
+    /// credential sooner. Only a newer, current 401 sets it; a success clears it. Kept in memory only.
+    static let claudeAuthPause: TimeInterval = 300
+    /// Matches the `grok models` throttle (10 min), which stays separate.
+    static let grokAuthPause: TimeInterval = 600
+    private var claudeAuthPausedUntil = Date.distantPast
+    private var grokAuthPause: (until: Date, failure: GrokError)?
+    /// Counts Claude refreshes started; only the newest one may publish, so an older 401 can't pause collection after a
+    /// newer success (R9).
+    private var claudeRefreshesStarted = 0
     /// Bumped on every consent or menu-bar switch change, so a request started under an earlier choice can't publish its result.
     private var claudeConsentGeneration = 0
     private var grokConsentGeneration = 0
@@ -26,8 +38,9 @@ final class ProviderServices {
         ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,
-                                runner: env.processRunner)
+                                runner: env.processRunner, now: env.now)
         preferences = env.preferences
+        now = env.now
         claudeShown = preferences.bool(forKey: Prefs.showClaude, default: true)
         grokShown = preferences.bool(forKey: Prefs.showGrok, default: true)
         store.claudeLimitsEnabled = preferences.bool(forKey: Prefs.claudeLimits)
@@ -72,8 +85,8 @@ final class ProviderServices {
         return on
     }
 
-    /// One refresh after a switch was turned on. Collects only under existing consent; the Claude 429 backoff and the
-    /// `grok models` throttle still apply.
+    /// One refresh after a switch was turned on. Collects only under existing consent; the Claude 429 backoff, the
+    /// 401 pauses and the `grok models` throttle still apply.
     @MainActor func resumeQuota(_ provider: QuotaSwitch) async {
         switch provider {
         case .claude: await refreshClaude()
@@ -128,7 +141,7 @@ final class ProviderServices {
     /// so they stay off until the user opts in (#15).
     var claudeLimitsEnabled: Bool { preferences.bool(forKey: Prefs.claudeLimits) }
 
-    /// Records the user's choice. Turning it off clears what was shown and any backoff.
+    /// Records the user's choice. Turning it off clears what was shown and any 429 backoff, but not a 401 pause.
     @MainActor func setClaudeLimitsEnabled(_ on: Bool) {
         claudeConsentGeneration += 1
         preferences.set(on, forKey: Prefs.claudeLimits)
@@ -152,34 +165,53 @@ final class ProviderServices {
         pricing.load()
     }
 
-    /// Fetches Claude plan limits if the user opted in and the gauge isn't hidden, unless backing off after a 429.
-    /// `force` (manual refresh, wake) skips the backoff but never the consent or menu-bar switch check.
+    /// Fetches Claude plan limits if the user opted in and the gauge isn't hidden, unless paused after a 401 or backing
+    /// off after a 429. `force` (manual refresh, enabling consent) skips the 429 backoff only: never the 401 pause, the
+    /// consent or the menu-bar switch check.
     @MainActor func refreshClaude(force: Bool = false) async {
         guard claudeCollecting else { return }
-        guard force || Date() >= claudeBackoffUntil else { return }
+        guard now() >= claudeAuthPausedUntil else {
+            // No Keychain read or request. Show the rejection again in case hiding or consent changes cleared it.
+            store.claudeError = ClientError.http(401).localizedDescription
+            store.claudeAvailable = true
+            return
+        }
+        guard force || now() >= claudeBackoffUntil else { return }
         let generation = claudeConsentGeneration
+        claudeRefreshesStarted += 1
+        let refresh = claudeRefreshesStarted
         let result: Result<ClaudeLimits, Error>
         do { result = .success(try await claudeClient.fetch()) } catch { result = .failure(error) }
-        // Drop the result if the user changed their choice while the request was in flight (even off and on again).
-        guard claudeCollecting, generation == claudeConsentGeneration else { return }
+        // Drop the result if the user changed their choice while the request was in flight (even off and on again),
+        // or if a newer refresh started meanwhile: that one publishes instead.
+        guard claudeCollecting, generation == claudeConsentGeneration, refresh == claudeRefreshesStarted else { return }
         do {
             store.claudeLimits = try result.get()
             store.claudeError = nil
             store.claudeAvailable = true
+            claudeAuthPausedUntil = .distantPast
         } catch ClientError.notConfigured {
             store.claudeAvailable = false
             store.claudeLimits = nil
         } catch {
             store.claudeAvailable = true
             store.claudeError = error.localizedDescription
-            if case ClientError.http(429) = error { claudeBackoffUntil = Date().addingTimeInterval(300) }
+            if case ClientError.http(429) = error { claudeBackoffUntil = now().addingTimeInterval(300) }
+            if case ClientError.http(401) = error { claudeAuthPausedUntil = now().addingTimeInterval(Self.claudeAuthPause) }
         }
     }
 
-    /// Fetches Grok credits if the user opted in and the gauge isn't hidden. Hiding it mid-fetch stops the fetch at
-    /// its next step, like withdrawing consent.
+    /// Fetches Grok credits if the user opted in and the gauge isn't hidden, unless paused after the key was still
+    /// rejected following recovery (R9). Hiding it mid-fetch stops the fetch at its next step, like withdrawing consent.
     @MainActor func refreshGrok() async {
         guard grokCollecting else { return }
+        if let pause = grokAuthPause, now() < pause.until {
+            // No key read, `grok models` run or request. Show the rejection again in case hiding or consent cleared it.
+            store.grokFailure = pause.failure
+            store.grokPlan = nil
+            store.grokAvailable = false
+            return
+        }
         let generation = grokConsentGeneration
         grokRefreshesStarted += 1
         let refresh = grokRefreshesStarted
@@ -197,11 +229,13 @@ final class ProviderServices {
             store.grokPlan = plan
             store.grokFailure = nil
             store.grokAvailable = true
+            grokAuthPause = nil
         case .failure(let error):
             // Every failure is shown; none hides Grok once the user opted in (#21). Only a temporary failure keeps
             // the last plan, which the UI labels stale.
             let failure = error as? GrokError ?? .unexpectedResponse
             store.grokFailure = failure
+            if case .authRejected = failure { grokAuthPause = (now().addingTimeInterval(Self.grokAuthPause), failure) }
             if !failure.isTemporary {
                 store.grokPlan = nil
                 store.grokAvailable = false

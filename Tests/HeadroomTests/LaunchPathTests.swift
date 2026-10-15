@@ -80,8 +80,8 @@ struct LaunchPathTests {
         #expect(usage.url?.path == "/api/oauth/usage")
         #expect(usage.value(forHTTPHeaderField: "Authorization") == "Bearer CANARY-NOT-A-TOKEN")
         #expect(usage.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
-        // Borrowed Claude Code identity (#4, R9).
-        #expect(usage.value(forHTTPHeaderField: "User-Agent") == "claude-code/2.1 headroom")
+        // SpanDeck's own identity, not Claude Code's (R9).
+        #expect(usage.value(forHTTPHeaderField: "User-Agent") == ProviderRequest.userAgent)
         #expect(services.store.claudeLimits?.session?.percent == 42)
         #expect(services.store.claudeAvailable)
 

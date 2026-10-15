@@ -1,5 +1,13 @@
 import Foundation
 
+/// How SpanDeck identifies itself to the provider quota endpoints (R9). It names this app and says the integration is
+/// unofficial. It never names an official client, and carries no version (the bundle still reports upstream Headroom's),
+/// user, machine, install or credential details. If a provider rejects it, the request fails like any other; there is
+/// no fallback to another identity.
+enum ProviderRequest {
+    static let userAgent = "SpanDeck (unofficial quota monitor)"
+}
+
 // MARK: - Claude plan limits
 
 struct LimitEntry: Identifiable {
@@ -32,7 +40,8 @@ enum ClientError: LocalizedError {
         switch self {
         case .notLoggedIn(let m): return m
         case .notConfigured: return "Not set up"
-        case .http(401): return "Token expired, will retry"
+        // A 401 doesn't say why (expired, revoked or otherwise rejected), so the message doesn't guess (R9).
+        case .http(401): return "Claude rejected the sign-in (HTTP 401); sign in again in Claude Code if this continues. Retrying every 5 min"
         case .http(429): return "Rate limited, backing off"
         case .http(let c): return "HTTP \(c)"
         case .badResponse: return "Unexpected response"
@@ -87,7 +96,7 @@ final class ClaudeLimitsClient {
             "Authorization": "Bearer \(creds.token)",
             "anthropic-beta": "oauth-2025-04-20",
             "Accept": "application/json",
-            "User-Agent": "claude-code/2.1 headroom",
+            "User-Agent": ProviderRequest.userAgent,
         ], via: transport)
 
         var result = ClaudeLimits(all: [], plan: creds.plan, fetchedAt: Date())
@@ -221,7 +230,7 @@ enum GrokError: Error, Equatable {
             case .cliMissing?: why = "No Grok CLI at ~/.grok/bin/grok to refresh it."
             case nil: why = "The key was rejected."
             }
-            return why + " Sign in again with the Grok CLI."
+            return why + " Sign in again with the Grok CLI. Retrying every 10 min."
         case .accessDenied:
             return "The billing endpoint refused access; the response doesn't say why. It may depend on your account or plan."
         case .endpointUnavailable:
@@ -247,17 +256,20 @@ final class GrokClient {
     private let transport: HTTPTransport
     private let runner: ProcessRunner
     private let refreshLock = NSLock()
+    private let now: @Sendable () -> Date
     private var lastRefresh: Date?
     private var lastRefreshOutcome: GrokRefresh?
 
     /// A 401 before recovery; becomes `GrokError.authRejected` if recovery doesn't help.
     private struct Unauthorized: Error {}
 
-    init(home: URL, credentials: GrokCredentialSource, transport: HTTPTransport, runner: ProcessRunner) {
+    init(home: URL, credentials: GrokCredentialSource, transport: HTTPTransport, runner: ProcessRunner,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.grokHome = home.appendingPathComponent(".grok")
         self.credentials = credentials
         self.transport = transport
         self.runner = runner
+        self.now = now
     }
 
     private func auth() throws -> (key: String, expires: Date?) {
@@ -273,8 +285,8 @@ final class GrokClient {
     /// (nil if that run hasn't finished yet).
     private func refreshToken() async -> GrokRefresh? {
         let throttled: GrokRefresh?? = refreshLock.withLock {
-            if let last = lastRefresh, Date().timeIntervalSince(last) < 600 { return .some(lastRefreshOutcome) }
-            lastRefresh = Date()
+            if let last = lastRefresh, now().timeIntervalSince(last) < 600 { return .some(lastRefreshOutcome) }
+            lastRefresh = now()
             return .none
         }
         if case .some(let previous) = throttled { return previous }
@@ -330,7 +342,7 @@ final class GrokClient {
         [
             "Authorization": "Bearer \(key)",
             "Accept": "application/json",
-            "User-Agent": "grok-cli headroom",
+            "User-Agent": ProviderRequest.userAgent,
         ].forEach { req.setValue($1, forHTTPHeaderField: $0) }
         let data: Data, resp: URLResponse
         do {
