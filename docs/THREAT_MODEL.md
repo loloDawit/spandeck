@@ -10,7 +10,7 @@ Assets: Claude OAuth bearer tokens; local prompts, source code, filenames and to
 Boundaries:
 1. macOS process -> login Keychain, through `/usr/bin/security`.
 2. Process -> `~/.claude/projects`, `~/.config/claude/projects`, and Grok local files.
-3. Process -> external provider endpoints and GitHub-hosted LiteLLM model pricing.
+3. Process -> external provider endpoints and, only on an explicit user download, the pinned GitHub-hosted LiteLLM price file (#27).
 4. Process -> `~/Library/Application Support/Headroom` cached usage records.
 5. Process -> ServiceManagement login-item registration.
 6. Proposed future telemetry -> local adapter/store/UI.
@@ -21,7 +21,7 @@ Boundaries:
 | Credential exposure | `Clients.swift` extracts a Claude OAuth token from Keychain and calls an unofficial usage API; Grok key read from `~/.grok/auth.json` | **Claude: off by default with inline consent (#15). Grok: off by default with consent; no `grok models` exec without it (#17). Hiding a provider's menu-bar gauge pauses its quota polling; showing it resumes only under existing consent (#19). Requests use SpanDeck's own User-Agent, and a 401 pauses that provider instead of resending the credential (#24).** Define a supported capability before any alternative credential path |
 | Secret-rich raw input | `Ledger.swift` parses session JSONL records containing potentially sensitive material | Persist only allowlisted derived metrics. Add tests asserting prompts, code and tool bodies never enter logs/cache |
 | Surprising persistence | Inherited: login item registered on initial launch | **Done (#15):** never registered automatically; enabled/disabled only from Settings; existing registrations untouched |
-| Accidental exfiltration | Provider HTTPS calls plus downloaded LiteLLM prices | Egress inventory/allowlist; no telemetry; privacy tests |
+| Accidental exfiltration | Provider HTTPS calls; LiteLLM prices are built in, with only a user-started, pinned, checksum-verified download (#27) | Egress inventory/allowlist; no telemetry; privacy tests |
 | Wrong or inflated numbers | Late streaming records, missing request IDs, overlap across adapters, unknown prices | Provenance and stable identity, fixture coverage, distinguish unknown from zero |
 | Supply-chain tampering | New upstream source, release DMG not yet Developer ID notarized | Pin reviewed commits, audit CI/dependencies, sign/notarize and verify releases |
 | Local disclosure | Usage history/cache and backups accessible to local account/processes | Data minimization, permissions, retention/deletion, avoid storing identifiers where not required |
