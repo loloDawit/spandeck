@@ -4,7 +4,7 @@ SpanDeck is a fork of [sandrich/headroom](https://github.com/sandrich/headroom),
 
 ## Development workflow
 1. Read [product charter](docs/PRODUCT.md), [architecture](docs/ARCHITECTURE.md), and [threat model](docs/THREAT_MODEL.md).
-2. Open or select an issue (once GitHub Issues has been enabled by the repository owner). Describe behavior, data-source assumptions, risk, and acceptance criteria.
+2. Open or select an issue, and check its status and owner in the [project](docs/PROJECT_MANAGEMENT.md). Describe behavior, data-source assumptions, risk, and acceptance criteria. Give the issue and your PR the matching milestone (`M0`–`M4`).
 3. Branch from `main` with a descriptive topic name. Do not implement unrelated changes in one PR.
 4. Run `swift test` and `swift build` on macOS 14+ with appropriate Swift/Xcode toolchain. Record any unavailable checks honestly.
 5. Describe evidence for changed accounting semantics and attach synthetic fixture coverage.
