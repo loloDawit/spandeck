@@ -44,6 +44,17 @@ struct WorkflowPolicyTests {
         #expect(release.contains("permissions: {}"))
     }
 
+    /// The token and secrets go only to the step that uses them (step `env:` is indented 10 spaces), never to a whole
+    /// job or workflow.
+    @Test func tokenOnlyInSteps() throws {
+        for (name, text) in try Self.files() {
+            for line in text.split(separator: "\n") where line.contains("github.token") || line.contains("secrets.") {
+                let indent = line.prefix { $0 == " " }.count
+                #expect(indent >= 10, "\(name): \(line)")
+            }
+        }
+    }
+
     @Test func checkoutDoesNotPersistCredentials() throws {
         for (name, text) in try Self.files() {
             let checkouts = text.components(separatedBy: "actions/checkout@").count - 1

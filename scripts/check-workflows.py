@@ -10,6 +10,7 @@ Fails (exit 1, one line per problem) when:
     (`read-all` / `write-all` never match);
   - an `actions/checkout` step doesn't set `persist-credentials: false`;
   - a `run:` script contains `${{ ... }}` (pass values through `env:` instead, to avoid script injection);
+  - `github.token` or `secrets.` appears outside a step (a workflow- or job-level `env:` hands it to every step);
   - a workflow uses `pull_request_target`;
   - a workflow file isn't listed in POLICY (new workflows need a reviewed entry).
 
@@ -56,6 +57,24 @@ def block(lines, start, parent_indent):
             break
         out.append(i)
     return out
+
+
+def in_step(lines, i):
+    """Whether lines[i] is inside a `- ` list item under a `steps:` key."""
+    level = indent(lines[i])
+    for k in range(i, -1, -1):
+        if not lines[k].strip() or lines[k].lstrip().startswith("#"):
+            continue
+        if indent(lines[k]) < level or (k == i and lines[k].lstrip().startswith("- ")):
+            text = lines[k].strip()
+            if text.startswith("- "):
+                # The list must belong to `steps:`, the nearest less-indented key above it.
+                for m in range(k - 1, -1, -1):
+                    if lines[m].strip() and indent(lines[m]) < indent(lines[k]):
+                        return lines[m].strip() == "steps:"
+                return False
+            level = indent(lines[k])
+    return False
 
 
 def permissions_at(lines, i):
@@ -134,6 +153,9 @@ def check(path, policy):
                 step = [lines[k].strip() for k in block(lines, i, step_indent)]
                 if "persist-credentials: false" not in step:
                     bad(i + 1, "actions/checkout without persist-credentials: false")
+        if "github.token" in line or "secrets." in line:
+            if not in_step(lines, i):
+                bad(i + 1, "token or secret outside a step; give it only to the step that needs it")
         r = re.match(r"^(\s*)(-\s+)?run:\s*(.*)$", line)
         if r:
             body = [r.group(3)] + [lines[k] for k in block(lines, i, len(r.group(1)))]

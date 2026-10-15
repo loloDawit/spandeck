@@ -106,6 +106,12 @@ class CheckerTests(unittest.TestCase):
         self.assert_rejected({"release.yml": RELEASE.replace('gh release view "$TAG"', 'gh release view "${{ inputs.tag }}"')},
                              "inside a run: script")
 
+    def test_token_only_in_steps(self):
+        job_env = RELEASE.replace("    env:\n      TAG:", "    env:\n      GH_TOKEN: ${{ github.token }}\n      TAG:")
+        self.assert_rejected({"release.yml": job_env}, "outside a step")
+        workflow_env = RELEASE.replace("permissions: {}\n", "permissions: {}\nenv:\n  T: ${{ secrets.X }}\n")
+        self.assert_rejected({"release.yml": workflow_env}, "outside a step")
+
     def test_pull_request_target_rejected(self):
         self.assert_rejected({"test.yml": TEST.replace("  pull_request:\n", "  pull_request_target:\n")},
                              "pull_request_target")
