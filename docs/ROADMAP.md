@@ -12,7 +12,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 |---|---|---|---|---|
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
 | Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
-| Next 2 | R11: SHA-pin actions, least `permissions`, signing / notarization plan | M0 | Pending, #37 | Workflow and doc change only. Validate with local lint; don't run hosted CI without the owner's approval. |
+| Next 2 | R11: SHA-pin actions, least `permissions`, signing / notarization plan | M0 | In progress, #37 | Workflow and doc change only. Validate with local lint; don't run hosted CI without the owner's approval. |
 | Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Open | Last unmet acceptance item of #3. Needs a supported Mac and a dedicated account. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
 | Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
@@ -33,10 +33,10 @@ From the security inventory in #3 ([`audits/0003-security-inventory.md`](audits/
 | R8 | Cache: opaque ids, `0600`/`0700`, migration, clear action | #33 → #34 | M1 | Merged [mocked] |
 | R9 | Honest User-Agent; back off after HTTP 401 | #24 → #25 | M1 | Merged [mocked] |
 | R10 | `--snapshot` limited to debug builds or synthetic data | #36 → #39 | M1 | Merged [mocked]; binaries not run |
-| R11 | CI / release hardening | #37 | M0 | **Pending** |
+| R11 | CI / release hardening | #37 | M0 | **In progress** |
 | R12 | Injectable dependencies and mocked launch tests | #12 → #14 | M0 | Merged |
 
-Done: 11 of 12 remediations (R1–R10, R12). Pending: R11 (#37).
+Done: 11 of 12 remediations (R1–R10, R12). In progress: R11 (#37).
 
 ## M0 — Security and accounting baseline (in progress)
 
@@ -50,7 +50,7 @@ Epic: #2. Research issues #3–#11 stay open until all their acceptance criteria
 - [ ] Checks for credential leakage and external egress. *Mocked launch-path tests show no credential read and no network request on default launch [mocked]; not observed at OS level.*
 - [ ] ADR: canonical events, source adapters, deduplication and storage (#9). *Blocked on #3, #5, #6, #7.*
 - [ ] Supported Claude observability surfaces and Bedrock coverage (#10). *Not started.*
-- [ ] CI, source-integrity and distribution audit (#11), including R11. *Not started.*
+- [ ] CI, source-integrity and distribution audit (#11), including R11. *R11 in progress (#37): pinned actions, least permissions, signing / notarization plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)); the rest of #11 not started.*
 
 **Exit:** known risks recorded, core arithmetic regression-tested, and first hardening changes planned with measurable acceptance criteria. *Status: risks recorded at code level; hardening planned and mostly merged; arithmetic regression fixtures (#6) and performance baseline (#8) missing.*
 

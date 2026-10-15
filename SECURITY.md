@@ -17,6 +17,6 @@ There is no SpanDeck stable/security-supported release yet. Fork commits, branch
 - No automatic credential extraction, raw prompt capture, or login-item setup. *Done for the Claude Keychain read and the login item (#15) and for Grok credentials and `grok models` (#17).*
 - Opt-in instrumentation that does not silently overwrite user configuration.
 - Measured data-retention limits and an explicit offboarding path.
-- Source and artifact verification, security tests, Developer ID signing/notarization before public release.
+- Source and artifact verification, security tests, Developer ID signing/notarization before public release. *Plan only: [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) (R11, #37); current builds are ad-hoc signed and not notarized.*
 
 See [the initial threat model](docs/THREAT_MODEL.md) and [roadmap](docs/ROADMAP.md).
