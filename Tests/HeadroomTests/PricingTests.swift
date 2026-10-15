@@ -191,8 +191,11 @@ struct PricingTests {
         rig.pricing.load()
 
         let first = Task { await rig.pricing.update() }
-        guard await transport.waitForRequests(1) else { Issue.record("download never started"); return }
-        #expect(await rig.pricing.update() == .failure(.inProgress))
+        guard await transport.awaitRequests(1, from: first) else { Issue.record("download never started"); return }
+        // Bounded: if the second call sent its own request instead, `join` closes the transport after 1 s.
+        let second = Task { await rig.pricing.update() }
+        #expect(await transport.join(second, timeout: 1), "the second download sent its own request")
+        #expect(await second.value == .failure(.inProgress))
         #expect(transport.respond(.init(status: 200, body: data)))
         let result = await first.value
 
