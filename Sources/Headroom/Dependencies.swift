@@ -100,7 +100,11 @@ struct AppEnvironment {
     /// price download, so tests can control time. Credential expiry checks still use the system clock.
     var now: @Sendable () -> Date = { Date() }
 
+    /// How many live environments were made; snapshot tests check that a snapshot run makes none (R10).
+    private(set) static var realEnvironmentsMade = 0
+
     static var live: AppEnvironment {
+        realEnvironmentsMade += 1
         let providerSession: URLSession = {
             let c = URLSessionConfiguration.ephemeral
             c.timeoutIntervalForRequest = 15
