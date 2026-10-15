@@ -26,6 +26,8 @@ struct PopoverActions {
     /// Called with each new value of a Claude/Grok menu-bar switch, which pauses or resumes that provider's quota
     /// polling (#19). Called on the main thread right after the preference is written.
     var quotaSwitchChanged: (ProviderServices.QuotaSwitch, Bool) -> Void
+    /// The user's explicit request to download the pinned price file (R6); offered only when no verified prices exist.
+    var updatePricing: () -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -50,7 +52,7 @@ struct PopoverView: View {
                                enableGrokCredits: { actions.setGrokCredits(true) })
                 }
                 .frame(width: 330)
-                UsageCard(store: store)
+                UsageCard(store: store, updatePricing: actions.updatePricing)
                     .frame(width: 330)
             }
             Footer(store: store, actions: actions)
@@ -553,6 +555,7 @@ struct GrokCreditsConsent: View {
 
 struct UsageCard: View {
     @ObservedObject var store: Store
+    var updatePricing: () -> Void
     @AppStorage("usage.metric") private var metric: DailyMetric = .cost
 
     var body: some View {
@@ -592,6 +595,7 @@ struct UsageCard: View {
             } else {
                 Text(store.indexing ?? "Reading usage...").font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            PricingNote(store: store, update: updatePricing)
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -641,6 +645,67 @@ struct ModelList: View {
     }
 }
 
+/// Where cost estimates come from (R6). The one explicit price download is offered only when no verified prices are
+/// in use; otherwise downloading the same pinned file again would change nothing.
+struct PricingNote: View {
+    @ObservedObject var store: Store
+    var update: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(PricingText.summary(store.pricing)).foregroundStyle(.secondary)
+            if store.pricing.source == .unavailable {
+                Text(PricingText.downloadDisclosure).foregroundStyle(.secondary)
+                Button(store.pricingUpdating ? "Downloading…" : "Download reviewed prices", action: update)
+                    .disabled(store.pricingUpdating).controlSize(.small)
+            }
+            if let error = store.pricingError {
+                Text(PricingText.failure(error)).foregroundStyle(.orange)
+            }
+        }
+        .font(.system(size: 10))
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Copy for pricing provenance (R6), kept apart from the views so tests can check it.
+enum PricingText {
+    static func short(_ revision: String?) -> String { String((revision ?? "").prefix(7)) }
+
+    static func summary(_ info: PricingInfo) -> String {
+        let date = String((info.retrieved ?? "").prefix(10))
+        switch info.source {
+        case .bundled:
+            return "Costs are estimates at list prices from LiteLLM \(short(info.revision)) (reviewed \(date), built in), "
+                + "not your Anthropic bill. Models without a listed price count as $0."
+        case .downloaded:
+            return "Costs are estimates at list prices from LiteLLM \(short(info.revision)) (downloaded \(date)), "
+                + "not your Anthropic bill. Models without a listed price count as $0."
+        case .unavailable:
+            return "Claude costs can't be estimated: no verified price list. Claude models count as $0."
+        }
+    }
+
+    static var downloadDisclosure: String {
+        "The built-in price list didn't verify. You can download the same reviewed list (LiteLLM "
+            + "\(short(PricingSnapshot.pin.revision))) from GitHub (raw.githubusercontent.com). Only that price file is "
+            + "fetched; nothing about your usage or transcripts is sent. Its SHA-256 is checked before it is used. Newer "
+            + "upstream prices are not trusted automatically; reviewed updates arrive with SpanDeck updates."
+    }
+
+    static func failure(_ error: PricingUpdateError) -> String {
+        switch error {
+        case .alreadyCurrent: return "These are already the reviewed prices; newer ones arrive with SpanDeck updates."
+        case .inProgress: return "A price download is already running."
+        case .network: return "Couldn't reach GitHub. Prices unchanged."
+        case .http(let code): return "GitHub answered HTTP \(code). Prices unchanged."
+        case .checksumMismatch: return "The download didn't match the reviewed file (SHA-256). Prices unchanged."
+        case .invalidData: return "The downloaded file had no valid Claude prices. Prices unchanged."
+        case .writeFailed: return "Couldn't save the downloaded prices. Prices unchanged."
+        }
+    }
+}
+
 // MARK: - Footer
 
 struct Footer: View {
@@ -678,6 +743,11 @@ struct Footer: View {
                     Text("1 s").tag(1.0)
                     Text("2 s").tag(2.0)
                     Text("5 s").tag(5.0)
+                }
+                Section("Cost estimates") {
+                    Text(store.pricing.source == .unavailable ? "No verified prices"
+                         : "LiteLLM \(PricingText.short(store.pricing.revision)) · \(store.pricing.source == .bundled ? "built in" : "downloaded")")
+                    Text("Newer reviewed prices arrive with SpanDeck updates")
                 }
                 Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 if store.claudeLimitsEnabled {

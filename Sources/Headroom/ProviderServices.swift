@@ -34,7 +34,7 @@ final class ProviderServices {
 
     init(store: Store, env: AppEnvironment) {
         self.store = store
-        pricing = Pricing(file: env.appSupport.appendingPathComponent("pricing.json"), transport: env.pricingTransport)
+        pricing = Pricing(directory: env.appSupport, transport: env.pricingTransport, now: env.now)
         ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,
@@ -158,11 +158,25 @@ final class ProviderServices {
         if on { await refreshClaude(force: true) }
     }
 
-    /// Loads prices, possibly starting a download (returned for tests). The login item is never registered here:
+    /// Loads local prices: the built-in snapshot, or a verified download of the same pinned revision. No network:
+    /// prices are never downloaded at launch or because they are old (R6). The login item is never registered here:
     /// launch at login is only enabled from Settings, and an existing registration is left as it is (#15).
-    @discardableResult
-    func start() -> Task<Void, Never>? {
-        pricing.load()
+    @MainActor func start() {
+        store.pricing = pricing.load()
+    }
+
+    /// The user's explicit request to download the pinned LiteLLM price file, offered only when no verified prices are
+    /// available (R6). Independent of provider consent. A failure is shown and leaves the prices in use unchanged.
+    @MainActor func updatePricing() async {
+        guard !store.pricingUpdating else { return }
+        store.pricingUpdating = true
+        store.pricingError = nil
+        let result = await pricing.update()
+        store.pricingUpdating = false
+        switch result {
+        case .success(let info): store.pricing = info
+        case .failure(let error): store.pricingError = error
+        }
     }
 
     /// Fetches Claude plan limits if the user opted in and the gauge isn't hidden, unless paused after a 401 or backing

@@ -23,30 +23,32 @@ struct LaunchPathTests {
         let env = box.environment(transport: transport, runner: runner, credentials: creds, loginItem: login)
         let services = ProviderServices(store: Store(), env: env)
 
-        await services.start()?.value
+        services.start()
         await services.refreshClaude()
         await services.refreshGrok()
         _ = await refresh(services.ledger)
 
         // Launch at login is opt-in from Settings only (#15).
         #expect(login.registers == 0)
-        // No Keychain read and no Anthropic request without opt-in (#15). Only the price table is fetched.
+        // No Keychain read and no Anthropic request without opt-in (#15). No price download either (R6): prices
+        // come from the built-in snapshot.
         #expect(creds.reads == 0)
-        #expect(transport.hosts == [Hosts.pricing])
+        #expect(transport.requests.isEmpty)
+        #expect(services.store.pricing.source == .bundled && services.store.pricing.revision == PricingSnapshot.pin.revision)
         #expect(transport.unexpected.isEmpty)
         #expect(!services.store.claudeLimitsEnabled)
         #expect(services.store.claudeLimits == nil && !services.store.claudeAvailable)
         // No Grok install in the sandbox: no Grok request, no subprocess.
         #expect(runner.calls.isEmpty)
         #expect(!services.store.grokAvailable)
-        // Price table cached inside the sandbox.
-        #expect(FileManager.default.fileExists(atPath: box.appSupport.appendingPathComponent("pricing.json").path))
+        // Nothing about prices is written (R6).
+        #expect(try FileManager.default.contentsOfDirectory(atPath: box.appSupport.path).allSatisfy { !$0.hasPrefix("pricing") })
 
-        // Relaunch: still no registration, and a fresh price table means no second download.
+        // Relaunch: still no registration and no download.
         let relaunch = ProviderServices(store: Store(), env: env)
-        #expect(relaunch.start() == nil)
+        relaunch.start()
         #expect(login.registers == 0)
-        #expect(transport.hosts.filter { $0 == Hosts.pricing }.count == 1)
+        #expect(transport.requests.isEmpty)
     }
 
     // Manual refresh and wake pass `force`, which skips the 429 backoff but must never skip consent.
@@ -206,7 +208,7 @@ struct LaunchPathTests {
         let login = FakeLoginItem(enabled: true)
         let env = box.environment(transport: FakeTransport([Hosts.pricing: [.pricingTable]]), loginItem: login)
 
-        await ProviderServices(store: Store(), env: env).start()?.value
+        ProviderServices(store: Store(), env: env).start()
 
         #expect(login.isEnabled)
         #expect(login.registers == 0 && login.unregisters == 0)
@@ -284,33 +286,35 @@ struct LaunchPathTests {
         #expect(!String(decoding: cache, as: UTF8.self).contains(canary))
     }
 
-    // Acceptance 5: prices download at launch; offline, unpriced models add $0 to totals (#7, R7 will flip this).
-    @Test func offlinePricingCountsAsZero() async throws {
+    // Acceptance 5, flipped by R6: launch downloads nothing; offline, a model in the built-in snapshot is priced.
+    @Test func offlineStartupUsesBundledPricing() async throws {
         let box = try Sandbox()
         try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
-                      Sandbox.transcriptLine(model: "claude-test-1", id: "1", canary: "x") + "\n")
+                      Sandbox.transcriptLine(model: "claude-haiku-4-5-20251001", id: "1", canary: "x") + "\n")
         let transport = FakeTransport() // every host offline
         let services = ProviderServices(store: Store(), env: box.environment(transport: transport))
 
-        await services.start()?.value
-        #expect(transport.hosts == [Hosts.pricing])
+        services.start()
+        #expect(transport.requests.isEmpty)
+        let s = await refresh(services.ledger).claude
+        #expect(s.today.tokens == 150)
+        // 100 input * 1e-6 + 50 output * 5e-6 at the snapshot's claude-haiku-4-5 prices.
+        #expect(abs(s.today.cost - 0.00035) < 1e-12)
+        #expect(s.models.first?.cost != nil)
+    }
+
+    // Still true after R6 (#7, R7 will flip this): a model without a listed price adds $0 to totals.
+    @Test func unpricedModelStillCountsAsZero() async throws {
+        let box = try Sandbox()
+        try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
+                      Sandbox.transcriptLine(model: "claude-test-1", id: "1", canary: "x") + "\n")
+        let services = ProviderServices(store: Store(), env: box.environment(transport: FakeTransport()))
+
+        services.start()
         let s = await refresh(services.ledger).claude
         #expect(s.today.tokens == 150)
         #expect(s.today.cost == 0)
         #expect(s.models.first?.cost == nil)
-    }
-
-    @Test func pricedModelsAreCosted() async throws {
-        let box = try Sandbox()
-        try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
-                      Sandbox.transcriptLine(model: "claude-test-1", id: "1", canary: "x") + "\n")
-        let services = ProviderServices(store: Store(), env: box.environment(transport: FakeTransport([Hosts.pricing: [.pricingTable]])))
-
-        await services.start()?.value
-        let s = await refresh(services.ledger).claude
-        // 100 input * 1e-6 + 50 output * 2e-6
-        #expect(abs(s.today.cost - 0.0002) < 1e-12)
-        #expect(s.models.first?.cost != nil)
     }
 }
 

@@ -98,6 +98,11 @@ final class Store: ObservableObject {
     @Published var grokUsage: UsageSummary?
     @Published var indexing: String?
     @Published var usageUpdated: Date?
+    /// Which prices cost estimates use (R6). Starts unavailable until `ProviderServices.start()` loads them.
+    @Published var pricing = PricingInfo.unavailable
+    /// The user's explicit price download: running, and why the last one failed.
+    @Published var pricingUpdating = false
+    @Published var pricingError: PricingUpdateError?
     /// Keep awake: end of the manual session (.distantFuture = indefinitely), and whether working agents hold it.
     @Published var awakeUntil: Date?
     @Published var awakeForAgents = false

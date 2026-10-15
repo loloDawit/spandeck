@@ -28,7 +28,7 @@ struct UsageTests {
 
     @Test func providerCostTicks() {
         // Grok reports exact cost in 1e-10 USD ticks; no pricing table needed.
-        let pricing = Pricing(file: FileManager.default.temporaryDirectory.appendingPathComponent("unused-\(UUID()).json"),
+        let pricing = Pricing(directory: FileManager.default.temporaryDirectory.appendingPathComponent("unused-\(UUID())"),
                               transport: FakeTransport())
         #expect(pricing.cost(model: "grok-4.6-build", Agg(costTicks: 25_000_000_000)) == 2.5)
     }
