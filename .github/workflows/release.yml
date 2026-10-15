@@ -17,8 +17,8 @@ on:
         description: Release tag to rebuild, for example v1.1
         required: true
 
-permissions:
-  contents: write
+# No token permissions by default; only the release job gets `contents: write`, which publishing needs (R11).
+permissions: {}
 
 # A release created in the UI also creates its tag; run once per tag.
 concurrency:
@@ -27,17 +27,25 @@ concurrency:
 jobs:
   release:
     runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
     env:
       TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
           fetch-depth: 0
+          # The token isn't stored in .git/config; only the publish step gets it, as GH_TOKEN.
+          persist-credentials: false
 
       - name: Check tag matches app version
         run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "Tag $TAG is not a version tag like v1.1"
+            exit 1
+          fi
           version=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
           if [ "v$version" != "$TAG" ]; then
             echo "Tag $TAG does not match Info.plist version $version"
@@ -64,6 +72,8 @@ jobs:
           cat build/notes.md
 
       - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" build/Headroom-*.dmg --clobber
