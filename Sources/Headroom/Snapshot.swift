@@ -264,9 +264,6 @@ enum SnapshotOutput {
     static func write(_ files: [(name: String, data: Data)], in folder: URL,
                       move: (String, String) -> Int32 = { rename($0, $1) },
                       remove: (String) -> Int32 = { unlink($0) }) throws {
-        for file in files where !replaceable(folder.appendingPathComponent(file.name).path) {
-            throw SnapshotWriteError.occupied(file.name)
-        }
         var temps: [(temp: String, final: String)] = []
         var asides: [(aside: String, final: String)] = []
         var committed: [String] = []
