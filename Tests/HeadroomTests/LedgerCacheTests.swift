@@ -442,10 +442,61 @@ struct LedgerCacheTests {
         defer { try? Self.setImmutable(rig.keyURL, false) }
 
         await services.clearUsageCache()
-        #expect(services.store.usageCacheResult == LedgerClearFailure.key(.io(EPERM)).text)
+        #expect(services.store.usageCacheResult == LedgerClearFailure.incomplete(.io(EPERM)).text)
         #expect(services.store.usageCacheResult != UsageCacheText.cleared)
         #expect(services.store.claudeUsage == nil)
         #expect(!FileManager.default.fileExists(atPath: rig.cacheURL.path))
+    }
+
+    /// A folder that can be written but not listed (0300): leftover temp files can't be found, so the clear fails
+    /// before deleting anything instead of reporting success with temp files left behind.
+    @Test func unlistableFolderClearsNothing() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        let services = ProviderServices(store: Store(), env: rig.box.environment(transport: FakeTransport()))
+        await services.refreshUsage(windowStart: nil)
+        services.ledger.flush()
+        let temp = rig.box.appSupport.appendingPathComponent(".\(Ledger.cacheName).tmp-leftover")
+        try Data("partial".utf8).write(to: temp)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: rig.box.appSupport.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rig.box.appSupport.path) }
+        await services.clearUsageCache()
+        #expect(services.store.usageCacheResult == LedgerClearFailure.cache(.io(EACCES)).text)
+        #expect(services.store.claudeUsage?.month.tokens == 150)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rig.box.appSupport.path)
+        #expect(FileManager.default.fileExists(atPath: rig.cacheURL.path) && FileManager.default.fileExists(atPath: temp.path))
+        #expect(FileManager.default.fileExists(atPath: rig.keyURL.path))
+    }
+
+    /// At launch an unlistable folder is tightened to 0700 first, so leftover temp files are still found and removed.
+    @Test func unlistableFolderSweptAtLaunch() async throws {
+        let rig = try Rig()
+        let temp = rig.box.appSupport.appendingPathComponent(".\(Ledger.keyName).tmp-leftover")
+        try Data("partial".utf8).write(to: temp)
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: rig.box.appSupport.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rig.box.appSupport.path) }
+        let ledger = rig.ledger()
+        _ = await Self.tokens(ledger)
+        #expect(ledger.cacheIssue == nil)
+        #expect(!FileManager.default.fileExists(atPath: temp.path))
+        #expect(try Self.mode(rig.box.appSupport) == 0o700)
+    }
+
+    /// If the folder can't be made 0700 (and so listable) at launch, nothing is loaded or saved and it's reported.
+    @Test func unlistableFolderAtLaunchReported() async throws {
+        let rig = try Rig(storage: { url in
+            var d = PrivateDirectory(url: url)
+            d.setMode = { _, _ in 0 } // claims success but leaves 0300
+            return d
+        })
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: rig.box.appSupport.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rig.box.appSupport.path) }
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        ledger.flush()
+        #expect(ledger.cacheIssue == .notSaved(.permissions))
     }
 
     /// Test 22: clearing and rebuilding touch no Keychain, network, CLI or login item.

@@ -106,13 +106,27 @@ struct PrivateDirectory {
         if unlink(url.appendingPathComponent(name).path) != 0, errno != ENOENT { throw StorageFailure.io(errno) }
     }
 
-    /// Removes temporary files an interrupted `write` of `name` left behind.
-    func removeTemporaryFiles(of name: String) throws {
-        guard try checkExistingFolder() else { return }
+    /// Temporary files an interrupted `write` of `name` left behind. Throws if the folder can't be listed, rather than
+    /// reporting none: a folder can be writable without being readable.
+    func temporaryFiles(of name: String) throws -> [String] {
+        guard try checkExistingFolder() else { return [] }
+        guard let dir = opendir(url.path) else { throw StorageFailure.io(errno) }
+        defer { closedir(dir) }
         let prefix = "." + name + Self.tempMarker
-        for item in (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? [] where item.hasPrefix(prefix) {
-            if unlink(url.appendingPathComponent(item).path) != 0, errno != ENOENT { throw StorageFailure.io(errno) }
+        var found: [String] = []
+        errno = 0
+        while let entry = readdir(dir) {
+            let item = withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self) }
+            if item.hasPrefix(prefix) { found.append(item) }
+            errno = 0
         }
+        if errno != 0 { throw StorageFailure.io(errno) }
+        return found
+    }
+
+    /// Removes temporary files an interrupted `write` of `name` left behind; throws if any can't be listed or removed.
+    func removeTemporaryFiles(of name: String) throws {
+        for item in try temporaryFiles(of: name) { try remove(item) }
     }
 
     /// Checks the folder without creating or changing it; false if it doesn't exist.

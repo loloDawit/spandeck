@@ -380,13 +380,14 @@ enum LedgerCacheIssue: Equatable {
 enum LedgerClearFailure: Error, Equatable {
     /// Nothing was cleared.
     case cache(StorageFailure)
-    /// The cache was deleted, but its identity key file wasn't.
-    case key(StorageFailure)
+    /// The cache was deleted, but its key file or a leftover temporary file wasn't.
+    case incomplete(StorageFailure)
 
     var text: String {
         switch self {
         case .cache(let f): return "Couldn't clear cached usage data: \(f.text). Nothing was cleared."
-        case .key(let f): return "Cached usage data was deleted, but its key file couldn't be removed: \(f.text)."
+        case .incomplete(let f):
+            return "Cached usage data was deleted, but its key file or a temporary file couldn't be removed: \(f.text)."
         }
     }
 }
@@ -524,7 +525,14 @@ final class Ledger {
     }
 
     private func clear() -> LedgerClearFailure? {
-        do { try storage.remove(Self.cacheName) } catch { return .cache(error as? StorageFailure ?? .io(EIO)) }
+        // Leftover temp files are listed first: if the folder can't be listed, nothing is deleted at all.
+        let leftovers: [String]
+        do {
+            leftovers = try storage.temporaryFiles(of: Self.cacheName) + storage.temporaryFiles(of: Self.keyName)
+            try storage.remove(Self.cacheName)
+        } catch {
+            return .cache(error as? StorageFailure ?? .io(EIO))
+        }
         state = State()
         loaded = true
         dirty = false
@@ -539,11 +547,10 @@ final class Ledger {
         lastSummaryKey = ""
         setIssue(nil)
         do {
-            try storage.removeTemporaryFiles(of: Self.cacheName)
-            try storage.removeTemporaryFiles(of: Self.keyName)
+            for item in leftovers { try storage.remove(item) }
             try storage.remove(Self.keyName)
         } catch {
-            return .key(error as? StorageFailure ?? .io(EIO))
+            return .incomplete(error as? StorageFailure ?? .io(EIO))
         }
         return nil
     }
