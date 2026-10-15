@@ -26,18 +26,18 @@ struct GrokConsentTests {
 
     // Acceptance 1: default launch with Grok installed does no credential work but still counts local usage.
     @Test func defaultLaunchDoesNoGrokCredentialWork() async throws {
-        let transport = FakeTransport([Hosts.pricing: [.pricingTable]])
+        let transport = FakeTransport()
         let rig = try Rig(transport: transport, expiresIn: -3600) // expired key: would normally run `grok models`
         let before = try rig.box.grokFiles()
 
-        await rig.services.start()?.value
+        rig.services.start()
         await rig.services.refreshClaude()
         await rig.services.refreshGrok()
         rig.store.grokUsage = await refreshLedger(rig.services.ledger).grok
 
         #expect(rig.auth.reads == 0)
         #expect(rig.runner.calls.isEmpty)
-        #expect(transport.hosts == [Hosts.pricing])
+        #expect(transport.requests.isEmpty) // no price download at launch either (R6)
         #expect(!rig.store.grokEnabled && rig.store.grokPlan == nil && !rig.store.grokAvailable)
         // Local usage accounting is independent of consent.
         #expect(rig.store.localGrokUsage?.today.tokens == 150)

@@ -123,6 +123,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    /// Explicit price download from the popover (R6). Usage is recomputed with the new prices once it succeeds.
+    private func updatePricing() {
+        Task { @MainActor in
+            await services.updatePricing()
+            refreshUsage()
+        }
+    }
+
     /// Catches switch changes made outside the Settings menu (best effort, see `ProviderServices.applyQuotaVisibility`).
     private func applyQuotaVisibility() {
         Task { @MainActor in
@@ -205,7 +213,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             loginItem: env.loginItem,
             setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) },
             setGrokCredits: { [weak self] on in self?.setGrokCredits(on) },
-            quotaSwitchChanged: { [weak self] provider, on in self?.quotaSwitchChanged(provider, on) }))
+            quotaSwitchChanged: { [weak self] provider, on in self?.quotaSwitchChanged(provider, on) },
+            updatePricing: { [weak self] in self?.updatePricing() }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -245,7 +254,8 @@ extension AppDelegate {
         print("strip width pt:", strip.size.width)
 
         let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
-                                                              setGrokCredits: { _ in }, quotaSwitchChanged: { _, _ in }))
+                                                              setGrokCredits: { _ in }, quotaSwitchChanged: { _, _ in },
+                                                              updatePricing: {}))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

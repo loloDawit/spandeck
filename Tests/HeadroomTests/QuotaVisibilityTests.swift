@@ -18,7 +18,7 @@ struct QuotaVisibilityTests {
             box = try Sandbox()
             try box.installGrok(expiresIn: grokExpiresIn)
             try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
-                          Sandbox.transcriptLine(model: "claude-test-1", id: "1", canary: "x") + "\n")
+                          Sandbox.transcriptLine(model: "claude-haiku-4-5-20251001", id: "1", canary: "x") + "\n")
             let saved = box.preferences
             prefs.forEach { saved.set($1, forKey: $0) }
             auth = CountingGrokAuth(home: box.home)
@@ -352,15 +352,15 @@ struct QuotaVisibilityTests {
 
     // 9. Local Claude and Grok token/cost accounting continues while quota polling is paused.
     @Test func localUsageCountsWhilePaused() async throws {
-        let transport = FakeTransport([Hosts.pricing: [.pricingTable]])
+        let transport = FakeTransport()
         let rig = try Rig(transport: transport, prefs: Self.consentedHidden)
-        await rig.services.start()?.value
+        rig.services.start()
 
         await rig.refreshAll(force: true)
         let usage = await refreshLedger(rig.services.ledger)
         rig.store.grokUsage = usage.grok
 
-        #expect(transport.hosts == [Hosts.pricing])
+        #expect(transport.requests.isEmpty)
         #expect(usage.claude.today.tokens == 150)
         #expect(usage.claude.today.cost > 0)
         #expect(rig.store.localGrokUsage?.today.tokens == 150 && rig.store.localGrokUsage?.today.cost == 0.25)

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - Aggregates
@@ -86,9 +87,9 @@ func modelFamily(_ model: String) -> String {
     return model
 }
 
-// MARK: - Pricing (LiteLLM table, cached daily)
+// MARK: - Pricing (reviewed LiteLLM snapshot, R6)
 
-struct Price: Codable {
+struct Price: Codable, Equatable {
     var input: Double
     var output: Double
     var cacheWrite: Double
@@ -96,45 +97,172 @@ struct Price: Codable {
     var cacheRead: Double
 }
 
+/// One exact LiteLLM revision of the price file and the SHA-256 it must have. Never a branch.
+struct PricingPin: Equatable, Sendable {
+    var revision: String
+    var sourceSHA256: String
+    var url: URL { URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/\(revision)/model_prices_and_context_window.json")! }
+}
+
+/// A price table built into the app, with the checksum of its exact text so a damaged build is noticed.
+struct PricingBundle: Sendable {
+    var revision: String
+    var sourceSHA256: String
+    var retrieved: String
+    var tableSHA256: String
+    var tableJSON: String
+}
+
+/// Which prices are in use. Costs are always estimates at list prices, never a provider bill.
+struct PricingInfo: Equatable {
+    enum Source: Equatable { case bundled, downloaded, unavailable }
+    var source: Source
+    /// LiteLLM commit the prices came from; nil when unavailable.
+    var revision: String?
+    /// When that revision was retrieved: for review (bundled) or by the user's download.
+    var retrieved: String?
+
+    static let unavailable = PricingInfo(source: .unavailable)
+}
+
+enum PricingUpdateError: Error, Equatable {
+    /// The prices in use already come from the pinned revision; downloading it again would change nothing.
+    case alreadyCurrent
+    case inProgress
+    case network
+    case http(Int)
+    /// The download isn't the pinned file.
+    case checksumMismatch
+    /// The pinned file doesn't yield a valid Claude price table.
+    case invalidData
+    case writeFailed
+}
+
+/// Claude prices for cost estimates. Loading is local only: the built-in snapshot, or a snapshot of the same pinned
+/// revision the user downloaded explicitly. Nothing is downloaded at launch or because data is old (R6). The legacy
+/// `pricing.json` from the old unpinned download is ignored and left in place.
 final class Pricing: @unchecked Sendable {
+    /// USD per token above which a price is treated as malformed ($1,000 per million tokens).
+    static let maxPrice = 1e-3
+
+    private struct Installed: Codable {
+        var format = 1
+        var revision: String
+        var sourceSHA256: String
+        var retrieved: String
+        var table: [String: Price]
+    }
+
     private let lock = NSLock()
     private var table: [String: Price] = [:]
+    private var _info = PricingInfo.unavailable
+    private var _generation = 0
+    private var updating = false
+    /// Where an explicitly downloaded snapshot is kept; distinct from the legacy `pricing.json`.
     private let file: URL
     private let transport: HTTPTransport
-    private let source = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
+    private let pin: PricingPin
+    private let bundle: PricingBundle
 
-    init(file: URL, transport: HTTPTransport) {
-        self.file = file
+    init(directory: URL, transport: HTTPTransport, pin: PricingPin = PricingSnapshot.pin,
+         bundle: PricingBundle = PricingSnapshot.bundled) {
+        self.file = directory.appendingPathComponent("pricing-snapshot.json")
         self.transport = transport
+        self.pin = pin
+        self.bundle = bundle
     }
 
-    /// Loads the cached table and, if it is missing or older than a day, starts a download (returned so tests can await it).
+    var info: PricingInfo { lock.withLock { _info } }
+    /// Changes whenever the table in use changes, so cached cost summaries are recomputed.
+    var generation: Int { lock.withLock { _generation } }
+
+    /// Installs local prices: a downloaded snapshot of the pinned revision if one verifies, else the built-in
+    /// snapshot if it verifies, else none (costs unavailable). Never touches the network.
     @discardableResult
-    func load() -> Task<Void, Never>? {
-        if let data = try? Data(contentsOf: file), let t = try? JSONDecoder().decode([String: Price].self, from: data) {
-            lock.withLock { table = t }
+    func load() -> PricingInfo {
+        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Installed.self, from: data),
+           saved.format == 1, saved.revision == pin.revision, saved.sourceSHA256 == pin.sourceSHA256,
+           Self.valid(saved.table) {
+            return install(saved.table, PricingInfo(source: .downloaded, revision: saved.revision, retrieved: saved.retrieved))
         }
-        let age = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-            .map { -$0.timeIntervalSinceNow } ?? .infinity
-        guard age > 86400 || table.isEmpty else { return nil }
-        return Task.detached { await self.download() }
+        let text = Data(bundle.tableJSON.utf8)
+        if Self.sha256(text) == bundle.tableSHA256, let t = try? JSONDecoder().decode([String: Price].self, from: text),
+           Self.valid(t) {
+            return install(t, PricingInfo(source: .bundled, revision: bundle.revision, retrieved: bundle.retrieved))
+        }
+        return install([:], .unavailable)
     }
 
-    private func download() async {
-        guard let (data, _) = try? await transport.data(for: URLRequest(url: source)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+    /// The one explicit download: the pinned revision only, verified before it is parsed, validated, and written
+    /// atomically before it replaces anything. On any failure the prices in use stay as they are.
+    func update(now: Date = Date()) async -> Result<PricingInfo, PricingUpdateError> {
+        let start: PricingUpdateError? = lock.withLock {
+            if _info.source != .unavailable && _info.revision == pin.revision { return .alreadyCurrent }
+            if updating { return .inProgress }
+            updating = true
+            return nil
+        }
+        if let start { return .failure(start) }
+        defer { lock.withLock { updating = false } }
+
+        var request = URLRequest(url: pin.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpShouldHandleCookies = false
+        let data: Data, response: URLResponse
+        do { (data, response) = try await transport.data(for: request) } catch { return .failure(.network) }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { return .failure(.http(status)) }
+        guard Self.sha256(data) == pin.sourceSHA256 else { return .failure(.checksumMismatch) }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = Self.extract(json), Self.valid(t) else { return .failure(.invalidData) }
+        let retrieved = ISO8601DateFormatter().string(from: now)
+        let saved = Installed(revision: pin.revision, sourceSHA256: pin.sourceSHA256, retrieved: retrieved, table: t)
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(saved).write(to: file, options: .atomic)
+        } catch {
+            return .failure(.writeFailed)
+        }
+        return .success(install(t, PricingInfo(source: .downloaded, revision: pin.revision, retrieved: retrieved)))
+    }
+
+    private func install(_ t: [String: Price], _ info: PricingInfo) -> PricingInfo {
+        lock.withLock {
+            table = t
+            resolved = [:]
+            _info = info
+            _generation += 1
+        }
+        return info
+    }
+
+    /// Claude entries with input and output prices; missing cache prices use Anthropic's usual multiples. The same
+    /// rules as `scripts/update-pricing-snapshot.py`. nil if nothing usable is found.
+    static func extract(_ json: [String: Any]) -> [String: Price]? {
+        func number(_ v: Any?) -> Double? {
+            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            return n.doubleValue
+        }
         var t: [String: Price] = [:]
         for (k, v) in json where k.hasPrefix("claude") {
-            guard let v = v as? [String: Any], let input = v.double("input_cost_per_token"),
-                  let output = v.double("output_cost_per_token") else { continue }
-            let write = v.double("cache_creation_input_token_cost") ?? input * 1.25
-            t[k] = Price(input: input, output: output, cacheWrite: write,
-                         cacheWrite1h: v.double("cache_creation_input_token_cost_above_1hr") ?? input * 2,
-                         cacheRead: v.double("cache_read_input_token_cost") ?? input * 0.1)
+            guard let v = v as? [String: Any], let input = number(v["input_cost_per_token"]),
+                  let output = number(v["output_cost_per_token"]) else { continue }
+            t[k] = Price(input: input, output: output,
+                         cacheWrite: number(v["cache_creation_input_token_cost"]) ?? input * 1.25,
+                         cacheWrite1h: number(v["cache_creation_input_token_cost_above_1hr"]) ?? input * 2,
+                         cacheRead: number(v["cache_read_input_token_cost"]) ?? input * 0.1)
         }
-        guard !t.isEmpty else { return }
-        lock.withLock { table = t; resolved = [:] }
-        if let data = try? JSONEncoder().encode(t) { try? data.write(to: file, options: .atomic) }
+        return t.isEmpty ? nil : t
+    }
+
+    /// Non-empty, and every price finite, not negative and at most `maxPrice`.
+    static func valid(_ t: [String: Price]) -> Bool {
+        !t.isEmpty && t.values.allSatisfy { p in
+            [p.input, p.output, p.cacheWrite, p.cacheWrite1h, p.cacheRead].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= maxPrice }
+        }
+    }
+
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private var resolved: [String: Price?] = [:]
@@ -224,8 +352,8 @@ final class Ledger {
                 saveCache()
             }
             progress(nil)
-            // Summaries only change with new data, a new window, or a new day.
-            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)"
+            // Summaries only change with new data, a new window, a new day or new prices.
+            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
                 cachedSummaries = (summarize(claudeHours(), windowStart: windowStart), summarize(grokHours(), windowStart: nil))
                 lastSummaryKey = key

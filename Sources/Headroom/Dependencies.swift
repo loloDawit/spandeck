@@ -87,7 +87,7 @@ extension UserDefaults: PreferenceStore {}
 struct AppEnvironment {
     /// Provider quota endpoints (Anthropic, Grok).
     var providerTransport: HTTPTransport
-    /// LiteLLM price table download.
+    /// The explicit download of the pinned LiteLLM price file (R6); never used at launch.
     var pricingTransport: HTTPTransport
     var processRunner: ProcessRunner
     var credentials: CredentialStore
@@ -107,10 +107,20 @@ struct AppEnvironment {
             c.requestCachePolicy = .reloadIgnoringLocalCacheData
             return URLSession(configuration: c)
         }()
+        // No cookies or disk cache; a finite timeout. Only ever asked for the pinned price file.
+        let pricingSession: URLSession = {
+            let c = URLSessionConfiguration.ephemeral
+            c.timeoutIntervalForRequest = 30
+            c.timeoutIntervalForResource = 60
+            c.requestCachePolicy = .reloadIgnoringLocalCacheData
+            c.httpCookieAcceptPolicy = .never
+            c.httpShouldSetCookies = false
+            return URLSession(configuration: c)
+        }()
         let runner = SystemProcessRunner()
         return AppEnvironment(
             providerTransport: URLSessionTransport(session: providerSession),
-            pricingTransport: URLSessionTransport(session: .shared),
+            pricingTransport: URLSessionTransport(session: pricingSession),
             processRunner: runner,
             credentials: KeychainCredentialStore(runner: runner),
             grokCredentials: GrokAuthFile(home: homeDir),
