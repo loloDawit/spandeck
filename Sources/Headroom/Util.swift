@@ -11,9 +11,31 @@ enum Fmt {
 
     static func usd(_ v: Double?) -> String {
         guard let v else { return "n/a" }
+        // A real but tiny cost isn't shown as $0.00, which reads as free (R7).
+        if v > 0 && v < 0.005 { return "<$0.01" }
         if v >= 1000 { return String(format: "$%.1fk", v / 1000) }
         if v >= 100 { return String(format: "$%.0f", v) }
         return String(format: "$%.2f", v)
+    }
+
+    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part is a lower
+    /// bound), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
+    static func cost(_ c: CostEstimate) -> String {
+        switch c.coverage {
+        case .complete: return usd(c.known)
+        case .partial: return c.known < 0.005 ? "≥$0.00" : "≥" + usd(c.known)
+        case .unavailable: return "n/a"
+        }
+    }
+
+    /// Spelled out, for help text and accessibility.
+    static func costDetail(_ c: CostEstimate) -> String {
+        switch c.coverage {
+        case .complete: return "\(usd(c.known)) estimated"
+        case .partial:
+            return "Partial estimate: \(usd(c.known)) known; \(tokens(c.unknownTokens)) tokens have no price"
+        case .unavailable: return "Cost unavailable: no price for \(tokens(c.unknownTokens)) tokens"
+        }
     }
 
     static func gb(_ b: UInt64) -> String {
@@ -102,6 +124,11 @@ func runProcess(_ path: String, _ args: [String], timeout: TimeInterval = 10, ca
 
 extension Dictionary where Key == String, Value == Any {
     func int(_ k: String) -> Int { (self[k] as? NSNumber)?.intValue ?? 0 }
+    /// nil when the key is missing or not a number (JSON booleans are rejected), so absent data isn't read as 0.
+    func optionalInt(_ k: String) -> Int? {
+        guard let n = self[k] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        return n.intValue
+    }
     func double(_ k: String) -> Double? { (self[k] as? NSNumber)?.doubleValue }
     func dict(_ k: String) -> [String: Any]? { self[k] as? [String: Any] }
     func string(_ k: String) -> String? { self[k] as? String }

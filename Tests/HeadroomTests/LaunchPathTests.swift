@@ -299,12 +299,12 @@ struct LaunchPathTests {
         let s = await refresh(services.ledger).claude
         #expect(s.today.tokens == 150)
         // 100 input * 1e-6 + 50 output * 5e-6 at the snapshot's claude-haiku-4-5 prices.
-        #expect(abs(s.today.cost - 0.00035) < 1e-12)
-        #expect(s.models.first?.cost != nil)
+        #expect(abs(s.today.cost.known - 0.00035) < 1e-12 && s.today.cost.coverage == .complete)
+        #expect(s.models.first?.cost.value != nil)
     }
 
-    // Still true after R6 (#7, R7 will flip this): a model without a listed price adds $0 to totals.
-    @Test func unpricedModelStillCountsAsZero() async throws {
+    // Flipped by R7: a model without a listed price makes the cost unavailable, never $0; its tokens still count.
+    @Test func unpricedModelIsUnavailableNotZero() async throws {
         let box = try Sandbox()
         try box.write(".claude/projects/-Users-synthetic-proj/s1.jsonl",
                       Sandbox.transcriptLine(model: "claude-test-1", id: "1", canary: "x") + "\n")
@@ -313,8 +313,9 @@ struct LaunchPathTests {
         services.start()
         let s = await refresh(services.ledger).claude
         #expect(s.today.tokens == 150)
-        #expect(s.today.cost == 0)
-        #expect(s.models.first?.cost == nil)
+        #expect(s.today.cost == CostEstimate(known: 0, knownTokens: 0, unknownTokens: 150))
+        #expect(s.today.cost.coverage == .unavailable && Fmt.cost(s.today.cost) == "n/a")
+        #expect(s.models.first?.cost.coverage == .unavailable)
     }
 }
 
