@@ -215,12 +215,17 @@ enum SnapshotWriteError: Error, Equatable {
     case unchanged(Int32)
     /// Restoring failed too: some outputs may have been replaced or removed.
     case partial(Int32)
+    /// An output name is taken by a folder or another non-file; nothing was changed.
+    case occupied(String)
+    /// The new images are in place, but a previous copy set aside under a hidden `.old-` name couldn't be removed.
+    case oldCopyLeft(Int32)
 }
 
 /// The output folder must already exist as a real folder (not a symlink), and is never created or chmodded. Writing is
 /// all or nothing: images go to temporary files (O_EXCL, O_NOFOLLOW); then any existing outputs are moved aside, the
 /// new ones renamed into place, and the old ones deleted only once every rename worked. On a failure the new files are
-/// removed and the old ones moved back. A symlink at a file name is moved aside like a file, never followed.
+/// removed and the old ones moved back. Only a regular file or a symlink (moved as a link, never followed) is replaced:
+/// a folder or other object at an output name stops the write before anything changes.
 enum SnapshotOutput {
     static func check(_ folder: URL) -> String? {
         var st = stat()
@@ -237,14 +242,31 @@ enum SnapshotOutput {
                 + "it either: some images there may have been replaced or removed."
         case .unchanged(let code)?:
             return "couldn't write to \(folder.path) (\(String(cString: strerror(code)))). Nothing was written."
+        case .occupied(let name)?:
+            return "\(name) in \(folder.path) is a folder or other non-file, so it wasn't replaced. Nothing was written."
+        case .oldCopyLeft(let code)?:
+            return "wrote the images to \(folder.path), but couldn't remove a previous copy saved there under a hidden "
+                + "\".old-\" name (\(String(cString: strerror(code))))."
         case nil:
             return "couldn't write to \(folder.path): \(error). Nothing was written."
         }
     }
 
-    /// `move` is rename(2); a test seam for a failure part way through.
+    /// Whether an existing output may be replaced: absent, a regular file or a symlink.
+    private static func replaceable(_ path: String) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return true }
+        let type = st.st_mode & S_IFMT
+        return type == S_IFREG || type == S_IFLNK
+    }
+
+    /// `move` is rename(2) and `remove` unlink(2); test seams for a failure part way through.
     static func write(_ files: [(name: String, data: Data)], in folder: URL,
-                      move: (String, String) -> Int32 = { rename($0, $1) }) throws {
+                      move: (String, String) -> Int32 = { rename($0, $1) },
+                      remove: (String) -> Int32 = { unlink($0) }) throws {
+        for file in files where !replaceable(folder.appendingPathComponent(file.name).path) {
+            throw SnapshotWriteError.occupied(file.name)
+        }
         var temps: [(temp: String, final: String)] = []
         var asides: [(aside: String, final: String)] = []
         var committed: [String] = []
@@ -280,6 +302,10 @@ enum SnapshotOutput {
         for t in temps {
             var st = stat()
             guard lstat(t.final, &st) == 0 else { continue }
+            guard replaceable(t.final) else {
+                _ = rollBack()
+                throw SnapshotWriteError.occupied(URL(fileURLWithPath: t.final).lastPathComponent)
+            }
             let aside = folder.appendingPathComponent(".\(URL(fileURLWithPath: t.final).lastPathComponent).old-\(UUID().uuidString)").path
             guard move(t.final, aside) == 0 else { throw fail(errno) }
             asides.append((aside, t.final))
@@ -288,7 +314,9 @@ enum SnapshotOutput {
             guard move(t.temp, t.final) == 0 else { throw fail(errno) }
             committed.append(t.final)
         }
-        for a in asides { unlink(a.aside) }
+        var leftover: Int32?
+        for a in asides where remove(a.aside) != 0 { leftover = errno }
+        if let leftover { throw SnapshotWriteError.oldCopyLeft(leftover) }
     }
 }
 #endif

@@ -230,4 +230,62 @@ struct SnapshotTests {
         let text = SnapshotOutput.describe(try #require(caught), folder: out)
         #expect(text.contains("may have been replaced or removed") && !text.contains("Nothing was written"))
     }
+
+    /// A folder (or FIFO) at an output name is never moved, hidden or replaced; nothing is written at all.
+    @Test func nonFileAtOutputNameUntouched() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        let dir = out.appendingPathComponent("strip-light.png")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Self.write(dir, "mine.txt", "user content")
+        let r = Self.run(["Headroom", "--snapshot", out.path])
+        #expect(r.code == 73 && r.log.first?.contains("strip-light.png") == true, "\(r.log)")
+        #expect(r.log.first?.hasSuffix("Nothing was written.") == true)
+        #expect(try Self.files(out) == ["strip-light.png"] && Self.read(dir, "mine.txt") == "user content")
+
+        let other = box.root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        #expect(mkfifo(other.appendingPathComponent("popover.png").path, 0o644) == 0)
+        #expect(Self.run(["Headroom", "--snapshot", other.path]).code == 73)
+        #expect(try Self.files(other) == ["popover.png"])
+    }
+
+    /// A folder that appears at an output name between the check and the set-aside step stops the write and undoes it.
+    @Test func folderAppearingLateIsNotMoved() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "a.png", "old a")
+        var planted = false
+        let plantFolder: (String, String) -> Int32 = { from, to in
+            if !planted {
+                planted = true
+                try? FileManager.default.createDirectory(at: out.appendingPathComponent("b.png"), withIntermediateDirectories: true)
+            }
+            return rename(from, to)
+        }
+        #expect(throws: SnapshotWriteError.occupied("b.png")) {
+            try SnapshotOutput.write([("a.png", Data("new a".utf8)), ("b.png", Data("new b".utf8))], in: out, move: plantFolder)
+        }
+        #expect(try Self.files(out) == ["a.png", "b.png"] && Self.read(out, "a.png") == "old a")
+        var isDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: out.appendingPathComponent("b.png").path, isDirectory: &isDir) && isDir.boolValue)
+    }
+
+    /// If a previous copy can't be removed after a successful write, that is reported, not ignored.
+    @Test func leftoverOldCopyReported() throws {
+        let box = try Sandbox()
+        let out = box.root.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        try Self.write(out, "a.png", "old a")
+        let failOld: (String) -> Int32 = { path in
+            if path.contains(".old-") { errno = EPERM; return -1 }
+            return unlink(path)
+        }
+        var caught: Error?
+        do { try SnapshotOutput.write([("a.png", Data("new a".utf8))], in: out, remove: failOld) } catch { caught = error }
+        #expect(caught as? SnapshotWriteError == .oldCopyLeft(EPERM))
+        #expect(try Self.read(out, "a.png") == "new a")
+        #expect(SnapshotOutput.describe(try #require(caught), folder: out).contains("couldn't remove a previous copy"))
+    }
 }
