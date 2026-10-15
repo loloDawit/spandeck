@@ -116,7 +116,9 @@ enum ISO {
 let appSupportDir: URL = {
     let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Headroom", isDirectory: true)
-    try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+    // Owner-only (0700), checked again before every cache write (R8). A failure is reported by the ledger, which then
+    // keeps usage in memory only.
+    try? PrivateDirectory(url: u).prepare()
     return u
 }()
 

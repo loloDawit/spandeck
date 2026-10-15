@@ -28,6 +28,8 @@ struct PopoverActions {
     var quotaSwitchChanged: (ProviderServices.QuotaSwitch, Bool) -> Void
     /// The user's explicit request to download the pinned price file (R6); offered only when no verified prices exist.
     var updatePricing: () -> Void
+    /// Deletes SpanDeck's usage cache after the user confirmed it (R8).
+    var clearUsageCache: () -> Void
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -54,6 +56,9 @@ struct PopoverView: View {
                 .frame(width: 330)
                 UsageCard(store: store, updatePricing: actions.updatePricing)
                     .frame(width: 330)
+            }
+            if store.usageCacheClearRequested || store.usageCacheClearing || store.usageCacheResult != nil {
+                UsageCacheCard(store: store, clear: actions.clearUsageCache)
             }
             Footer(store: store, actions: actions)
         }
@@ -564,6 +569,47 @@ struct GrokCreditsConsent: View {
     }
 }
 
+/// Confirms Settings ▸ Clear cached usage data before anything is deleted, then shows the outcome (R8).
+struct UsageCacheCard: View {
+    @ObservedObject var store: Store
+    var clear: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CardHeader(title: "Cached usage data", icon: "externaldrive", tint: .secondary)
+            if store.usageCacheClearing {
+                Text("Clearing…").font(.system(size: 11)).foregroundStyle(.secondary)
+            } else if let result = store.usageCacheResult {
+                Text(result).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Done") { store.usageCacheResult = nil }.controlSize(.small)
+            } else {
+                Text(UsageCacheText.confirmation).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Clear cached usage data") {
+                        store.usageCacheClearRequested = false
+                        clear()
+                    }
+                    Button("Cancel") { store.usageCacheClearRequested = false }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CardBackground())
+    }
+}
+
+/// Copy for the usage cache (R8), kept apart from the views so tests can check it.
+enum UsageCacheText {
+    static let confirmation = "This deletes SpanDeck's locally stored usage index (claude-ledger.json and its key file). "
+        + "It doesn't delete Claude Code or Grok transcripts, provider credentials or price files, and doesn't change "
+        + "plan-limit consent. Totals are rebuilt by reading the transcripts again, which can take a moment. Deleted "
+        + "files may remain in backups or snapshots; this isn't secure erasure."
+    static let cleared = "Cached usage data cleared. Totals are being rebuilt from your Claude Code and Grok files."
+}
+
 // MARK: - Combined token usage
 
 struct UsageCard: View {
@@ -789,6 +835,11 @@ struct Footer: View {
                     Text(store.pricing.source == .unavailable ? "No verified prices"
                          : "LiteLLM \(PricingText.short(store.pricing.revision)) · \(store.pricing.source == .bundled ? "built in" : "downloaded")")
                     Text("Newer reviewed prices arrive with SpanDeck updates")
+                }
+                Section("Cached usage data") {
+                    if let issue = store.usageCacheIssue { Text(issue) }
+                    Button("Clear cached usage data…") { store.usageCacheClearRequested = true }
+                        .disabled(store.usageCacheClearing)
                 }
                 Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 if store.claudeLimitsEnabled {

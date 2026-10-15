@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var sampleTimer: Timer?
     private var timers: [Timer] = []
     private var tick = 0
-    private var ledgerBusy = false
     private var currentInterval = 0.0
     private var snapshotDir: URL?
     private var hover: HoverController?
@@ -154,22 +153,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func refreshUsage() {
-        guard !ledgerBusy else { return }
-        ledgerBusy = true
         let windowStart = store.claudeLimits?.session?.resetsAt.map { $0.addingTimeInterval(-5 * 3600) }
-        ledger.refresh(windowStart: windowStart, progress: { [weak self] msg in
-            DispatchQueue.main.async { self?.store.indexing = msg }
-        }, completion: { [weak self] claude, grok, lastActivity in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.store.claudeUsage = claude
-                self.store.grokUsage = grok
-                self.store.usageUpdated = Date()
-                self.ledgerBusy = false
-                self.keepAwake.agentActivity = lastActivity
-                self.syncAwake()
-            }
-        })
+        Task { @MainActor in
+            guard let lastActivity = await services.refreshUsage(windowStart: windowStart) else { return }
+            keepAwake.agentActivity = lastActivity
+            syncAwake()
+        }
+    }
+
+    /// Settings ▸ Clear cached usage data, confirmed (R8). Usage is rebuilt from the transcripts right after.
+    private func clearUsageCache() {
+        Task { @MainActor in
+            await services.clearUsageCache()
+            refreshUsage()
+        }
     }
 
     // MARK: Keep awake
@@ -214,7 +211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             setClaudeLimits: { [weak self] on in self?.setClaudeLimits(on) },
             setGrokCredits: { [weak self] on in self?.setGrokCredits(on) },
             quotaSwitchChanged: { [weak self] provider, on in self?.quotaSwitchChanged(provider, on) },
-            updatePricing: { [weak self] in self?.updatePricing() }))
+            updatePricing: { [weak self] in self?.updatePricing() },
+            clearUsageCache: { [weak self] in self?.clearUsageCache() }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -225,6 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         // Drop the SwiftUI tree so nothing renders while the popover is hidden.
         popover.contentViewController = nil
+        // A clear that wasn't confirmed is dropped, and its result is only shown while the popover is open (R8).
+        store.usageCacheClearRequested = false
+        if !store.usageCacheClearing { store.usageCacheResult = nil }
     }
 }
 
@@ -255,7 +256,7 @@ extension AppDelegate {
 
         let view = PopoverView(store: store, actions: PopoverActions(refresh: {}, quit: {}, keepAwake: { _ in }, loginItem: env.loginItem, setClaudeLimits: { _ in },
                                                               setGrokCredits: { _ in }, quotaSwitchChanged: { _, _ in },
-                                                              updatePricing: {}))
+                                                              updatePricing: {}, clearUsageCache: {}))
             .background(Color(nsColor: NSColor(white: 0.13, alpha: 1)))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)

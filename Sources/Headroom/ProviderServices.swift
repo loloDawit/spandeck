@@ -165,6 +165,57 @@ final class ProviderServices {
         store.pricing = pricing.load()
     }
 
+    // MARK: Local usage (R8)
+
+    /// Bumped by every cache clear, so a refresh that started before it can't publish totals from before it.
+    private var usageGeneration = 0
+    private var usageRefreshing = false
+
+    /// Runs one ledger refresh and publishes the totals. Skipped while another refresh runs. Returns the newest
+    /// transcript activity, or nil when skipped or when a cache clear happened meanwhile (its result is dropped).
+    @MainActor @discardableResult
+    func refreshUsage(windowStart: Date?) async -> Date? {
+        guard !usageRefreshing else { return nil }
+        usageRefreshing = true
+        defer { usageRefreshing = false }
+        let generation = usageGeneration
+        let store = store, ledger = ledger
+        let (claude, grok, activity, issue) = await withCheckedContinuation { c in
+            ledger.refresh(windowStart: windowStart, progress: { msg in
+                DispatchQueue.main.async { store.indexing = msg }
+            }, completion: { claude, grok, activity in
+                c.resume(returning: (claude, grok, activity, ledger.cacheIssue))
+            })
+        }
+        guard generation == usageGeneration else { return nil }
+        store.claudeUsage = claude
+        store.grokUsage = grok
+        store.usageUpdated = Date()
+        store.usageCacheIssue = issue?.text
+        return activity
+    }
+
+    /// Settings ▸ Clear cached usage data, after confirmation. Deletes only SpanDeck's usage cache and its key; the
+    /// totals are rebuilt from the transcripts on the next refresh. A failure is shown and never reported as success.
+    @MainActor func clearUsageCache() async {
+        guard !store.usageCacheClearing else { return }
+        store.usageCacheClearing = true
+        store.usageCacheResult = nil
+        usageGeneration += 1
+        let ledger = ledger
+        let failure = await withCheckedContinuation { c in ledger.clearCache { c.resume(returning: $0) } }
+        store.usageCacheClearing = false
+        if case .cache(let f)? = failure {
+            store.usageCacheResult = LedgerClearFailure.cache(f).text
+            return
+        }
+        store.claudeUsage = nil
+        store.grokUsage = nil
+        store.usageUpdated = nil
+        store.usageCacheIssue = nil
+        store.usageCacheResult = failure?.text ?? UsageCacheText.cleared
+    }
+
     /// The user's explicit request to download the pinned LiteLLM price file, offered only when no verified prices are
     /// available (R6). Independent of provider consent. A failure is shown and leaves the prices in use unchanged.
     @MainActor func updatePricing() async {

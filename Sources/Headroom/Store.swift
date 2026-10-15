@@ -98,6 +98,13 @@ final class Store: ObservableObject {
     @Published var grokUsage: UsageSummary?
     @Published var indexing: String?
     @Published var usageUpdated: Date?
+    /// R8: Settings ▸ Clear cached usage data was chosen; the popover shows the confirmation card.
+    @Published var usageCacheClearRequested = false
+    @Published var usageCacheClearing = false
+    /// Outcome of the last clear, shown until the popover closes.
+    @Published var usageCacheResult: String?
+    /// Why the usage cache isn't being saved (R8), if it isn't.
+    @Published var usageCacheIssue: String?
     /// Which prices cost estimates use (R6). Starts unavailable until `ProviderServices.start()` loads them.
     @Published var pricing = PricingInfo.unavailable
     /// The user's explicit price download: running, and why the last one failed.

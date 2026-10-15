@@ -363,19 +363,54 @@ final class Pricing: @unchecked Sendable {
 
 // MARK: - Ledger
 
+/// Why the usage cache isn't being saved, or an old one couldn't be removed (R8). Usage is still counted in memory.
+enum LedgerCacheIssue: Equatable {
+    case notSaved(StorageFailure)
+    case legacyNotRemoved(StorageFailure)
+
+    var text: String {
+        switch self {
+        case .notSaved(let f): return "Usage cache not saved: \(f.text). Totals are kept in memory only."
+        case .legacyNotRemoved(let f): return "An old usage cache couldn't be removed: \(f.text)."
+        }
+    }
+}
+
+/// Why clearing the usage cache failed (R8).
+enum LedgerClearFailure: Error, Equatable {
+    /// Nothing was cleared.
+    case cache(StorageFailure)
+    /// The cache was deleted, but its identity key file wasn't.
+    case key(StorageFailure)
+
+    var text: String {
+        switch self {
+        case .cache(let f): return "Couldn't clear cached usage data: \(f.text). Nothing was cleared."
+        case .key(let f): return "Cached usage data was deleted, but its key file couldn't be removed: \(f.text)."
+        }
+    }
+}
+
 /// Incremental token ledger over Claude Code transcripts and Grok session usage files.
 /// Claude: tail-reads ~/.claude/projects/**/*.jsonl by byte offset, dedupes on message id + request id
 /// (same rule as ccusage), and buckets per hour and model. State is cached on disk so relaunches are instant.
+///
+/// The cache (R8) holds no transcript paths, message ids or request ids: files and messages are keyed by opaque ids,
+/// a keyed hash (HMAC-SHA256, truncated to 128 bits) under a random per-install key kept in its own owner-only file.
+/// Paths are only held in memory to read the files.
 final class Ledger {
     private struct FileMark: Codable { var offset: UInt64 }
     /// What has been counted for one message id + request id, per model.
     private struct Seen: Codable { var hour: Int; var parts: [String: Agg] }
+    /// Version 4 (R8): `files` and `seen` are keyed by opaque ids. Version 3 keyed them by raw paths and ids.
     private struct State: Codable {
-        var version = 3
+        var version = 4
         var files: [String: FileMark] = [:]
         var seen: [String: Seen] = [:]
         var hours: [Int: [String: Agg]] = [:]
     }
+    static let cacheName = "claude-ledger.json"
+    static let keyName = "claude-ledger.key"
     struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
@@ -395,16 +430,48 @@ final class Ledger {
     private var changeCounter = 0
     private var lastSummaryKey = ""
     private var cachedSummaries: (UsageSummary, UsageSummary)?
-    private let cacheFile: URL
+    private let storage: PrivateDirectory
+    /// Key for the opaque ids. Loaded (or made) before anything is scanned, since ids are computed while indexing.
+    private var key = SymmetricKey(size: .bits256)
+    private var keyPersisted = false
+    private let issueLock = NSLock()
+    private var issue: LedgerCacheIssue?
     private let home: URL
     private let pricing: Pricing
     private let usageNeedle = Array(#""usage":{"#.utf8)
 
-    init(home: URL, appSupport: URL, pricing: Pricing) {
+    init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil) {
         self.home = home
-        self.cacheFile = appSupport.appendingPathComponent("claude-ledger.json")
+        self.storage = storage ?? PrivateDirectory(url: appSupport)
         self.pricing = pricing
     }
+
+    /// Why the cache isn't being saved, if it isn't; nil when it is (or nothing was tried yet).
+    var cacheIssue: LedgerCacheIssue? { issueLock.withLock { issue } }
+    private func setIssue(_ i: LedgerCacheIssue?) { issueLock.withLock { issue = i } }
+
+    // MARK: Opaque ids (R8)
+
+    /// HMAC-SHA256 over a domain and length-prefixed parts, so different kinds and splits of input can't collide.
+    private func opaqueID(_ domain: String, _ parts: String...) -> String {
+        var mac = HMAC<SHA256>(key: key)
+        for part in [domain] + parts {
+            let bytes = Data(part.utf8)
+            mac.update(data: withUnsafeBytes(of: UInt64(bytes.count).bigEndian) { Data($0) })
+            mac.update(data: bytes)
+        }
+        let digits = Array("0123456789abcdef".utf8)
+        var out: [UInt8] = []
+        out.reserveCapacity(32)
+        for b in Data(mac.finalize()).prefix(16) {
+            out.append(digits[Int(b >> 4)])
+            out.append(digits[Int(b & 0x0F)])
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    private func fileID(_ path: String) -> String { opaqueID("file", path) }
+    private func messageID(_ id: String, _ request: String) -> String { opaqueID("message", id, request) }
 
     private var claudeRoots: [URL] {
         [home.appendingPathComponent(".claude/projects"), home.appendingPathComponent(".config/claude/projects")]
@@ -444,12 +511,45 @@ final class Ledger {
         queue.sync { if dirty { saveCache() } }
     }
 
+    /// Deletes the usage cache and its key (R8), on the ledger queue so it can't interleave with a refresh or a save.
+    /// Resets everything in memory, so the next refresh re-reads the transcripts from scratch and nothing from before
+    /// the clear is saved again. Transcripts, pricing files and settings are not touched. If the cache can't be
+    /// deleted, nothing is reset.
+    func clearCache(completion: @escaping (LedgerClearFailure?) -> Void) {
+        queue.async { [self] in completion(clear()) }
+    }
+
+    private func clear() -> LedgerClearFailure? {
+        do { try storage.remove(Self.cacheName) } catch { return .cache(error as? StorageFailure ?? .io(EIO)) }
+        state = State()
+        loaded = true
+        dirty = false
+        lastSave = .distantPast
+        key = SymmetricKey(size: .bits256)
+        keyPersisted = false
+        hotFiles = []
+        grokFiles = [:]
+        lastFullScan = .distantPast
+        changeCounter += 1
+        cachedSummaries = nil
+        lastSummaryKey = ""
+        setIssue(nil)
+        do {
+            try storage.removeTemporaryFiles(of: Self.cacheName)
+            try storage.removeTemporaryFiles(of: Self.keyName)
+            try storage.remove(Self.keyName)
+        } catch {
+            return .key(error as? StorageFailure ?? .io(EIO))
+        }
+        return nil
+    }
+
     // MARK: Claude
 
     private func scanClaude(progress: (String?) -> Void) {
         let cutoff = Date().addingTimeInterval(-Double(Self.retentionDays) * 86400)
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
-        var candidates: [(String, UInt64)] = []
+        var candidates: [(path: String, id: String, size: UInt64)] = []
         var present = Set<String>()
         var hot = Set<String>()
         let hotCutoff = Date().addingTimeInterval(-2 * 3600)
@@ -460,21 +560,22 @@ final class Ledger {
                 guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true,
                       let mtime = v.contentModificationDate, mtime >= cutoff else { continue }
                 let path = url.path
-                present.insert(path)
+                let id = fileID(path)
+                present.insert(id)
                 if mtime >= hotCutoff { hot.insert(path); lastActivity = max(lastActivity, mtime) }
                 let size = UInt64(v.fileSize ?? 0)
-                if state.files[path]?.offset != size { candidates.append((path, size)) }
+                if state.files[id]?.offset != size { candidates.append((path, id, size)) }
             }
         }
 
         hotFiles = hot
         let initial = state.files.isEmpty
-        for (i, (path, size)) in candidates.enumerated() {
+        for (i, (path, id, size)) in candidates.enumerated() {
             if initial, i % 25 == 0 { progress("Indexing Claude logs \(i)/\(candidates.count)") }
-            var offset = state.files[path]?.offset ?? 0
+            var offset = state.files[id]?.offset ?? 0
             if size < offset { offset = 0 } // rewritten file; dedupe keys prevent double counting
             offset = ingestClaudeFile(path, from: offset)
-            state.files[path] = FileMark(offset: offset)
+            state.files[id] = FileMark(offset: offset)
             dirty = true
         }
 
@@ -518,10 +619,11 @@ final class Ledger {
             guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                   let size = (attrs[.size] as? NSNumber)?.uint64Value else { continue }
             if let m = attrs[.modificationDate] as? Date { lastActivity = max(lastActivity, m) }
-            var offset = state.files[path]?.offset ?? 0
+            let id = fileID(path)
+            var offset = state.files[id]?.offset ?? 0
             if size == offset { continue }
             if size < offset { offset = 0 }
-            state.files[path] = FileMark(offset: ingestClaudeFile(path, from: offset))
+            state.files[id] = FileMark(offset: ingestClaudeFile(path, from: offset))
             dirty = true
         }
     }
@@ -572,7 +674,7 @@ final class Ledger {
             changeCounter += 1
             return
         }
-        let key = id + ":" + req
+        let key = messageID(id, req)
         if var old = state.seen[key] {
             // Streaming logs the same message several times with growing counts; count only the growth.
             for (m, a) in parts {
@@ -723,16 +825,51 @@ final class Ledger {
 
     // MARK: Cache
 
+    /// Loads the key, then the cache (R8). Anything else at the cache path is deleted at once and the transcripts are
+    /// re-indexed: a version 3 cache (raw paths and ids), a corrupt file, a cache whose key is gone, or a symlink.
+    /// If the folder can't be made owner-only nothing is read, and usage is kept in memory with a fresh key.
     private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheFile),
-              let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version else { return }
-        state = s
+        key = SymmetricKey(size: .bits256)
+        keyPersisted = false
+        do {
+            try storage.prepare()
+            try storage.removeTemporaryFiles(of: Self.cacheName)
+            try storage.removeTemporaryFiles(of: Self.keyName)
+        } catch {
+            setIssue(.notSaved(error as? StorageFailure ?? .io(EIO)))
+            return
+        }
+        if let k = try? storage.read(Self.keyName), k.count == 32 {
+            key = SymmetricKey(data: k)
+            keyPersisted = true
+        }
+        let data: Data?
+        do { data = try storage.read(Self.cacheName) } catch { data = Data() } // unreadable: discard
+        guard let data else { return }
+        if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version {
+            state = s
+            return
+        }
+        do { try storage.remove(Self.cacheName) } catch {
+            setIssue(.legacyNotRemoved(error as? StorageFailure ?? .io(EIO)))
+        }
     }
 
+    /// Writes the key (once) and then the cache, both owner-only. On failure nothing is written elsewhere; the issue
+    /// is reported and the save retried later.
     private func saveCache() {
         guard let data = try? JSONEncoder().encode(state) else { return }
-        try? data.write(to: cacheFile, options: .atomic)
-        dirty = false
         lastSave = Date()
+        do {
+            if !keyPersisted {
+                try storage.write(key.withUnsafeBytes { Data($0) }, to: Self.keyName)
+                keyPersisted = true
+            }
+            try storage.write(data, to: Self.cacheName)
+            dirty = false
+            setIssue(nil)
+        } catch {
+            setIssue(.notSaved(error as? StorageFailure ?? .io(EIO)))
+        }
     }
 }
