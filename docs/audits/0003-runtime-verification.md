@@ -2,11 +2,11 @@
 
 Issue: [#3](https://github.com/loloDawit/spandeck/issues/3) · Parent: [#2](https://github.com/loloDawit/spandeck/issues/2) · Related: #5, #8, #11, #46 · Code inventory: [0003-security-inventory.md](0003-security-inventory.md)
 
-> **Status (2026-10-16): first run done, partially verified.** The owner ran §5 in `spandecktest` on 2026-10-16, 05:03–05:24 UTC, against build `227015c`. The results are in §8.
-> - **Verified [runtime]:** file-system privacy, `--snapshot` isolation, accounting display, and no observed network use.
-> - **Not verified:** credential, subprocess and login-item absence. The monitor missed `security` runs and a login-item registration that are known to have happened (§8.2), so its zero counts aren't evidence of absence.
-> - **Owner input needed:** the Claude consent change during the run, plus three confirmations (§8.3).
-> - **No app defect is confirmed.** #3 stays open.
+> **Status (2026-10-16): runtime verification done on one Mac (runs 1 and 2).**
+> - **Default launch:** no credential or Keychain access, no child process, no network observed, no login item, no consent change. Its only side effects are local: it creates `~/Library/Application Support/Headroom` (`0700`) with an index cache and key (`0600`) that hold no paths, ids or content, plus a preferences file. Labeled [runtime] in §8.4, within the limits in §9.
+> - **Run 2** used a kernel-reported fork monitor, proven by a positive control in the same account.
+> - **Not verified:** V16 (consent-enabled requests; by design), Intel and other macOS versions, and file reads (not observable without root).
+> - **No app defect found.**
 
 **Terms used below:**
 - **Menu-bar item:** the app's gauges near the clock, top right (for example `10% ▁▂ 85%` for CPU and memory). It has no icon or name.
@@ -262,19 +262,19 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 | ID | Result | Evidence and notes |
 |---|---|---|
 | V1 Normal start | **Pass** [runtime] | Process up 99–182 ms after `open` across 4 launches. Menu-bar gauges and popover work (screenshot 05:11:56). |
-| V2 Claude credential | **Not verified** | 0 child processes and 0 log events in all launches. That includes windows where consent was **on**, so `security` must have run (§8.2). The monitor can't show absence. No Keychain prompt was reported; with no Keychain item, none is expected either way. |
-| V3 Grok credential and CLI | **Not verified** (the CLI can't run) | No `grok` binary exists in the account, so `grok models` couldn't run. Grok consent stayed off ("Set up Grok credits…" in Settings). An `auth.json` read isn't observable (§9). |
+| V2 Claude credential | **Not verified** in run 1; **pass in run 2** (§8.4) | 0 child processes and 0 log events in all launches. That includes windows where consent was **on**, so `security` must have run (§8.2). The monitor can't show absence. No Keychain prompt was reported; with no Keychain item, none is expected either way. |
+| V3 Grok credential and CLI | **Not verified** in run 1; **CLI pass in run 2** (§8.4) | No `grok` binary exists in the account, so `grok models` couldn't run. Grok consent stayed off ("Set up Grok credits…" in Settings). An `auth.json` read isn't observable (§9). |
 | V4 Network | **Pass, with limits** [runtime] | `lsof -i` at 1 Hz showed 0 sockets in 4 launches (570 s in total). `nettop` showed no rows. 0 network log events. Consistent with the code even after consent: with no credential, no request is sent. Short connections between samples can't be excluded (§9). |
 | V5 Pricing | **Pass** [runtime] | No `pricing-source.json` in any capture. Settings shows "LiteLLM 4d52918 · built in". No network (V4). |
 | V6 Login item at launch | **Pass** [runtime, owner observation] | Absent before launch (preflight). The owner confirmed it was still absent after the earlier launches, before they turned it on (V15). The app log recorded no ServiceManagement event, but that's not evidence either way (§8.2). |
 | V7 Preferences | **Pass for default launch** [runtime]; consent change pending confirmation | Domain absent before launch. The 05:11:56 screenshot, about 70 s after launch, shows "Plan limits are off". By 05:15:38 Settings shows "Turn off Claude plan limits", and `claude.limits.enabled = 1` from 05:16:46 on (§8.2). Also `usage.metric` (the Cost/Tokens switch). |
 | V8 Files written | **Pass** [runtime] | The app wrote:<br>• `~/Library/Application Support/Headroom/` (`drwx------`) with `claude-ledger.json` and `claude-ledger.key` (`-rw-------`);<br>• `~/Library/Preferences/dev.headroom.Headroom.plist`;<br>• the per-user Metal shader cache `…/C/dev.headroom.Headroom/com.apple.metal/…`, written by system graphics frameworks for the process.<br>The other changed files belong to macOS services, Chrome, Warp and Docker in the test account. |
-| V9 Background work | **Pass for power assertions** [runtime]; subprocesses **not verified** | No Headroom power assertion in any capture. Subprocess absence can't be shown (V2). |
+| V9 Background work | **Pass for power assertions** [runtime]; subprocesses not verified in run 1, **pass in run 2** (§8.4) | No Headroom power assertion in any capture. Subprocess absence can't be shown (V2). |
 | V10 Cache minimization | **Pass** [runtime] | Schema 4. 51 `files` and 1001 `seen` entries, all 32-hex ids. Hex `keyCheck`. No `/`. No content, path or id canary. The model canary is present, which shows indexing ran. The same result held at every capture, including after clear and after relaunch. |
 | V11 Accounting display | **Pass** [runtime] | `claude-sonnet-4-5` shows 30.0K tokens at $0.33, and `claude-rvmodel…` shows 10 tokens at n/a. Totals read `≥$0.33`, with an explanation and "?" on the chart. 30.0K is correct: the timing sessions reused the privacy session's message ids, so 51,020 streamed records deduplicated to 1000 unique messages of 30 tokens each. That's a fixture design flaw (§8.2); the app's arithmetic is right ($3/M input, $15/M output). |
 | V12 Temporary files | **Pass** [runtime] | No `.claude-ledger.*.tmp-*` after quit. |
 | V13 Clear cached usage | **Pass** [runtime] | The confirmation text names only the cache and key, and says transcripts, credentials, prices and consent are kept. After confirming: "Cached usage data cleared. Totals are being rebuilt". The rebuild took about 6 s at 55–97 % CPU, and totals were unchanged.<br>Owner's `shasum` comparison (equality only, no hashes shared): `claude-ledger.key` **different** before and after, so a new key was made and the old one didn't come back; fixture transcripts **same**, so they weren't modified. |
-| V14 "Off" persists | **Not verified** | Consent was on before the relaunch, so this tested the reverse: **consent on persisted** across the relaunch (`claude.limits.enabled = 1` at 05:22:35). Needs a rerun with consent never enabled. |
+| V14 "Off" persists | **Not verified** in run 1; **pass in run 2** (§8.4) | Consent was on before the relaunch, so this tested the reverse: **consent on persisted** across the relaunch (`claude.limits.enabled = 1` at 05:22:35). Needs a rerun with consent never enabled. |
 | V15 Login item opt-in | **Pass** [runtime, owner observation] | After Settings ▸ Launch at login, macOS showed a notification and listed "Headroom — Application" under Open at Login (screenshot 05:23:46). Turning the toggle off removed it. |
 | V16 Consent-enabled paths | **Not verified** (by design) | — |
 | V17 `--snapshot`, release | **Pass** [runtime] | Exit 64; 0 files; no process left running; Application Support still absent. |
@@ -305,6 +305,44 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 3. ~~**V13 hashes**~~: answered. Key: different; fixtures: same.
 4. ~~**V18 visual check**~~: answered. The owner shared the image, and it is synthetic only (V18).
 
+### 8.4 Run 2: 2026-10-16, 06:27–06:38 UTC (owner)
+
+**Setup:**
+- **Build:** `855b6f8`, same app binaries as run 1 (release `6390dbef…`, debug `1a5974f5…`), plus `procwatch` `ccb4a99a…`.
+- **Account:** `spandecktest`, reset with `clean`. All 14 preflight checks passed, and Login Items didn't list Headroom.
+- **Fixtures:** the privacy session plus 50 timing sessions, with message ids unique per file: 50,071 distinct messages.
+- **Rules:** the owner was told not to touch the consent card or Settings in the main launch and the relaunch, and to click "Enable Claude plan limits" once in the control launch.
+
+**Evidence:** the owner's sanitized `results-855b6f8…-20261016T062737Z.md`. No screenshots.
+
+| ID | Result | Evidence |
+|---|---|---|
+| V2 Claude credential | **Pass** [runtime] | Main launch, 330 s: `procwatch` reported **0 forks**, with five 60 s refresh ticks inside the window. Relaunch, 79 s: 0 forks. Control: after the Enable click, **2 forks of `/usr/bin/security`**: 06:37:18.2, the forced refresh, and 06:37:48.1, the 60 s timer, exactly 60 s after launch at 06:36:47.9. So the monitor sees `security` in this account, and its 0 in the main launch means no Keychain lookup. Nothing was sent: there was no credential, and no sockets were seen. |
+| V3 Grok credential and CLI | **Pass for the CLI** [runtime]; **file read not verified** | 0 forks in the main launch and the relaunch, so no `grok`. Grok consent stayed `absent` throughout. An `auth.json` read isn't observable (§9). |
+| V4 Network | **Pass, with limits** [runtime] | 0 socket lines in all 3 launches (500 s in total). `nettop` showed no rows. 0 network log events. |
+| V7 Preferences | **Pass** [runtime] | `claude.limits.enabled` and `grok.enabled` were `absent` at every 5 s check: main launch 06:28:39–06:34:14, relaunch 06:35:01–06:36:19. The only stored key was `usage.metric`, the popover's Cost/Tokens switch (`@AppStorage` at `PopoverView.swift:618`). In the control, `claude.limits.enabled=1` appeared at the first check after the click (06:37:19). |
+| V9 Background work | **Pass** [runtime] | No Headroom power assertion. 0 forks. |
+| V10 Cache minimization | **Pass** [runtime] | Schema 4. 51 `files` and 50,071 `seen` entries, all 32-hex ids. No `/`. No content, path or id canary. Model canary present. Cache 8.2 MB (`0600`), folder `0700`. The same result held after quit. |
+| V12 Temporary files | **Pass** [runtime] | None after quit. |
+| V14 "Off" persists | **Pass** [runtime] | After quitting and relaunching, consent was still `absent`, with 0 forks over 79 s, which includes one 60 s tick. The owner quit at 06:36:19, before the 120 s window ended. |
+| V19 Performance (#8) | Recorded [runtime] | Time to process: 156–208 ms. First index of 50,071 messages (about 50 MB): about 6 s at 67–99 % CPU.<br>Peak RSS: 161 MB during the first index, then 51–70 MB. 143 MB while a relaunch loaded the 8.2 MB cache.<br>CPU, by 30 s window after indexing: 0.4–7 %. Mean over the relaunch: 4.8 %.<br>One machine; the summary keeps the first 200 samples of each launch. |
+
+**The consent question from run 1 is resolved.** Across 409 s of the main launch and the relaunch, with the popover in use, consent never changed. It changed exactly once, at the deliberate click in the control. No automatic enabling was observed, and the code has no path for it (§8.2), so run 1's change is attributed to a click. **No defect.**
+
+**Answer to #3's last criterion: is the default launch quiet and offline?**
+
+*Offline:* yes, as observed.
+- No connection was seen: sockets sampled every second, `nettop`, and the log.
+- No credential was read: kernel-reported forks, checked against a positive control.
+
+*Side effects:* local and expected.
+- It reads `~/.claude/projects` (and `~/.config/claude/projects`, `~/.grok/sessions`).
+- It creates `~/Library/Application Support/Headroom/` (`0700`) with `claude-ledger.json` and `claude-ledger.key` (`0600`). These hold opaque ids and hourly token counts per model, not paths, ids or content.
+- It writes `~/Library/Preferences/dev.headroom.Headroom.plist` (UI settings only), and macOS adds a Metal shader cache.
+- It registers no login item and holds no power assertion.
+
+*Scope:* one Apple Silicon Mac on macOS 26.5, with an ad-hoc build, under the limits in §9.
+
 ## 9. Observation limits
 
 - **Sampling:** child processes are sampled every 0.1 s, and sockets every 1 s. A process or connection shorter than that can be missed. **Run 1 confirmed this:** `security` runs that the code and UI show happened were not recorded (§8.2).
@@ -317,13 +355,9 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 ## 10. What #3 still needs
 
-- [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
-- [ ] The consent change resolved by the rerun: no interaction with the consent card; `claude.limits.enabled` captured at fixed times and staying absent.
-- [x] A monitor that sees every child process: `procwatch`, checked against a stand-in. Its check in the test account is run 2, step 8.
-- [ ] Run 2: V2, V3 (fork part), V9 and V14, with consent left alone, plus the positive control. Login-item registration stays an owner observation (V6 and V15 passed that way).
-- [ ] Each confirmed defect filed as its own issue; none silently fixed.
-- [ ] Inventory §9 item "Default launch confirmed with reproducible runtime observations" updated from §8.
-- [ ] Roadmap and inventory status updated with the [runtime] results.
-- [ ] V16 (consent-enabled paths) either accepted by the owner as [not verified] for #3, or covered by a separately approved local-transport design.
-
-The performance numbers from V19 feed #8, and responsiveness notes from V20 feed #46. Neither is required to close #3.
+Every #3 deliverable now has evidence. The last one, "Confirm whether the default launch is quiet/offline or has side effects, using reproducible observations", is answered in §8.4. **Closing #3 is the owner's decision.** What stays open or out of scope:
+- **V16, consent-enabled paths:** not verified by design (no real credentials or provider requests). Covering them needs a separately approved local-transport design.
+- **Coverage:** Intel Macs, other macOS versions and a Developer ID-signed build aren't covered. Signing is tracked in #11; see [RELEASE_SIGNING.md](../RELEASE_SIGNING.md) step 8.
+- **File reads aren't observable without root.** A read of the absent `auth.json`, or of transcripts outside the expected folders, isn't shown.
+- **Hand-offs:** V19 figures go to #8. Nothing responsiveness-related (V20) was observed for #46.
+- **Debug snapshot cosmetics:** some controls render as 🚫 placeholders (V18). Owner to decide whether to track it.

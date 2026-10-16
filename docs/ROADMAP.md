@@ -13,7 +13,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
 | Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
 | Done | R11: SHA-pin actions, least `permissions`, signing / notarization plan, #37 | M0 | Done — PR #41 (`eca47fe`) | Workflow and doc change. Hardening check passes in hosted CI; nothing signed or notarized. |
-| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Run 1 done; **partly verified** | [Results](audits/0003-runtime-verification.md#8-results). File privacy, `--snapshot` and network checks passed [runtime]. Credential and subprocess absence aren't verified because the monitor missed known `security` runs. Needs owner answers (§8.3), a better process monitor and a rerun. |
+| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | **Verified on one Mac** (runs 1 and 2) | [Results](audits/0003-runtime-verification.md#8-results). Default launch: offline as observed, no credential or subprocess access, no login item; only local cache and preference writes [runtime]. Closing #3 is the owner's decision. Not covered: Intel, other macOS versions, signed builds, V16. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
 | Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
 | Later | #4 capability matrix and integration lifecycle spec, #10 supported Claude surfaces | M0 | Open | Feed M1 integrations and M2 adapters. |
@@ -114,7 +114,7 @@ Depends on: M1 exit, #11 / R11, #8 performance budget.
 
 Nothing should be published as a SpanDeck release until these are cleared:
 
-1. **No OS-level evidence.** Every safety claim so far is [mocked] or code-level (#3, audit §7 Phase 2).
+1. ~~**No OS-level evidence.**~~ Default-launch behavior verified [runtime] on one Apple Silicon Mac with macOS 26.5 and an ad-hoc build ([runtime verification](audits/0003-runtime-verification.md) §8.4). Still open: Intel, other macOS versions, a Developer ID-signed build (#11), and consent-enabled paths (V16).
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
 3. ~~**`--snapshot` can write real usage data to any path** until R10 merges (#36).~~ Resolved in source by R10 (#39); not verified by running a release binary.
 4. **No signing or notarization.** Builds are signed ad hoc, and the Developer ID plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)) hasn't been carried out. If triggered, `release.yml` would still publish an ad-hoc-signed, unnotarized DMG; the release gate is open in #11. Hosted CI now passes ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), but it runs tests only, serially (#46).
