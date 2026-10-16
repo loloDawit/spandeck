@@ -5,12 +5,12 @@
     "unknown models"
   ],
   "classification": "pass",
-  "policy": "P7: records that can't be read are not counted, and should be reported as unread rather than vanish (the ledger keeps no such count; see the report). User records and <synthetic> records carry no billable usage and are ignored. A record without a model is counted under \"unknown\", whose cost is unknown.",
+  "policy": "P7: records that can't be read are not counted and are reported as unread (#58): malformed JSON and invalid UTF-8 as malformed, a missing or unparsable timestamp as undated. Neither has a period. User records and <synthetic> records carry no billable usage and are ignored, not unread. A record without a model is counted under \"unknown\", whose cost is unknown.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 10,
   "duplicates": 0,
-  "derivation": "Counted: A [100, 50], B [20, 2] (claude-test-1) and M [11, 1] (no model). Not counted: truncated JSON, invalid UTF-8, a timestamp without a zone or T, no timestamp, a user record, a <synthetic> record. 184 tokens, 3 operations.",
+  "derivation": "Counted: A [100, 50], B [20, 2] (claude-test-1) and M [11, 1] (no model). Not counted: truncated JSON, invalid UTF-8, a timestamp without a zone or T, no timestamp, a user record, a <synthetic> record. 184 tokens, 3 operations. Unread: 2 malformed (the truncated JSON and the invalid UTF-8) and 2 undated (no zone or T; no timestamp). Before #58 they left no trace.",
   "steps": [
     {
       "ops": [
@@ -38,8 +38,13 @@
           "2026-03-10": 184
         },
         "today": 184,
-        "week": 184
+        "week": 184,
+        "completeness": {
+          "malformed": 2,
+          "undated": 2
+        }
       }
     }
-  ]
+  ],
+  "followUp": "#58"
 }

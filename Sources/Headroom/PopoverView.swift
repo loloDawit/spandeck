@@ -627,13 +627,8 @@ struct UsageCard: View {
                 StatTile(title: "7 days", totals: combined?.week)
                 StatTile(title: "30 days", totals: combined?.month)
             }
-            if let note = IdentityText.note(store.claudeUsage) {
-                Text(note.text).font(.system(size: 10)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(note.detail)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(note.text + " " + note.detail)
-            }
+            let notes = UsageNotes.notes(store.claudeUsage)
+            if !notes.isEmpty { UsageNotes(notes: notes) }
             VStack(spacing: 4) {
                 ProviderRow(name: "Claude", color: .claude, summary: store.claudeUsage)
                 if grok != nil { ProviderRow(name: "Grok", color: .grok, summary: grok) }
@@ -822,6 +817,68 @@ enum IdentityText {
                     + "without both a message id and a request id: " + kinds.joined(separator: ", ") + ". These may be "
                     + "counted twice or merged, so token totals and cost estimates may be off. Costs are still estimates, "
                     + "not your bill.")
+    }
+}
+
+/// Copy for data completeness (#58), kept apart from the views so tests can check it. Independent of identity (#55)
+/// and cost coverage (R7): it says what the ledger couldn't read, not how records were told apart or priced.
+/// Provisional wording until #7 settles the metric terms.
+enum CompletenessText {
+    static let incomplete = "Some usage records couldn't be read. Totals may be incomplete."
+
+    /// The note and its detail when any Claude usage record in the 30 days couldn't be read, or was counted with an
+    /// invalid counter left out; nil otherwise. A line still being written isn't a gap. Counts only, never content.
+    static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
+        guard let c = claude?.month.completeness, !c.isComplete else { return nil }
+        func n(_ k: Int, _ one: String, _ many: String) -> String { "\(k) " + (k == 1 ? one : many) }
+        var parts: [String] = []
+        if c.unread > 0 {
+            var kinds: [String] = []
+            if c.malformed > 0 { kinds.append(n(c.malformed, "isn't valid JSON", "aren't valid JSON")) }
+            if c.undated > 0 { kinds.append(n(c.undated, "has no usable timestamp", "have no usable timestamp")) }
+            if c.invalidUsage > 0 {
+                kinds.append(n(c.invalidUsage, "has usage in a form SpanDeck doesn't recognize",
+                               "have usage in a form SpanDeck doesn't recognize"))
+            }
+            parts.append(n(c.unread, "record", "records") + " couldn't be read: " + kinds.joined(separator: ", ") + ".")
+        }
+        if c.flawed > 0 {
+            parts.append(n(c.flawed, "message", "messages") + " had a token count that isn't a valid number; it was "
+                         + "left out and the rest counted.")
+        }
+        let undated = c.undated + c.malformed
+        if undated > 0 {
+            parts.append(undated == c.unread
+                ? (undated == 1 ? "It has no date, so it may belong to any period."
+                                : "None of them has a date, so they may belong to any period.")
+                : n(undated, "of the unread records has no date, so it", "of the unread records have no date, so they")
+                    + " may belong to any period.")
+        }
+        return (incomplete, "In Claude Code's logs for the last 30 days, " + parts.joined(separator: " ") + " What "
+                    + "couldn't be read isn't in the token totals or cost estimates, so both may be low. Costs are "
+                    + "still estimates, not your bill.")
+    }
+}
+
+/// The notes under the usage tiles (#55, #58): one short line each, with the detail as a tooltip and for VoiceOver.
+/// What couldn't be read comes first, then how records were told apart. Cost coverage stays with the costs.
+struct UsageNotes: View {
+    let notes: [(text: String, detail: String)]
+
+    nonisolated static func notes(_ claude: UsageSummary?) -> [(text: String, detail: String)] {
+        [CompletenessText.note(claude), IdentityText.note(claude)].compactMap { $0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(notes, id: \.text) { note in
+                Text(note.text).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(note.detail)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(note.text + " " + note.detail)
+            }
+        }
     }
 }
 

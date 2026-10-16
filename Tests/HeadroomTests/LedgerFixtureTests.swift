@@ -59,6 +59,9 @@ struct LedgerFixtureTests {
         var knownCost: Double?
         /// How the 30 days' operations were identified (#55).
         var identity: IdentityCoverage?
+        /// What couldn't be read (#58). Unlike the other fields it is always checked: left out, it means everything was
+        /// read and nothing is pending.
+        var completeness: DataCompleteness?
     }
 
     /// What one refresh produced, in the same terms as an expectation.
@@ -73,6 +76,7 @@ struct LedgerFixtureTests {
         var models: [String: String]
         var knownCost: Double
         var identity: IdentityCoverage
+        var completeness: DataCompleteness
 
         var operations: Int { hours.values.flatMap(\.values).reduce(0) { $0 + $1[5] } }
 
@@ -92,6 +96,7 @@ struct LedgerFixtureTests {
             check("models", e.models, models)
             if let c = e.knownCost, abs(c - knownCost) > 1e-12 { out.append("knownCost: expected \(c), got \(knownCost)") }
             check("identity", e.identity, identity)
+            check("completeness", e.completeness ?? DataCompleteness(), completeness)
             return out
         }
     }
@@ -158,7 +163,10 @@ struct LedgerFixtureTests {
                     try h.write(contentsOf: source())
                     try h.close()
                 case "delete": try fm.removeItem(at: dest)
-                case "rename": try fm.moveItem(at: dest, to: projects.appendingPathComponent(op.to!))
+                case "rename":
+                    let to = projects.appendingPathComponent(op.to!)
+                    try fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try fm.moveItem(at: dest, to: to)
                 default: Issue.record("unknown op \(op.op)")
                 }
             }
@@ -201,7 +209,8 @@ struct LedgerFixtureTests {
             return Observation(hours: hours, days: days, today: s.today.tokens, week: s.week.tokens, month: s.month.tokens,
                                window: s.window?.tokens, coverage: name(s.month.cost.coverage),
                                models: Dictionary(uniqueKeysWithValues: s.models.map { ($0.model, name($0.cost.coverage)) }),
-                               knownCost: s.month.cost.known, identity: s.month.identity)
+                               knownCost: s.month.cost.known, identity: s.month.identity,
+                               completeness: s.month.completeness)
         }
 
         /// Checks the baseline exactly when there is one, and the expected result (as a known issue if there's a
@@ -224,7 +233,7 @@ struct LedgerFixtureTests {
     // MARK: Tests
 
     @Test func everyFixtureIsComplete() throws {
-        #expect(Self.names.count == 35)
+        #expect(Self.names.count == 41)
         for name in Self.names {
             let f = try Self.load(name)
             #expect(["pass", "defect", "ambiguous"].contains(f.classification), "\(name)")
@@ -276,9 +285,10 @@ struct LedgerFixtureTests {
     }
 
     /// A crash after counting new records but before saving them: the next launch starts from the older cache and
-    /// must reach the same totals, not count the unsaved records twice.
-    @Test func unsavedProgressIsNotCountedTwice() async throws {
-        let rig = try Rig("F01-streaming-growth")
+    /// must reach the same totals, not count the unsaved records twice. F40 does the same for unread records (#58).
+    @Test(arguments: ["F01-streaming-growth", "F40-unread-appended"])
+    func unsavedProgressIsNotCountedTwice(_ name: String) async throws {
+        let rig = try Rig(name)
         try rig.apply(rig.fixture.steps[0].ops)
         _ = await rig.observe() // the first refresh saves
         for step in rig.fixture.steps.dropFirst() {

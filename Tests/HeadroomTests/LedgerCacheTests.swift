@@ -93,7 +93,7 @@ struct LedgerCacheTests {
         }
         #expect(!cache.contains("/") && !cache.contains("\\/")) // no path at all, escaped or not
         let json = try rig.cacheJSON()
-        #expect(json["version"] as? Int == 5)
+        #expect(json["version"] as? Int == 6)
         let ids = Array((json["files"] as? [String: Any] ?? [:]).keys) + Array((json["seen"] as? [String: Any] ?? [:]).keys)
             + Self.linkIDs(json)
         #expect(ids.count == 8 && Set(ids).count == 8) // 2 files, 2 messages, each message's 2 single ids
@@ -294,10 +294,13 @@ struct LedgerCacheTests {
 
     // MARK: Migration
 
-    /// #55: a version 4 cache, even under the right key, is deleted and the transcripts re-indexed into version 5. A
-    /// version 4 ledger counted records without ids on every read and merged records with empty ids, so its totals
-    /// can't be kept, and none of them are mixed into the new ones. The key file is kept.
-    @Test func version4CacheReplaced() async throws {
+    /// #55 and #58: an older cache, even under the right key, is deleted and the transcripts re-indexed into version
+    /// 6. A version 4 ledger counted records without ids on every read and merged records with empty ids. A version 5
+    /// ledger subtracted negative counters, dropped cache-write breakdowns without a flat total and skipped
+    /// `"usage": {`, and its offsets are past those lines. Neither total can be kept, and none of it is mixed into the
+    /// new one. The key file is kept.
+    @Test(arguments: [4, 5])
+    func olderCacheReplaced(_ version: Int) async throws {
         let rig = try Rig()
         try rig.transcript([Self.partialLine(id: nil, req: nil)])
         let first = rig.ledger()
@@ -306,20 +309,52 @@ struct LedgerCacheTests {
         let keyCheck = try #require(try rig.cacheJSON()["keyCheck"] as? String)
         let key = try Data(contentsOf: rig.keyURL)
         let hour = Int(Date().timeIntervalSince1970 / 3600)
-        let agg = #"{"input":987654321,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":0,"calls":3}"#
-        let v4 = #"{"version":4,"keyCheck":"\#(keyCheck)","files":{},"seen":{},"hours":{"\#(hour)":{"claude-test-1":\#(agg)}}}"#
-        try Data(v4.utf8).write(to: rig.cacheURL)
+        let agg = #"{"input":987654321,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":-1000,"calls":3}"#
+        let extra = version == 5 ? #","links":{},"identity":{}"# : ""
+        let old = #"{"version":\#(version),"keyCheck":"\#(keyCheck)","files":{},"seen":{},"hours":{"\#(hour)":{"claude-test-1":\#(agg)}}\#(extra)}"#
+        try Data(old.utf8).write(to: rig.cacheURL)
         let transcripts = try rig.box.snapshot(".claude")
 
         let second = rig.ledger()
         let s = await refreshLedger(second).claude
-        #expect(s.month.tokens == 150 && s.month.identity == IdentityCoverage(fingerprinted: 1)) // nothing from v4
+        #expect(s.month.tokens == 150 && s.month.identity == IdentityCoverage(fingerprinted: 1)) // nothing from it
+        #expect(s.month.completeness == DataCompleteness())
         #expect(second.cacheIssue == nil)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
-        #expect(!cache.contains("987654321"))
-        #expect(try rig.cacheJSON()["version"] as? Int == 5 && Self.mode(rig.cacheURL) == 0o600)
+        #expect(!cache.contains("987654321") && !cache.contains("-1000"))
+        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.cacheURL) == 0o600)
         #expect(try Data(contentsOf: rig.keyURL) == key)
         #expect(try rig.box.snapshot(".claude") == transcripts)
+    }
+
+    /// #58: a record that can't be read is kept as an opaque id of its line and a kind, never its text, ids or a
+    /// fragment of it. What was unread survives a relaunch, and a rebuild finds the same.
+    @Test func unreadRecordsStoreNoContent() async throws {
+        let rig = try Rig()
+        let truncated = String(Self.partialLine(id: "msg_\(Self.messageCanary)", req: "req_\(Self.requestCanary)").dropLast(30))
+        let now = Date()
+        let undated = Self.line(id: "msg_U", req: "req_U", date: now, text: Self.promptCanary)
+            .replacingOccurrences(of: ISO8601DateFormatter().string(from: now), with: "soon")
+        let flawed = Self.line(id: "msg_F", req: "req_F").replacingOccurrences(of: #""output_tokens":50"#,
+                                                                             with: #""output_tokens":"\#(Self.toolCanary)""#)
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), truncated, undated, flawed])
+        let ledger = rig.ledger()
+        let want = DataCompleteness(flawed: 1, undated: 1, malformed: 1)
+        let first = await refreshLedger(ledger).claude
+        #expect(first.month.tokens == 150 + 100 && first.month.completeness == want)
+        #expect(first.today.completeness == want) // undated and malformed records are reported with every period
+        ledger.flush()
+
+        let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
+        for canary in [Self.messageCanary, Self.requestCanary, Self.promptCanary, Self.toolCanary, "msg_", "req_", "soon"] {
+            #expect(!cache.contains(canary), "\(canary)")
+        }
+        let unread = try #require(try rig.cacheJSON()["unread"] as? [String: Any])
+        #expect(unread.count == 2 && unread.keys.allSatisfy { $0.count == 32 && $0.allSatisfy(\.isHexDigit) })
+
+        #expect(await refreshLedger(rig.ledger()).claude.month.completeness == want)
+        #expect(await Self.clear(ledger) == nil)
+        #expect(await refreshLedger(ledger).claude.month.completeness == want)
     }
 
     /// #55: a migration interrupted before the new cache is saved. If the folder can't be prepared, nothing is read
@@ -344,7 +379,7 @@ struct LedgerCacheTests {
         let migrated = rig.ledger()
         #expect(await Self.tokens(migrated) == 300)
         migrated.flush()
-        #expect(try rig.cacheJSON()["version"] as? Int == 5 && Self.mode(rig.box.appSupport) == 0o700)
+        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.box.appSupport) == 0o700)
 
         // The state a stop between deleting the old cache and saving the new one leaves: no cache, the key kept.
         try FileManager.default.removeItem(at: rig.cacheURL)
@@ -372,7 +407,7 @@ struct LedgerCacheTests {
         #expect(rebuilt.month.tokens == 310 && rebuilt.month.identity == want)
     }
 
-    /// Tests 15-16: a version 3 cache (raw paths and ids) is deleted and the transcripts re-indexed into version 5,
+    /// Tests 15-16: a version 3 cache (raw paths and ids) is deleted and the transcripts re-indexed into version 6,
     /// with the same totals; its bytes don't survive.
     @Test func legacyCacheReplaced() async throws {
         let rig = try Rig()
@@ -390,7 +425,7 @@ struct LedgerCacheTests {
         #expect(ledger.cacheIssue == nil)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
         #expect(!cache.contains(Self.messageCanary) && !cache.contains(Self.userCanary) && !cache.contains("987654321"))
-        #expect(try rig.cacheJSON()["version"] as? Int == 5 && Self.mode(rig.cacheURL) == 0o600)
+        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.cacheURL) == 0o600)
         #expect(try rig.box.snapshot(".claude") == transcripts) // transcripts untouched
     }
 
@@ -420,7 +455,7 @@ struct LedgerCacheTests {
 
         try Data("{not json".utf8).write(to: rig.cacheURL)
         #expect(await Self.tokens(rig.ledger()) == 150)
-        #expect(try rig.cacheJSON()["version"] as? Int == 5)
+        #expect(try rig.cacheJSON()["version"] as? Int == 6)
     }
 
     /// A cache next to a different key (e.g. an old cache restored after a clear made a new key) is rebuilt, not

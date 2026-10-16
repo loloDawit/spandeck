@@ -1,0 +1,49 @@
+{
+  "title": "Token counters that aren't valid numbers, next to absent, null, zero and valid ones",
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns",
+    "invalid UTF-8 and malformed JSON"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P8: a counter is valid when it is a non-negative integral number below 2^53 (100.0, 5e1 and 1e2 are integers). Anything else (a string, a boolean, a fraction, a negative, a huge or non-finite number, an object or an array) is left out and flags the message as counted with an invalid counter; the message's valid counters still count. An absent or null counter reports nothing and isn't a flaw. Iterations follow the same rules, and a non-object iteration is skipped and flags the message.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 12,
+  "duplicates": 0,
+  "derivation": "a \"100\" -> input left out, [0, 50]. b true -> [0, 5]. c 1.5 -> [0, 2]. d null -> [0, 3], not a flaw. e explicit zeros -> [0, 0], 1 call. f 100.0 / 5e1 / 1e2 -> [100, 50, read 100]. g 1e30 -> [0, 7]. h 2^53 -> [0, 1]. i [10, 1] plus iteration claude-test-2 [20, output -4 left out] -> [20, 0, 1 call]; the element 42 is skipped. j cache_creation is a string -> flat 30 as 5m, [0, 1, 5m 30]. k object and array -> [0, 0]. l output -5 -> [40, 0]. claude-test-1: input 100+10+40 = 150, output 50+5+2+3+50+7+1+1+1 = 120, 5m 30, read 100, 12 calls; claude-test-2 [20, 0, 1 call]. 150+120+30+100+20 = 420 tokens. Flawed: a b c g h i j k l = 9 messages; d e f are not. Today the string, object and array read as 0 too, but true reads as 1, 1.5 as 1, 1e30 and 2^53 as their integer values, and the negatives subtract.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [150, 120, 30, 0, 100, 12],
+            "claude-test-2": [20, 0, 0, 0, 0, 1]
+          }
+        },
+        "operations": 13,
+        "month": 420,
+        "today": 420,
+        "days": {
+          "2026-03-10": 420
+        },
+        "identity": {
+          "identified": 12,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "completeness": {
+          "flawed": 9
+        }
+      }
+    }
+  ]
+}

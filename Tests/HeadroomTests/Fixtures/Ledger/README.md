@@ -34,7 +34,7 @@ Where the ledger does something else today, `baseline` records what it does. Tha
 }
 ```
 
-The fields of an expectation are all optional, and only the fields present are checked:
+The fields of an expectation are all optional, and only the fields present are checked, except `completeness`, which is always checked (left out, it means everything was read and nothing is pending):
 
 | Field | Meaning |
 |---|---|
@@ -45,6 +45,7 @@ The fields of an expectation are all optional, and only the fields present are c
 | `coverage`, `models` | Cost coverage (`complete`, `partial`, `unavailable`) for the 30 days and per model. |
 | `knownCost` | The known part of the 30-day cost estimate, in USD, at the bundled list prices. |
 | `identity` | How the 30 days' identity groups were identified (#55). A group is everything counted under one identity: one logged message with its streamed copies. It isn't a count of calls; F13 has 2 operations in 1 group. Kinds: `identified` (both ids), `incomplete` (one id, alone or joined to a pair), `fingerprinted` (neither id), `ambiguous` (one id that more than one pair carries). |
+| `completeness` | What couldn't be read (#58), for the 30 days; fields left out are 0. `flawed`: identity groups counted with an invalid counter left out. `invalidUsage`: records with a timestamp whose usage isn't an object. `undated`: usage records without a usable timestamp. `malformed`: lines with a `"usage"` key that aren't a JSON object. `pending`: files whose last line has no newline yet. Undated and malformed records, and pending files, have no period and are reported with every period. |
 
 `write` replaces a file in place (same inode), `append` adds bytes, `rename` moves a file and `delete` removes it. After every step, all modification times under `.claude/projects` are set to one minute before `now`. Otherwise "recently modified" would depend on the day the tests run.
 
@@ -72,10 +73,10 @@ These are proposals for review. The ones marked *ambiguous* need a decision, and
 | P3 | An operation belongs to the hour of the first record read; later growth is added there, even if a later record's timestamp is in another hour or earlier. |
 | P4 | *Decided on #9 for #55.* An id that is missing, empty, only whitespace or not a string is absent. With one id absent, the other alone identifies the operation (`message-only` or `request-only`), and joins the one pair that carries the same id. If more than one pair carries it, the record is counted on its own as ambiguous, never merged into either. A join is never undone. Records with neither id are identified by a keyed fingerprint of the parsed instant (to the millisecond), the model and the value of every usage counter (absent ≠ 0), so an identical record counts once in any file, however its time zone or numbers are spelled (F34). Changed counters count again (F33) and identical distinct operations count once (F32); both are accepted limitations. Anything but both ids makes the total uncertain (`identity`). |
 | P5 | *Ambiguous.* The same message id under another request id is another operation (as in ccusage). |
-| P6 | *Ambiguous for the last line.* A line counts once its newline is written. |
-| P7 | A record that can't be read isn't counted and should be reported as unread. User records and `<synthetic>` records are not usage. A record without a model is counted under `unknown`, with an unknown cost. |
-| P8 | A negative or non-numeric counter is invalid and never subtracts. A cache-write breakdown is used when the flat total is absent. Valid JSON is read whatever its whitespace. |
-| P9 | *Ambiguous.* When the 5m + 1h breakdown doesn't add up to the flat total, the flat total is used and priced as 5-minute writes. |
+| P6 | *Ambiguous for the last line.* A line counts once its newline is written. Until then its file is reported as `pending`, not as unread (F08, F40). |
+| P7 | *Implemented in #58.* A record that can't be read isn't counted and is reported as unread, once per distinct line however often it is read again, and still after its transcript is rewritten or deleted (F39): malformed JSON or invalid UTF-8 (`malformed`), a missing or unparsable timestamp (`undated`), usage that isn't an object (`invalidUsage`). The first two have no period. User records, other record types, `<synthetic>` records and assistant records without usage (or with `null`) are not usage and are ignored, whatever their timestamp (F38). A record without a model is counted under `unknown`, with an unknown cost. A line cut off before its `"usage"` key can't be told from any other line and isn't reported. |
+| P8 | *Implemented in #58.* A counter is valid when it is a non-negative integral number below 2^53 (`100.0` and `5e1` are integers). Absent and `null` report nothing. Anything else is left out, never read as 0 or another number, and the group is `flawed` for good, through streaming and #55 joins (F36, F41). A cache-write breakdown is used when the flat total is absent, `null` or invalid (F37). Valid JSON is read whatever its whitespace or key order (F38). Sums saturate instead of overflowing. |
+| P9 | *Ambiguous, awaiting a decision on #58.* When the 5m + 1h breakdown doesn't add up to the flat total, the flat total is used and priced as 5-minute writes (F11). An invalid tier is read as 0 for that comparison (F37). |
 | P10 | *Ambiguous.* One operation has one model; a re-log under another model adds nothing. |
 | P11 | *Assumption.* Top-level usage covers the main model. Iterations of another model are extra operations. Iterations of type `message` or of the main model are already included. |
 | P12 | Usage already counted stays counted when its transcript is rewritten or deleted. A rebuild can only count what is still on disk. |

@@ -1,0 +1,70 @@
+{
+  "title": "Messages counted with an invalid counter, through streaming, fingerprints and #55 joins",
+  "matrix": [
+    "streaming snapshots",
+    "missing ids",
+    "input, output, cache-read and cache-write breakdowns"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P8 with P2 and P4: a message stays flawed once any of its records had an invalid counter, through streamed growth and when its partial groups join a pair (#55), so neither a later valid copy nor a relaunch makes it exact. Flaws are counted per identity group, like identity.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 8,
+  "duplicates": 3,
+  "derivation": "s1: P (msg_41a + req_41a) [100, output \"?\" left out], then [100, 40]: growth +40, still flawed. N (no ids) [7, output -1 left out]: fingerprinted, flawed. M (msg_41m only) [50, \"x\" left out]: incomplete, flawed. Q1 (msg_41q only) [9, 1]: incomplete. Q2 (req_41q only) [9, 1, read -3 left out]: incomplete, flawed. Step 1: input 100+7+50+9+9 = 175, output 40+1+1 = 42, 5 calls = 217; identified 1, incomplete 3, fingerprinted 1; flawed P N M Q2 = 4. s2: the pair msg_41m + req_41m takes over M, keeping its flaw, and adds output 5. The pair msg_41q + req_41q takes over Q1 and merges Q2: Q2 is taken back with its flaw and counted again into the pair, adding no tokens but the flaw; then output +1. Step 2: input 100+7+50+9 = 166, output 40+5+2 = 47, 4 calls = 213; identified 1, incomplete 2, fingerprinted 1; flawed 4. Read in the other file order the pairs count first and the partials join them, adding no growth but their flaws: the same.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [175, 42, 0, 0, 0, 5]
+          }
+        },
+        "month": 217,
+        "identity": {
+          "identified": 1,
+          "incomplete": 3,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        },
+        "completeness": {
+          "flawed": 4
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "s2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [166, 47, 0, 0, 0, 4]
+          }
+        },
+        "month": 213,
+        "identity": {
+          "identified": 1,
+          "incomplete": 2,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        },
+        "completeness": {
+          "flawed": 4
+        }
+      }
+    }
+  ]
+}
