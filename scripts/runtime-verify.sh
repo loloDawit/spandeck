@@ -222,11 +222,14 @@ cmd_identity() {
         for out in 5 20; do printf '{"type":"assistant","message":{"id":"msg_rvid%s_only","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" "$out" "$ts"; done
         # Request id only, with an empty message id: one group, incomplete.
         printf '{"type":"assistant","requestId":"req_rvid%s_only","message":{"id":"","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"
+        # Two pairs sharing a message id, then a record with only that id: two identified groups and one ambiguous.
+        for r in a b; do printf '{"type":"assistant","requestId":"req_rvid%s_shared_%s","message":{"id":"msg_rvid%s_shared","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" "$r" "$tok" 20 "$ts"; done
+        printf '{"type":"assistant","message":{"id":"msg_rvid%s_shared","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"
         # Neither id, written twice identically: one group, fingerprinted.
         for k in 1 2; do printf '{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"; done
     } > "$f"
-    record "identity: 5 records without both ids (3 groups: 2 by one id, 1 fingerprinted), 90 tokens"
-    record "expected: totals grow by 90 claude-sonnet-4-5 tokens; the Token usage card shows \"Usage may be approximate: some records lack identifiers.\"; its help and VoiceOver label start \"Of 24 logged messages from Claude in the last 30 days, 3 were told apart without both a message id and a request id: 2 by one id, 1 with no id\" (21 identified groups from fixtures without timing sessions; add 1001 per timing session)"
+    record "identity: 8 records (6 groups: 2 identified pairs sharing a message id, 2 by one id, 1 fingerprinted, 1 ambiguous), 180 tokens"
+    record "expected: totals grow by 180 claude-sonnet-4-5 tokens; the Token usage card shows \"Usage may be approximate: some records lack identifiers.\"; its help and VoiceOver label start \"Of 27 logged messages from Claude in the last 30 days, 4 were told apart without both a message id and a request id: 2 by one id, 1 with no id, by a fingerprint of timestamp, model and token counts, 1 by an id that more than one message shares\" (23 identified groups with fixtures but no timing sessions; add 1001 per timing session)"
 }
 
 # ---------------------------------------------------------------------------------------------------------------
