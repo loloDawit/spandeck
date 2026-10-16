@@ -214,6 +214,8 @@ Phase 1 acceptance tests (all synthetic, run in `swift test`):
 - **Open questions for the owner:** 4 (see that page, §8.3).
 - No app defect confirmed.
 
+**Run 2 (2026-10-16, build `855b6f8`, with a kernel-reported fork monitor):** with consent left alone, 0 child processes in 409 s and consent never changed. The positive control (one Enable click) produced 2 `/usr/bin/security` forks. Credential and subprocess absence at default launch are therefore [runtime] pass. Run 1's consent change is attributed to a click. See §8.4 of the runtime page.
+
 Only to confirm OS-level effects the mocks cannot (login-item notification, real file modes, real process tree):
 
 1. New macOS user account or VM with **no Claude Code or Grok credentials at all** — do not create synthetic Keychain items or Grok keys, so no credential leaves the machine.
@@ -248,5 +250,5 @@ Owner decision (2026-10-13): fold remediation into existing M0 issues; create a 
 - [x] Permissions inventory and least-privilege recommendations, documented vs unofficial — §3 (documented-surface claims to be verified in #10)
 - [x] Safe runtime verification procedure — §7 (mocked first; no fabricated credentials to real endpoints)
 - [x] Prioritized remediation with risk, compatibility, rollback and tests — §8, mapped to #4, #5, #7, #11 and new issue #12 for R12
-- [ ] Default launch confirmed with reproducible runtime observations — §6 gives the original [code] verdict and a dated status. Mocked characterization exists (#14, #16, #18), but **OS-level observation per §7 Phase 2 is still required.** Mocked tests are not proof of OS behavior.
+- [x] Default launch confirmed with reproducible runtime observations — [0003-runtime-verification.md](0003-runtime-verification.md) §8.4 (run 2, 2026-10-16) [runtime]. The default launch is **offline as observed**: no connection seen, no credential read, proven by kernel-reported forks checked against a positive control. Its side effects are **local**: transcripts read; `Application Support/Headroom` `0700` with a `0600` cache holding no paths, ids or content; a preferences file; no login item. Scope: one Apple Silicon Mac, macOS 26.5, ad-hoc build. File reads aren't observable without root.
 - [x] CI verification of the test suite — [run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `main` = `6d51227`: 187 tests passed on GitHub-hosted `macos-15` arm64 (default Xcode 16.4), run serially (`--no-parallel`, #46). This verifies the [mocked] tests, not OS-level behavior; the item above stays open.
