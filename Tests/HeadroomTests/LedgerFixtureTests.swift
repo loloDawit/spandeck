@@ -225,7 +225,7 @@ struct LedgerFixtureTests {
     // MARK: Tests
 
     @Test func everyFixtureIsComplete() throws {
-        #expect(Self.names.count == 33)
+        #expect(Self.names.count == 34)
         for name in Self.names {
             let f = try Self.load(name)
             #expect(["pass", "defect", "ambiguous"].contains(f.classification), "\(name)")

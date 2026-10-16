@@ -20,13 +20,15 @@ struct IdentityCoverageTests {
                   IdentityCoverage(identified: 2, ambiguous: 1)] {
             let note = try #require(IdentityText.note(summary(c)))
             #expect(note.text == "Usage may be approximate: some records lack identifiers.")
-            #expect(note.detail.contains("Of \(c.operations) Claude operation"))
+            #expect(note.detail.contains("Of \(c.groups) logged message"))
         }
         let all = try #require(IdentityText.note(summary(IdentityCoverage(identified: 6, incomplete: 3, fingerprinted: 2,
                                                                          ambiguous: 1))))
-        #expect(all.detail.hasPrefix("Of 12 Claude operations in the last 30 days, 6 were told apart"))
-        #expect(all.detail.contains("3 by one id") && all.detail.contains("2 by their content")
-                && all.detail.contains("1 by an id that more than one operation shares"))
+        #expect(all.detail.hasPrefix("Of 12 logged messages from Claude in the last 30 days, 6 were told apart"))
+        #expect(all.detail.contains("3 by one id")
+                && all.detail.contains("2 with no id, by a fingerprint of timestamp, model and token counts")
+                && all.detail.contains("1 by an id that more than one message shares"))
+        #expect(!all.detail.contains("content"))
         #expect(all.detail.contains("estimates, not your bill"))
     }
 
@@ -55,7 +57,7 @@ struct IdentityCoverageTests {
     @Test func coverageArithmetic() {
         var c = IdentityCoverage()
         c.add(.identified, 3); c.add(.incomplete); c.add(.fingerprinted, 2); c.add(.ambiguous)
-        #expect(c.operations == 7 && c.uncertain == 4 && !c.isExact)
+        #expect(c.groups == 7 && c.uncertain == 4 && !c.isExact)
         c.add(.incomplete, -1); c.add(.fingerprinted, -2); c.add(.ambiguous, -1)
         #expect(c.isExact && c == IdentityCoverage(identified: 3))
         #expect(c + IdentityCoverage(ambiguous: 1) == IdentityCoverage(identified: 3, ambiguous: 1))

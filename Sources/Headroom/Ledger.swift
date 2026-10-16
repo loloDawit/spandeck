@@ -73,25 +73,28 @@ struct CostEstimate: Equatable, Sendable {
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
 }
 
-/// How the operations behind a total were told apart (#55, P4), independent of cost coverage (R7). Only operations
-/// with both a message id and a request id are certain; every other kind means the token count may be approximate.
+/// How the records behind a total were told apart (#55, P4), independent of cost coverage (R7). The unit is an
+/// identity group: everything counted under one identity (a pair, one id, or a fingerprint), i.e. one logged message
+/// with its streamed copies. It is not a count of model calls: a message's `iterations` can add calls of other models
+/// under the same group (F13: 2 calls, 1 group). Only groups with both a message id and a request id are certain;
+/// every other kind means the token count may be approximate.
 struct IdentityCoverage: Codable, Equatable, Sendable {
     /// Message id + request id.
     var identified = 0
     /// One id only: counted alone, or joined to the one pair that carries the same id.
     var incomplete = 0
     /// Neither id: a keyed fingerprint of timestamp, model and counters. Changed counters count again, and distinct
-    /// operations with identical fingerprints count once.
+    /// messages with identical fingerprints count once.
     var fingerprinted = 0
     /// One id only, but more than one pair carries it: counted on its own, joined to neither.
     var ambiguous = 0
 
     enum Kind: String, Codable { case identified, incomplete, fingerprinted, ambiguous }
 
-    /// No operation in the total was identified by anything less than both ids.
+    /// No group in the total was identified by anything less than both ids.
     var isExact: Bool { incomplete == 0 && fingerprinted == 0 && ambiguous == 0 }
-    var operations: Int { identified + incomplete + fingerprinted + ambiguous }
-    var uncertain: Int { operations - identified }
+    var groups: Int { identified + incomplete + fingerprinted + ambiguous }
+    var uncertain: Int { groups - identified }
 
     mutating func add(_ kind: Kind, _ n: Int = 1) {
         switch kind {
@@ -787,7 +790,7 @@ final class Ledger {
                 reclassify(pair, .incomplete)
             }
         case (nil, nil):
-            count(parts, hour: hour, key: fingerprint(obj, msg, usage), kind: .fingerprinted)
+            count(parts, hour: hour, key: fingerprint(date, msg, usage), kind: .fingerprinted)
         }
     }
 
@@ -827,7 +830,7 @@ final class Ledger {
         }
         if state.hours[s.hour]?.isEmpty == true { state.hours[s.hour] = nil }
         state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
-        if state.identity[s.hour]?.operations == 0 { state.identity[s.hour] = nil }
+        if state.identity[s.hour]?.groups == 0 { state.identity[s.hour] = nil }
         changeCounter += 1
     }
 
@@ -853,12 +856,16 @@ final class Ledger {
     /// as written (absent, a number, or something else). Nothing about where the record was read is in it, so the
     /// same record in a rewritten, restored or copied file is the same operation. It is best effort (#9): a streamed
     /// record whose counters grew gets a new fingerprint, and two operations that really are identical get one.
-    private func fingerprint(_ obj: [String: Any], _ msg: [String: Any], _ usage: [String: Any]) -> String {
+    private func fingerprint(_ date: Date, _ msg: [String: Any], _ usage: [String: Any]) -> String {
         func text(_ v: Any?) -> String {
             switch v {
             case nil: return "-"
             case let s as String: return "s:" + s
-            case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID(): return "n:" + n.stringValue
+            case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID():
+                // The value, not its spelling: 50, 50.0 and 5e1 are one number.
+                let d = n.doubleValue
+                if d.rounded() == d, abs(d) < 9e15 { return "n:" + String(Int64(d)) }
+                return "n:" + String(d)
             default: return "x"
             }
         }
@@ -868,7 +875,9 @@ final class Ledger {
                 + ["cc:" + (cc == nil ? text(u["cache_creation"]) : "{}")]
                 + Self.fingerprintBreakdown.map { text(cc?[$0]) }
         }
-        var parts = [text(obj["timestamp"]), text(msg["model"])] + counters(usage)
+        // The instant as parsed (to the millisecond), not its spelling: "…:00Z", "…:00.000Z" and "…:00+00:00" are
+        // one time.
+        var parts = ["t:" + String(Int64((date.timeIntervalSince1970 * 1000).rounded())), text(msg["model"])] + counters(usage)
         let iterations = usage["iterations"] as? [[String: Any]] ?? []
         parts.append("iterations:\(usage["iterations"] == nil ? "-" : String(iterations.count))")
         for it in iterations { parts += [text(it["type"]), text(it["model"])] + counters(it) }

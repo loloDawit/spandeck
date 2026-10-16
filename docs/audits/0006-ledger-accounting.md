@@ -204,7 +204,7 @@ A known issue that stops failing makes its test fail. That signals the fixture s
   1. both ids: the pair, as before;
   2. one id: that id in its own namespace. A record joins the one pair that carries its id, and a new pair takes over the operations it completes. When two pairs carry the id, the record is counted on its own as ambiguous;
   3. neither: a keyed fingerprint of timestamp, model and counters.
-- **[code]** Every operation is counted by kind per hour: identified, incomplete, fingerprinted, ambiguous. The counts reach `Totals.identity`, and the Token usage card shows *"Usage may be approximate: some records lack identifiers."* when any 30-day operation isn't identified by both ids. This is separate from cost coverage (R7).
+- **[code]** Every identity group is counted by kind per hour: identified, incomplete, fingerprinted, ambiguous. A group is one logged message with its streamed copies, not a call (F13: 2 operations, 1 group). The fingerprint uses the parsed instant and counter values, not their spelling. The counts reach `Totals.identity`, and the Token usage card shows *"Usage may be approximate: some records lack identifiers."* when any 30-day operation isn't identified by both ids. This is separate from cost coverage (R7).
 - **[code]** The cache is now version 5, and a version 4 cache is deleted and re-indexed (`docs/USAGE_CACHE.md`).
 - **[test]** F04, F05 and F15 now pass in all modes and on rebuild, with no baseline: 255, 320, and 370 (rebuild 220). The modes now agree on F15.
 - **[test]** New fixtures:
@@ -216,8 +216,9 @@ A known issue that stops failing makes its test fail. That signals the fixture s
   - F30: empty, blank and non-string ids;
   - F31: no-id replay across files and relaunches;
   - F32: identical fingerprints;
-  - F33: no-id streaming.
-- **[test]** The other 24 fixtures are unchanged.
+  - F33: no-id streaming;
+  - F34: one no-id record written with different time zones and number spellings.
+- **[test]** The other 24 fixtures are unchanged, except that F13 now also asserts its identity count.
 
 ### 8.2 Limits that remain (accepted on #9, shown as uncertainty)
 - **Records without ids:**

@@ -806,16 +806,19 @@ enum PricingText {
 enum IdentityText {
     static let approximate = "Usage may be approximate: some records lack identifiers."
 
-    /// The note and its detail when any Claude operation in the 30 days wasn't identified by both a message id and a
-    /// request id; nil when all were. Counts only, never an id.
+    /// The note and its detail when any Claude message in the 30 days wasn't identified by both a message id and a
+    /// request id; nil when all were. Counts identity groups (logged messages with their streamed copies), not model
+    /// calls. Counts only, never an id.
     static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
         guard let c = claude?.month.identity, !c.isExact else { return nil }
         var kinds: [String] = []
         if c.incomplete > 0 { kinds.append("\(c.incomplete) by one id") }
-        if c.fingerprinted > 0 { kinds.append("\(c.fingerprinted) by their content, with no id") }
-        if c.ambiguous > 0 { kinds.append("\(c.ambiguous) by an id that more than one operation shares") }
-        let ops = c.operations == 1 ? "operation" : "operations", were = c.uncertain == 1 ? "was" : "were"
-        return (approximate, "Of \(c.operations) Claude \(ops) in the last 30 days, \(c.uncertain) \(were) told apart "
+        if c.fingerprinted > 0 {
+            kinds.append("\(c.fingerprinted) with no id, by a fingerprint of timestamp, model and token counts")
+        }
+        if c.ambiguous > 0 { kinds.append("\(c.ambiguous) by an id that more than one message shares") }
+        let noun = c.groups == 1 ? "logged message" : "logged messages", were = c.uncertain == 1 ? "was" : "were"
+        return (approximate, "Of \(c.groups) \(noun) from Claude in the last 30 days, \(c.uncertain) \(were) told apart "
                     + "without both a message id and a request id: " + kinds.joined(separator: ", ") + ". These may be "
                     + "counted twice or merged, so token totals and cost estimates may be off. Costs are still estimates, "
                     + "not your bill.")
