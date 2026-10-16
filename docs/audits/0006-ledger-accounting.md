@@ -2,7 +2,7 @@
 
 **Issue:** #6 (M0, research). **Parent:** #2. **Code base:** `main` at `98c3ac3`, plus the test seam described in §6.
 **Fixtures:** [`Tests/HeadroomTests/Fixtures/Ledger`](../../Tests/HeadroomTests/Fixtures/Ledger/README.md). **Tests:** `Tests/HeadroomTests/LedgerFixtureTests.swift`.
-**Follow-ups:** #55, #56, #57, #58. Policy questions are noted on #7 and #9.
+**Follow-ups:** #55, #56, #57, #58. Open policy questions are posted on #7, #9, #10 and #58.
 
 This report covers Claude transcript accounting in `Ledger.swift`: identity, deduplication, incremental reading, the cache and time buckets. Grok usage files are covered only where R7 already tested them. Pricing values and pricing integrity are out of scope (#7, #11).
 
@@ -22,7 +22,13 @@ No real transcripts, accounts or network access were used. CI was not run.
 | Behavior differs from a proposed policy | 2 | F12 (#9), F22 (#7) |
 
 - **Most important finding (#55):** records that lack a message id or a request id are counted again every time they are read. That includes streaming re-logs, re-reads after a rewrite, and restored files. The result also depends on refresh timing, so the same files can produce 590 or 810 tokens (F15).
-- **What passed:** in every scenario that has both ids, the ledger gave the same totals under all three refresh modes: tailing, full scans, and relaunches. These scenarios cover streaming growth, files duplicated across resumes, forks and subagents, partial lines, compaction, rotation, deletion, both DST transitions, and an unsaved cache after a crash.
+- **What passed:** for records that have both ids, the totals were correct in these scenarios, and identical in all three refresh modes (tailing, full scans and relaunches):
+  - streaming growth;
+  - files duplicated across resumes, forks and subagents;
+  - partial lines, compaction, rotation and deletion;
+  - both DST transitions;
+  - an unsaved cache after a crash.
+- **Consistent but wrong:** an in-place overwrite (#56) gives the same wrong total in every mode. Consistency across modes doesn't prove correctness.
 - **Not yet trustworthy for analytics:**
   - totals that include records without ids (#55);
   - transcripts overwritten in place (#56);
@@ -72,7 +78,7 @@ No real transcripts, accounts or network access were used. CI was not run.
   - it runs on launch and then at least 5 minutes apart;
   - it reads files whose size differs from the offset and that were modified in the last 32 days;
   - it restarts at 0 when the file is shorter;
-  - it forgets the offsets of files that disappeared.
+  - it forgets the offsets of files that disappeared, or whose modification time is now older than 32 days. Such a file is read from 0 if it is touched again; dedupe keys stop records with ids from being counted twice.
 - **[code]** Between full scans, `discoverNewFiles` and `tailHotFiles` (`Ledger.swift:614-646`):
   - read files modified in the last 2 hours, one level deep in project folders, plus `subagents/`;
   - do not forget missing files.
@@ -137,7 +143,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 | P2 | Field-wise maximum of repeated records, or the last record? | F02 | #9 |
 | P5 | Is the same message id under two request ids one operation or two? | F06 | #9 |
 | P6 | Count a complete JSON object that has no final newline? | F08 | #9 |
-| P9 | Which side wins when a cache breakdown and its total disagree? | F11 | #58 |
+| P9 | Which side wins when a cache breakdown and its total disagree? | F11 | #58 (comment) |
 | P10 | A re-log under another model: double count (today) or one operation? | F12 | #9 |
 | P11 | Do top-level usage counts exclude `iterations` sub-calls? | F13 | #10 (needs a real Claude Code sample) |
 | P12 | After a rebuild, history only on disk is lost (F14: 710 → 340). Acceptable, or should the cache be the record? | F14, F15, F16 | #9 |
@@ -179,7 +185,7 @@ On Apple Silicon, macOS 26.5, Xcode 26.6, all local:
 |---|---|
 | `swift build` | OK, 0 warnings |
 | `swift test` | 191 tests in 17 suites pass, with 39 known issues (the expected results of §4), 1.2 s |
-| `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test --no-parallel` (CI's mode) | Same: 191 pass, 39 known issues, 6.2 s |
+| `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test --no-parallel` (CI's mode) | 4 of 5 runs: 191 pass, 39 known issues, about 6.2 s. 1 run: `GrokConsentTests.consentWithdrawnDuringKeyReadSendsNothing(reenable: true)` failed (a Grok request was sent). That test's fake blocks on a semaphore for up to 2 s, the pattern tracked in #46. It is unrelated to the ledger and is noted there |
 
 **Not run:**
 - hosted CI;
