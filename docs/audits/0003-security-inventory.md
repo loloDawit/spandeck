@@ -208,7 +208,11 @@ Phase 1 acceptance tests (all synthetic, run in `swift test`):
 
 **Status (2026-10-14): not done.** Still required to confirm OS-level behavior: login-item state and notification, absence of Keychain access and its prompt, real file modes, and the actual set of network destinations.
 
-**Status (2026-10-15): procedure ready, not run.** The steps below were written for the inherited code. The current expectations, verification matrix, safety gate, procedure and cleanup are in [0003-runtime-verification.md](0003-runtime-verification.md), using `scripts/runtime-verify.sh`. One example of the change: default launch should now make **no** network request, where step 3 below expects one to `raw.githubusercontent.com`. Runtime results will be recorded there. None exist yet.
+**Status (2026-10-15): procedure ready, not run.** The steps below were written for the inherited code. The current expectations, verification matrix, safety gate, procedure and cleanup are in [0003-runtime-verification.md](0003-runtime-verification.md), using `scripts/runtime-verify.sh`. One example of the change: default launch should now make **no** network request, where step 3 below expects one to `raw.githubusercontent.com`. **Run 1 (2026-10-16, owner, `spandecktest`, build `227015c`):**
+- **[runtime] pass:** file modes `0700`/`0600`; the cache holds no paths, ids or content canaries; no pricing file; `--snapshot` refused by the release build and synthetic-only in the debug build; no sockets observed; accounting display correct.
+- **Not verified:** no Keychain or subprocess access at default launch. The process monitor missed `security` runs that are known to have happened after consent was enabled during the run.
+- **Open questions for the owner:** 4 (see that page, §8.3).
+- No app defect confirmed.
 
 Only to confirm OS-level effects the mocks cannot (login-item notification, real file modes, real process tree):
 

@@ -2,7 +2,11 @@
 
 Issue: [#3](https://github.com/loloDawit/spandeck/issues/3) · Parent: [#2](https://github.com/loloDawit/spandeck/issues/2) · Related: #5, #8, #11, #46 · Code inventory: [0003-security-inventory.md](0003-security-inventory.md)
 
-> **Status (2026-10-15): procedure ready; runtime verification not yet run.** This page contains no [runtime] result. The session that prepared it ran in the owner's normal administrator account, where the safety gate forbids launching the app (§2). The checks below must be run by the owner in the dedicated test account, then recorded in §8.
+> **Status (2026-10-16): first run done, partially verified.** The owner ran §5 in `spandecktest` on 2026-10-16, 05:03–05:24 UTC, against build `227015c`. The results are in §8.
+> - **Verified [runtime]:** file-system privacy, `--snapshot` isolation, accounting display, and no observed network use.
+> - **Not verified:** credential, subprocess and login-item absence. The monitor missed `security` runs and a login-item registration that are known to have happened (§8.2), so its zero counts aren't evidence of absence.
+> - **Owner input needed:** the Claude consent change during the run, plus three confirmations (§8.3).
+> - **No app defect is confirmed.** #3 stays open.
 
 ## Evidence labels
 
@@ -190,21 +194,78 @@ In your normal account, when you're done:
 
 ## 8. Results
 
-**Not run yet.** Every boundary is **[not verified]** at runtime until the owner runs §5 and the results are recorded here.
+### 8.1 Run 1: 2026-10-16, 05:03–05:24 UTC (owner)
 
-| ID | Result | Evidence |
+**Setup:**
+- **Build:** `227015c` (release `6390dbef…`, debug `1a5974f5…`), universal ad-hoc release build, staged from the owner's account. No quarantine flag and no Gatekeeper bypass.
+- **Machine and account:** Apple M2 Pro, 12 cores, 16 GB, macOS 26.5 (25F71). Account `spandecktest` (uid 502, Standard user, not MDM-enrolled).
+- **Preflight:** all 14 checks passed.
+  - No Claude Keychain item, `~/.claude/.credentials.json`, `~/.grok/auth.json` or `grok` binary.
+  - Fresh account: no Application Support folder or preferences, no install.
+  - The owner saw no Headroom entry in Login Items.
+
+**Fixtures:**
+- 1 privacy session: 20 messages, each streamed twice, plus 1 unpriced message.
+- 50 timing sessions of 1000 messages each, about 50 MB.
+
+**Evidence:**
+- The owner's sanitized `results-227015c…-20261016T050315Z.md`.
+- 5 screenshots: 10:11:56, 10:15:38, 10:18:46, 10:18:56 and 10:23:46 PM local (UTC−7).
+
+These stay with the owner and aren't committed: one shows unrelated windows. Times below are UTC.
+
+| ID | Result | Evidence and notes |
 |---|---|---|
-| V1–V15, V17–V20 | **Pending**: [not verified] | — |
-| V16 | **[not verified]** by design (no real credentials or provider requests) | [code] [mocked] only |
+| V1 Normal start | **Pass** [runtime] | Process up 99–182 ms after `open` across 4 launches. Menu-bar gauges and popover work (screenshot 05:11:56). |
+| V2 Claude credential | **Not verified** | 0 child processes and 0 log events in all launches. That includes windows where consent was **on**, so `security` must have run (§8.2). The monitor can't show absence. No Keychain prompt was reported; with no Keychain item, none is expected either way. |
+| V3 Grok credential and CLI | **Not verified** (the CLI can't run) | No `grok` binary exists in the account, so `grok models` couldn't run. Grok consent stayed off ("Set up Grok credits…" in Settings). An `auth.json` read isn't observable (§9). |
+| V4 Network | **Pass, with limits** [runtime] | `lsof -i` at 1 Hz showed 0 sockets in 4 launches (570 s in total). `nettop` showed no rows. 0 network log events. Consistent with the code even after consent: with no credential, no request is sent. Short connections between samples can't be excluded (§9). |
+| V5 Pricing | **Pass** [runtime] | No `pricing-source.json` in any capture. Settings shows "LiteLLM 4d52918 · built in". No network (V4). |
+| V6 Login item at launch | **Owner to confirm** | Absent before launch (preflight). Listed at 05:23:46, after the owner turned it on (V15). No observation was recorded between the first launch and the toggle (§8.3). |
+| V7 Preferences | **Pass for default launch** [runtime]; consent change pending confirmation | Domain absent before launch. The 05:11:56 screenshot, about 70 s after launch, shows "Plan limits are off". By 05:15:38 Settings shows "Turn off Claude plan limits", and `claude.limits.enabled = 1` from 05:16:46 on (§8.2). Also `usage.metric` (the Cost/Tokens switch). |
+| V8 Files written | **Pass** [runtime] | The app wrote:<br>• `~/Library/Application Support/Headroom/` (`drwx------`) with `claude-ledger.json` and `claude-ledger.key` (`-rw-------`);<br>• `~/Library/Preferences/dev.headroom.Headroom.plist`;<br>• the per-user Metal shader cache `…/C/dev.headroom.Headroom/com.apple.metal/…`, written by system graphics frameworks for the process.<br>The other changed files belong to macOS services, Chrome, Warp and Docker in the test account. |
+| V9 Background work | **Pass for power assertions** [runtime]; subprocesses **not verified** | No Headroom power assertion in any capture. Subprocess absence can't be shown (V2). |
+| V10 Cache minimization | **Pass** [runtime] | Schema 4. 51 `files` and 1001 `seen` entries, all 32-hex ids. Hex `keyCheck`. No `/`. No content, path or id canary. The model canary is present, which shows indexing ran. The same result held at every capture, including after clear and after relaunch. |
+| V11 Accounting display | **Pass** [runtime] | `claude-sonnet-4-5` shows 30.0K tokens at $0.33, and `claude-rvmodel…` shows 10 tokens at n/a. Totals read `≥$0.33`, with an explanation and "?" on the chart. 30.0K is correct: the timing sessions reused the privacy session's message ids, so 51,020 streamed records deduplicated to 1000 unique messages of 30 tokens each. That's a fixture design flaw (§8.2); the app's arithmetic is right ($3/M input, $15/M output). |
+| V12 Temporary files | **Pass** [runtime] | No `.claude-ledger.*.tmp-*` after quit. |
+| V13 Clear cached usage | **Partly verified** [runtime] | The confirmation text names only the cache and key, and says transcripts, credentials, prices and consent are kept. After confirming: "Cached usage data cleared. Totals are being rebuilt". The rebuild took about 6 s at 55–97 % CPU, and totals were unchanged. A new key and byte-identical transcripts depend on the owner's `shasum` comparison (§8.3). |
+| V14 "Off" persists | **Not verified** | Consent was on before the relaunch, so this tested the reverse: **consent on persisted** across the relaunch (`claude.limits.enabled = 1` at 05:22:35). Needs a rerun with consent never enabled. |
+| V15 Login item opt-in | **On: pass** [runtime]; **off: owner to confirm** | After Settings ▸ Launch at login, "Headroom — Application" is listed under Open at Login (05:23:46). No notification was reported. The app log recorded no ServiceManagement event. Removal wasn't captured (§8.3). |
+| V16 Consent-enabled paths | **Not verified** (by design) | — |
+| V17 `--snapshot`, release | **Pass** [runtime] | Exit 64; 0 files; no process left running; Application Support still absent. |
+| V18 `--snapshot`, debug | **Pass, except the visual check** [runtime] | Exit 0; `popover.png`, `strip-dark.png`, `strip-light.png`; no process left running; Application Support still absent. The owner's visual check of `popover.png` for fixture data is pending (§8.3). |
+| V19 Performance (#8) | Recorded [runtime] | Time to process: 99–182 ms. First index of about 50 MB: 5 one-second samples above 60 % CPU (1–5 s after launch).<br>CPU in the main launch, by 20 s window:<br>• 20–60 s: 3.3–3.4 %, popover presumably closed;<br>• 60–200 s: 7–14 % (median 9.9 %, p90 16 %), while the owner had the popover and Settings open and enabled consent. These causes can't be separated.<br>CPU after relaunch with the cache present: 2.0 % mean (peak 32.6 %).<br>RSS: 71–87 MB.<br>Only one machine and one run. Samples include the app's own 1 s system sampling (the default interval). The summary keeps the first 200 samples of each launch. |
+| V20 Responsiveness (#46) | No symptom reported | The popover opened during and after indexing (screenshots). Latency wasn't measured. |
 
-When results arrive, record for each row:
-- **Result:** pass, fail or not verified;
-- **Evidence:** timestamp, the method, and the evidence file name from the summary;
-- **Run details:** commit, build hashes and the machine and account details from `preflight`.
+### 8.2 What the run showed beyond the matrix
+
+1. **Claude consent turned on during the main launch, between 05:11:56 and 05:15:38.**
+   - The default launch left it off: the 05:11:56 screenshot shows "Plan limits are off" with the "Enable Claude plan limits" button, about 70 s after launch.
+   - The value can only be set through `setClaudeLimitsEnabled`, which the consent card and Settings call. Treated as an owner action, pending confirmation (§8.3).
+   - **This is not a defect unless the owner didn't turn it on.** If they didn't, it would be a P0 consent defect and must be filed and reproduced first.
+2. **The monitor's zero counts aren't evidence of absence.** With consent on and no Keychain item, the code [code: `ProviderServices.refreshClaude`, `ClaudeLimitsClient.credentials`, `KeychainCredentialStore`] runs `/usr/bin/security` when consent is given and every 60 s after. The UI's "No Claude Code or Grok account found" appears only after that read returned nothing. Yet:
+   - `children.txt` (sampled every 0.1 s) recorded 0 processes in the main launch and 0 in the 120 s relaunch, where at least two runs were expected;
+   - the `security` / `grok` log stream recorded nothing;
+   - the app log recorded no ServiceManagement event when the login item was registered (V15).
+
+   A `security` lookup that fails fast finishes between samples, and these processes evidently don't log at the captured level. **V2, V3 (subprocess part), V6 and V9 (subprocess part) need a monitor that sees every fork**, such as a `kqueue` `EVFILT_PROC` watcher on the app's process, checked first against a known positive.
+3. **The test account isn't pristine.** Chrome (cookies and history changing during the run), Warp (with Sentry session files), Docker and Google Updater are installed and active. None of their files are attributed to Headroom, but the "no other activity" baseline is noisier than intended, and per-user Keychain database writes (`keychain-2.db-wal`) can't be attributed. A fresh account, or one with only the default apps, would give a cleaner baseline.
+4. **The timing fixture reused message ids** across all 51 files, so deduplication left 1000 unique messages. The indexing time still covers parsing about 50 MB. The fixture needs unique ids per file to measure ingesting 51,000 distinct messages.
+
+### 8.3 Owner input needed
+
+1. **Did you click "Enable Claude plan limits"** (or the Settings item) between about 10:12 and 10:15 PM? If not, stop and report it: that would be consent turning on without user action.
+2. **Login items:**
+   - Before you turned on Launch at login, was Headroom absent from Login Items (V6)?
+   - After you turned it off, did it disappear (V15)?
+
+   If it's still listed, remove it in System Settings.
+3. **V13 hashes:** do `key-before.txt` and `key-after.txt` in `~/spandeck-rv-evidence/` differ, and do `fixtures-before.txt` and `fixtures-after.txt` match? Just "same" or "different" for each; don't send the hashes.
+4. **V18 visual check:** does the debug `popover.png` (in the run's `snapshot-debug/` folder) show only built-in synthetic models, and not `claude-rvmodel…`?
 
 ## 9. Observation limits
 
-- **Sampling:** child processes are sampled every 0.1 s, and sockets every 1 s. A process or connection shorter than that can be missed.
+- **Sampling:** child processes are sampled every 0.1 s, and sockets every 1 s. A process or connection shorter than that can be missed. **Run 1 confirmed this:** `security` runs that the code and UI show happened were not recorded (§8.2).
   - The unified log stream (`process == "Headroom"`, network, security and ServiceManagement subsystems) adds an event record, but hostnames are usually `<private>`.
   - The `security` / `grok` log covers the whole account. On the developer account it showed about 15 `security` lines per second from other software, so it's only meaningful in a quiet test account, and only alongside `children.txt`.
 - **File reads aren't observable without root** (`fs_usage`, `eslogger`). A read of an absent `~/.grok/auth.json` or of transcripts can't be seen directly. Reads are inferred from writes, child processes and the UI.
@@ -214,7 +275,9 @@ When results arrive, record for each row:
 
 ## 10. What #3 still needs
 
-- [ ] §5 run in `spandecktest`, with results recorded in §8 for V1–V15 and V17–V20.
+- [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
+- [ ] Owner input in §8.3, especially confirming the Claude consent change.
+- [ ] A monitor that sees every child process (and login-item registration), checked against a known positive. Then rerun V2, V3, V6, V9 and V14, without enabling consent.
 - [ ] Each confirmed defect filed as its own issue; none silently fixed.
 - [ ] Inventory §9 item "Default launch confirmed with reproducible runtime observations" updated from §8.
 - [ ] Roadmap and inventory status updated with the [runtime] results.
