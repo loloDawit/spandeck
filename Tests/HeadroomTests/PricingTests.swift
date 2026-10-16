@@ -64,7 +64,7 @@ struct PricingTests {
         #expect(transport.requests.isEmpty && written.isEmpty)
         // Model id with a date suffix resolves to the base entry; every price dimension is used.
         let opus = try #require(pricing.cost(model: "claude-opus-4-8-20261001", Self.oneOfEach))
-        let expected = 100 * 5e-6 + 50 * 2.5e-5 + 10 * 6.25e-6 + 4 * 1e-5 + 1000 * 5e-7
+        let expected: Double = 100 * 5e-6 + 50 * 2.5e-5 + 10 * 6.25e-6 + 4 * 1e-5 + 1000 * 5e-7
         #expect(abs(opus - expected) < 1e-15)
         #expect(pricing.cost(model: "claude-haiku-4-5-20251001", Self.oneOfEach) != nil)
     }
@@ -131,7 +131,8 @@ struct PricingTests {
         #expect(rig.pricing.info == info && rig.pricing.generation > before)
         // Extracted with the snapshot rules: missing cache-write prices default to 1.25x / 2x input.
         let cost = try #require(rig.pricing.cost(model: "claude-synth-1", Self.oneOfEach))
-        #expect(abs(cost - (100 * 2e-6 + 50 * 4e-6 + 10 * 2.5e-6 + 4 * 4e-6 + 1000 * 2e-7)) < 1e-15)
+        let expected: Double = 100 * 2e-6 + 50 * 4e-6 + 10 * 2.5e-6 + 4 * 4e-6 + 1000 * 2e-7
+        #expect(abs(cost - expected) < 1e-15)
         #expect(rig.pricing.cost(model: "gpt-x", Agg(input: 1)) == nil)
 
         // Relaunch: the verified download of the pinned revision is used, offline.
