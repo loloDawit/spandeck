@@ -1,0 +1,95 @@
+{
+  "title": "A record without ids copied into another file, and re-read after restarts",
+  "matrix": [
+    "missing request ids",
+    "duplicates across files"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a record with neither id is identified by its fingerprint, so the same record counts once in any file and across relaunches and rebuilds.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 2,
+  "derivation": "K [100, 50] in s1: 150. s2 holds a copy of K and L [10, 5]: K is the same fingerprint, L is new: 165. s1 is rewritten with K again: nothing new. Two fingerprinted operations throughout the last two steps.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "k.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "kl.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [110, 55, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 165,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 2,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "k.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [110, 55, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 165,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 2,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 165
+        },
+        "today": 165,
+        "week": 165,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

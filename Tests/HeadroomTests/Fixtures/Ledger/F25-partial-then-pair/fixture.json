@@ -1,0 +1,95 @@
+{
+  "title": "A record with one id, then its complete pair, then more partial records",
+  "matrix": [
+    "missing request ids",
+    "streaming: increasing counters"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a record with one id joins the one pair that carries that id; the pair takes over the operation and only growth is added. Joined operations are incomplete.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 3,
+  "derivation": "msg_25 alone [100, 50]: one incomplete operation, 150. The pair (msg_25, req_25) [100, 80] takes it over: +30, 180. msg_25 alone [100, 90]: +10. req_25 alone [100, 95]: +5. One operation [100, 95], 195, incomplete throughout.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "m1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "p1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 80, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 180,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "m2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 95, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 195,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 195
+        },
+        "today": 195,
+        "week": 195,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

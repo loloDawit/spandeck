@@ -11,7 +11,7 @@
   "now": "2026-03-10T19:00:00Z",
   "records": 2,
   "duplicates": 1,
-  "derivation": "Haiku 4.5 main [10, 10]; claude-test-1 sub-call [30, 3] growing to [30, 7] in the re-log. 57 tokens, 2 operations. Known cost: Haiku 10 x $1/M + 10 x $5/M = $0.00006; the sub-call is unpriced, so partial.",
+  "derivation": "Haiku 4.5 main [10, 10]; claude-test-1 sub-call [30, 3] growing to [30, 7] in the re-log. 57 tokens, 2 operations. Known cost: Haiku 10 x $1/M + 10 x $5/M = $0.00006; the sub-call is unpriced, so partial. Identity counts groups, not calls: one pair, so 1 identified group for 2 operations (#55).",
   "steps": [
     {
       "ops": [
@@ -36,7 +36,13 @@
           "2026-03-10": 57
         },
         "today": 57,
-        "week": 57
+        "week": 57,
+        "identity": {
+          "identified": 1,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
       }
     }
   ]

@@ -1,0 +1,95 @@
+{
+  "title": "A record with only the message id and one with only the request id, then their pair",
+  "matrix": [
+    "missing request ids",
+    "duplicates across files"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: records with different single ids can't be matched until a pair shows they belong together; then they are one operation, counted at its largest.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 3,
+  "derivation": "msg_29 alone [100, 50] and req_29 alone [100, 50] (s1): two incomplete operations, 300. The pair (msg_29, req_29) [100, 60] in s2 takes over the first and merges the second: one operation [100, 60], 160. req_29 alone [100, 70] appended to s1: +10, 170. A rebuild reading s2 first gets the same: the pair, then both partials join it.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "a.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [200, 100, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 300,
+        "identity": {
+          "identified": 0,
+          "incomplete": 2,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "p.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 60, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 160,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "r.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 70, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 170,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 170
+        },
+        "today": 170,
+        "week": 170,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

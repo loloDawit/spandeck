@@ -17,7 +17,7 @@ Where the ledger does something else today, `baseline` records what it does. Tha
   "title": "…",
   "matrix": ["rows of the #6 fixture matrix this covers"],
   "classification": "pass | defect | ambiguous",
-  "followUp": "#55",            // where a defect or an open policy is tracked
+  "followUp": "#55",            // where a defect or an open policy is tracked, or the fix a passing fixture verifies
   "policy": "Pn: …",            // the rule the expected values assume
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z", // the ledger's clock for this fixture
@@ -44,6 +44,7 @@ The fields of an expectation are all optional, and only the fields present are c
 | `today`, `week`, `month`, `window` | Token totals for today, the last 7 days, the last 30 days and the 5-hour window. |
 | `coverage`, `models` | Cost coverage (`complete`, `partial`, `unavailable`) for the 30 days and per model. |
 | `knownCost` | The known part of the 30-day cost estimate, in USD, at the bundled list prices. |
+| `identity` | How the 30 days' identity groups were identified (#55). A group is everything counted under one identity: one logged message with its streamed copies. It isn't a count of calls; F13 has 2 operations in 1 group. Kinds: `identified` (both ids), `incomplete` (one id, alone or joined to a pair), `fingerprinted` (neither id), `ambiguous` (one id that more than one pair carries). |
 
 `write` replaces a file in place (same inode), `append` adds bytes, `rename` moves a file and `delete` removes it. After every step, all modification times under `.claude/projects` are set to one minute before `now`. Otherwise "recently modified" would depend on the day the tests run.
 
@@ -56,7 +57,7 @@ The fields of an expectation are all optional, and only the fields present are c
 | `relaunch` | `flush()` and a new ledger over the same cache before each step. |
 | `rebuild` | All steps, then `clearCache`, then a fresh index of the files left on disk. |
 
-The expected result (`expect`) is the same in every mode, but today's ledger doesn't always agree with itself: F15's `baselineByMode` deliberately records different totals depending on whether a full scan ran while a file was missing (#55).
+The expected result (`expect`) is the same in every mode. Before #55, the ledger didn't always agree with itself: F15 recorded 590 when tailing and 810 after a full scan or relaunch. `baselineByMode` remains in the format for such cases.
 
 After every step a second refresh with no changes must return the same result. `unsavedProgressIsNotCountedTwice` additionally starts a new ledger from a cache saved before the last records were counted, as after a crash.
 
@@ -69,7 +70,7 @@ These are proposals for review. The ones marked *ambiguous* need a decision, and
 | P1 | An operation is identified by message id + request id; every record with that identity is the same operation, in any file. |
 | P2 | *Ambiguous.* Repeated records are cumulative snapshots: each field counts its largest value, so totals never go down. |
 | P3 | An operation belongs to the hour of the first record read; later growth is added there, even if a later record's timestamp is in another hour or earlier. |
-| P4 | An empty id is a missing id. With one id missing, the other alone identifies the operation. Records with neither are counted once each, are never counted again when a file is re-read, and make the total uncertain. |
+| P4 | *Decided on #9 for #55.* An id that is missing, empty, only whitespace or not a string is absent. With one id absent, the other alone identifies the operation (`message-only` or `request-only`), and joins the one pair that carries the same id. If more than one pair carries it, the record is counted on its own as ambiguous, never merged into either. A join is never undone. Records with neither id are identified by a keyed fingerprint of the parsed instant (to the millisecond), the model and the value of every usage counter (absent ≠ 0), so an identical record counts once in any file, however its time zone or numbers are spelled (F34). Changed counters count again (F33) and identical distinct operations count once (F32); both are accepted limitations. Anything but both ids makes the total uncertain (`identity`). |
 | P5 | *Ambiguous.* The same message id under another request id is another operation (as in ccusage). |
 | P6 | *Ambiguous for the last line.* A line counts once its newline is written. |
 | P7 | A record that can't be read isn't counted and should be reported as unread. User records and `<synthetic>` records are not usage. A record without a model is counted under `unknown`, with an unknown cost. |

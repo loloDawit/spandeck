@@ -1,0 +1,95 @@
+{
+  "title": "The same record without ids, written differently",
+  "matrix": [
+    "missing request ids",
+    "duplicates across files"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a fingerprint covers the parsed instant (to the millisecond) and counter values, not how they are spelled. Z, +00:00, -08:00 and fractional zeros are one instant; 50, 50.0 and 5e1 are one number.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 5,
+  "duplicates": 3,
+  "derivation": "[100, 50] at 16:45:00Z in s1: 150. s2 repeats it as 16:45:00.000Z with 100.0 / 5e1, and as 16:45:00+00:00 with 1e2 / 50: the same fingerprint, nothing new. s3 repeats it as 08:45:00-08:00 (same instant): nothing new; and has 16:45:00.001Z, one millisecond later: a second group, 300. Two fingerprinted groups, 2 operations.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "a.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s3.jsonl",
+          "from": "c.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [200, 100, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 300,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 2,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 300
+        },
+        "today": 300,
+        "week": 300,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

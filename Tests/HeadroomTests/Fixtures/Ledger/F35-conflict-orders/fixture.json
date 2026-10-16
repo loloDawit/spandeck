@@ -1,0 +1,74 @@
+{
+  "title": "The records of F28 read in two other orders",
+  "matrix": [
+    "inconsistent request ids",
+    "missing request ids"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a join is never undone, and a record with an id that two pairs carry is counted on its own as ambiguous. The total can therefore depend on the order the records are read in; the two pairs are never merged in any order, and every order marks the total uncertain.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 8,
+  "duplicates": 2,
+  "derivation": "F28's records: partial [100, 50], pair A [100, 60], pair B [300, 30], partial [100, 70]. F28 reads them in that order: 660, 1 identified, 1 incomplete, 1 ambiguous. Order B (hour 16, pairs first): A 160 and B 330 are two identified groups and the id is ambiguous before any partial arrives; the partials form one ambiguous group [100, 50] then [100, 70] (+20): 660, 2 identified, 1 ambiguous. Order C (hour 17): A 160; partial [100, 70] joins A (+10, incomplete, 170); B 330 makes the id ambiguous; partial [100, 50] is a new ambiguous group, 150: 650, 1 identified, 1 incomplete, 1 ambiguous. Same records, totals 660 / 660 / 650: path-dependent, as P4 accepts, and never exact. In every order A and B stay separate (3 groups, 3 calls per order).",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [500, 160, 0, 0, 0, 3]
+          }
+        },
+        "operations": 3,
+        "month": 660,
+        "identity": {
+          "identified": 2,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "c.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [500, 160, 0, 0, 0, 3]
+          },
+          "2026-03-10T17": {
+            "claude-test-1": [500, 150, 0, 0, 0, 3]
+          }
+        },
+        "operations": 6,
+        "month": 1310,
+        "days": {
+          "2026-03-10": 1310
+        },
+        "today": 1310,
+        "week": 1310,
+        "coverage": "unavailable",
+        "identity": {
+          "identified": 3,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 2
+        }
+      }
+    }
+  ]
+}

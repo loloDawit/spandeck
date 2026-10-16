@@ -3,6 +3,7 @@
 **Issue:** #6 (M0, research). **Parent:** #2. **Code base:** `main` at `98c3ac3`, plus the test seam described in §6.
 **Fixtures:** [`Tests/HeadroomTests/Fixtures/Ledger`](../../Tests/HeadroomTests/Fixtures/Ledger/README.md). **Tests:** `Tests/HeadroomTests/LedgerFixtureTests.swift`.
 **Follow-ups:** #55, #56, #57, #58. Open policy questions are posted on #7, #9, #10 and #58.
+**Update:** #55 is fixed on branch `fix/55-missing-id-dedupe` (§8). Sections 1–7 describe the ledger before that fix, as audited.
 
 This report covers Claude transcript accounting in `Ledger.swift`: identity, deduplication, incremental reading, the cache and time buckets. Grok usage files are covered only where R7 already tested them. Pricing values and pricing integrity are out of scope (#7, #11).
 
@@ -132,7 +133,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 
 | Id | Issue | What happens | Fixtures | Impact |
 |---|---|---|---|---|
-| L1 | #55 | Records without a message id or request id are added every time they're read. Empty-string ids merge different operations | F04 (600 vs 255), F05 (170 vs 320), F15 (590 or 810 vs 370) | Inflation, and an undercount in the empty-id case; depends on refresh timing |
+| L1 | #55 | Records without a message id or request id are added every time they're read. Empty-string ids merge different operations | F04 (600 vs 255), F05 (170 vs 320), F15 (590 or 810 vs 370) | Inflation, and an undercount in the empty-id case; depends on refresh timing. **Fixed by #55 (§8)** |
 | L2 | #56 | An in-place overwrite of the same or larger size is taken for an append | F16 (480 vs 714) | Undercount; probably rare with Claude Code |
 | L3 | #57 | Usage is assigned to local days by whole UTC hours | F21 (today 4 vs 6) | Wrong day, every day, for half-hour zones |
 | L4 | #58 | Negative counters are subtracted; a breakdown without a flat total is dropped; `"usage": {` is skipped; unreadable records leave no trace | F10 (−839 vs 494), F09 | Wrong totals on unusual input; incomplete totals look complete |
@@ -194,3 +195,48 @@ On Apple Silicon, macOS 26.5, Xcode 26.6, all local:
 - the app itself.
 
 A known issue that stops failing makes its test fail. That signals the fixture should be updated when a fix lands.
+
+## 8. Update: the #55 fix
+**Branch:** `fix/55-missing-id-dedupe`, implementing the [P4 decision on #9](https://github.com/loloDawit/spandeck/issues/9#issuecomment-6220268374). **Status:** in review, not merged.
+
+### 8.1 What changed
+- **[code]** An id that is missing, empty, blank or not a string is absent. Record identity, in order:
+  1. both ids: the pair, as before;
+  2. one id: that id in its own namespace. A record joins the one pair that carries its id, and a new pair takes over the partial groups it completes. When two pairs carry the id, the record is counted on its own as ambiguous;
+  3. neither: a keyed fingerprint of timestamp, model and counters.
+- **[code]** Every identity group is counted by kind per hour: identified, incomplete, fingerprinted, ambiguous. A group is one logged message with its streamed copies, not a call (F13: 2 operations, 1 group). The fingerprint uses the parsed instant and counter values, not their spelling. The counts reach `Totals.identity`, and the Token usage card shows *"Usage may be approximate: some records lack identifiers."* when any logged message in the 30 days isn't identified by both ids. This is separate from cost coverage (R7).
+- **[code]** The cache is now version 5, and a version 4 cache is deleted and re-indexed (`docs/USAGE_CACHE.md`).
+- **[test]** F04, F05 and F15 now pass in all modes and on rebuild, with no baseline: 255, 320, and 370 (rebuild 220). The modes now agree on F15.
+- **[test]** New fixtures:
+  - F25: one id first, then the pair;
+  - F26: pair first, then partials in another file;
+  - F27: two pairs sharing one id;
+  - F28: conflict after a join;
+  - F29: both partials, then the pair;
+  - F30: empty, blank and non-string ids;
+  - F31: no-id replay across files and relaunches;
+  - F32: identical fingerprints;
+  - F33: no-id streaming;
+  - F34: one no-id record written with different time zones and number spellings;
+  - F35: F28's records read in two other orders.
+- **[test]** The other 24 fixtures are unchanged, except that F13 now also asserts its identity count.
+
+### 8.2 Limits that remain (accepted on #9, shown as uncertainty)
+- **Records without ids:**
+  - a streamed message with no ids overcounts, since each snapshot has its own fingerprint (F33);
+  - two distinct logged messages with identical records count once (F32).
+- **Arrival order:** a join is never undone. If a second pair with the same id arrives after the join, later records with only that id are counted on their own (F28). The result is deterministic for a given read order, but another order can give a different total. F35 pins this: F28's four records give 660 when the pairs come first and 650 when a partial joins before the conflicting pair, against 660 in F28's order. The two pairs stay separate in every order, and every order is marked uncertain. F28 and F35 keep each scenario in one file so the order is fixed. F26 and F29 are worked out so that either file order gives the same total, but their rebuild checks only the order the file system returns.
+- **Scope:** identity covers every Claude transcript under the scanned roots. There is no account scope, as before. Grok turns are not covered by identity coverage.
+- **Lost history:** a one-time re-index loses usage whose transcripts are gone.
+
+### 8.3 Cost (synthetic, see #8)
+The measurements used a debug build on an Apple M2 Pro, with three cases running concurrently, so only the relative numbers matter. The data was 50,000 logged messages (identity groups), each with two streamed snapshots, spread over 100 files.
+
+| | Before (`main`) | After |
+|---|---|---|
+| Cache size per logged message | 147–163 bytes (records without ids weren't stored at all) | 377–380 bytes |
+| First index (100,000 lines) | 11.8–16.9 s | 15.9–19.8 s |
+| Relaunch, cache load only | 0.30–0.42 s | 0.79–1.24 s |
+
+Lookups are dictionary operations per record, with no scan of past identities.
+

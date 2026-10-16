@@ -1,0 +1,47 @@
+{
+  "title": "Two pairs share a message id (or a request id), then a record with only that id",
+  "matrix": [
+    "inconsistent request ids",
+    "missing request ids"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4 and P5: two pairs sharing one id are two operations. A record with only the shared id can't be joined to either without risking merging them, so it is counted on its own and marked ambiguous; its own growth is still counted once.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 7,
+  "duplicates": 1,
+  "derivation": "(msg_27, req_27a) [100, 50] and (msg_27, req_27b) [200, 20]: two identified operations, 370. msg_27 alone [100, 60] then [100, 70]: one ambiguous operation [100, 70], 170. (msg_27c, req_27q) [10, 5] and (msg_27d, req_27q) [10, 5]: two identified, 30. req_27q alone [10, 6]: ambiguous, 16. Input 100+200+100+10+10+10 = 430, output 50+20+70+5+5+6 = 156, 6 operations, 586.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [430, 156, 0, 0, 0, 6]
+          }
+        },
+        "operations": 6,
+        "month": 586,
+        "identity": {
+          "identified": 4,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 2
+        },
+        "days": {
+          "2026-03-10": 586
+        },
+        "today": 586,
+        "week": 586,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}
