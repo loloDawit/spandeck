@@ -1,0 +1,119 @@
+{
+  "title": "A record with one id joins a pair, then a second pair carries the same id",
+  "matrix": [
+    "inconsistent request ids",
+    "missing request ids"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a join is never undone. A second pair with the same id is its own operation, and from then on the id is ambiguous: later records with only that id are counted on their own and marked ambiguous, never merged into either pair.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 2,
+  "derivation": "msg_28 alone [100, 50]: incomplete, 150. (msg_28, req_28a) [100, 60] takes it over: +10, 160. (msg_28, req_28b) [300, 30]: a new identified operation, 490. msg_28 alone [100, 70]: the id is now ambiguous, so a new ambiguous operation, 660. This can overcount (the last record may be growth of either pair); the total is marked uncertain. Input 500, output 160, 3 operations.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 60, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 160,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s3.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [400, 90, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 490,
+        "identity": {
+          "identified": 1,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s4.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [500, 160, 0, 0, 0, 3]
+          }
+        },
+        "operations": 3,
+        "month": 660,
+        "identity": {
+          "identified": 1,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 1
+        },
+        "days": {
+          "2026-03-10": 660
+        },
+        "today": 660,
+        "week": 660,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

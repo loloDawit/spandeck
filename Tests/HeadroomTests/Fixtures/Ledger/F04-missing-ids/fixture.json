@@ -4,14 +4,14 @@
     "missing request ids",
     "streaming: increasing counters"
   ],
-  "classification": "defect",
+  "classification": "pass",
   "followUp": "#55",
-  "policy": "P4: when one id is missing, the other alone identifies the operation (a request id is unique per API request, a message id per response). An empty id is a missing id. Records with neither id are counted once each, are never counted again when a file is re-read, and make the total uncertain (reported as such).",
+  "policy": "P4: an empty, blank or non-string id is a missing id. When one id is missing, the other alone identifies the operation (a request id is unique per API request, a message id per response). Records with neither are identified by a fingerprint of timestamp, model and counters, so an identical record counts once. Any of these makes the total uncertain.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 6,
   "duplicates": 3,
-  "derivation": "msg_04a without request id, output 50/80/120: one operation [100, 120]. req_04b without message id, output 10/20: one operation [5, 20]. One record with neither: [7, 3]. Expected [112, 143], 3 operations, 255 tokens. Today every repeat is counted in full: input 3x100 + 2x5 + 7 = 317, output 50+80+120 + 10+20 + 3 = 283, 6 calls, 600 tokens.",
+  "derivation": "msg_04a without request id, output 50/80/120: one operation [100, 120]. req_04b without message id, output 10/20: one operation [5, 20]. One record with neither: [7, 3]. Expected [112, 143], 3 operations, 255 tokens. Identity: msg_04a and req_04b are incomplete (one id each), the third is fingerprinted.",
   "steps": [
     {
       "ops": [
@@ -34,22 +34,13 @@
         },
         "today": 255,
         "week": 255,
-        "coverage": "unavailable"
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [317, 283, 0, 0, 0, 6]
-          }
-        },
-        "operations": 6,
-        "month": 600,
-        "days": {
-          "2026-03-10": 600
-        },
-        "today": 600,
-        "week": 600,
-        "coverage": "unavailable"
+        "coverage": "unavailable",
+        "identity": {
+          "identified": 0,
+          "incomplete": 2,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        }
       }
     }
   ]

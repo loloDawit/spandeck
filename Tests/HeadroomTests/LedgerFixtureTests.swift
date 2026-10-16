@@ -58,6 +58,8 @@ struct LedgerFixtureTests {
         var coverage: String?
         var models: [String: String]?
         var knownCost: Double?
+        /// How the 30 days' operations were identified (#55).
+        var identity: IdentityCoverage?
     }
 
     /// What one refresh produced, in the same terms as an expectation.
@@ -71,6 +73,7 @@ struct LedgerFixtureTests {
         var coverage: String
         var models: [String: String]
         var knownCost: Double
+        var identity: IdentityCoverage
 
         var operations: Int { hours.values.flatMap(\.values).reduce(0) { $0 + $1[5] } }
 
@@ -89,6 +92,7 @@ struct LedgerFixtureTests {
             check("coverage", e.coverage, coverage)
             check("models", e.models, models)
             if let c = e.knownCost, abs(c - knownCost) > 1e-12 { out.append("knownCost: expected \(c), got \(knownCost)") }
+            check("identity", e.identity, identity)
             return out
         }
     }
@@ -198,7 +202,7 @@ struct LedgerFixtureTests {
             return Observation(hours: hours, days: days, today: s.today.tokens, week: s.week.tokens, month: s.month.tokens,
                                window: s.window?.tokens, coverage: name(s.month.cost.coverage),
                                models: Dictionary(uniqueKeysWithValues: s.models.map { ($0.model, name($0.cost.coverage)) }),
-                               knownCost: s.month.cost.known)
+                               knownCost: s.month.cost.known, identity: s.month.identity)
         }
 
         /// Checks the baseline exactly when there is one, and the expected result (as a known issue if there's a
@@ -221,7 +225,7 @@ struct LedgerFixtureTests {
     // MARK: Tests
 
     @Test func everyFixtureIsComplete() throws {
-        #expect(Self.names.count == 24)
+        #expect(Self.names.count == 33)
         for name in Self.names {
             let f = try Self.load(name)
             #expect(["pass", "defect", "ambiguous"].contains(f.classification), "\(name)")

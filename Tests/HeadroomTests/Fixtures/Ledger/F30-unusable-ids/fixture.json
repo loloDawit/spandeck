@@ -1,0 +1,47 @@
+{
+  "title": "Empty, blank and non-string ids",
+  "matrix": [
+    "inconsistent request ids",
+    "missing request ids"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: an id that is empty, only whitespace, not a string, or null is missing. A record with no usable id gets a fingerprint.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 8,
+  "duplicates": 2,
+  "derivation": "req_30a with an empty message id, twice (output 1, 2): one incomplete operation [10, 2]. Blank ids, the same record twice: one fingerprint [20, 2]. A numeric message id with req_30b: incomplete [30, 3]. msg_30c with a null request id: incomplete [40, 4]. An array and an object as ids: fingerprint [50, 5]. Both empty: fingerprint [60, 6]. Input 210, output 22, 6 operations, 232: 3 incomplete, 3 fingerprinted.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [210, 22, 0, 0, 0, 6]
+          }
+        },
+        "operations": 6,
+        "month": 232,
+        "identity": {
+          "identified": 0,
+          "incomplete": 3,
+          "fingerprinted": 3,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 232
+        },
+        "today": 232,
+        "week": 232,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

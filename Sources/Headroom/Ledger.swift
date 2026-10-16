@@ -73,9 +73,48 @@ struct CostEstimate: Equatable, Sendable {
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
 }
 
+/// How the operations behind a total were told apart (#55, P4), independent of cost coverage (R7). Only operations
+/// with both a message id and a request id are certain; every other kind means the token count may be approximate.
+struct IdentityCoverage: Codable, Equatable, Sendable {
+    /// Message id + request id.
+    var identified = 0
+    /// One id only: counted alone, or joined to the one pair that carries the same id.
+    var incomplete = 0
+    /// Neither id: a keyed fingerprint of timestamp, model and counters. Changed counters count again, and distinct
+    /// operations with identical fingerprints count once.
+    var fingerprinted = 0
+    /// One id only, but more than one pair carries it: counted on its own, joined to neither.
+    var ambiguous = 0
+
+    enum Kind: String, Codable { case identified, incomplete, fingerprinted, ambiguous }
+
+    /// No operation in the total was identified by anything less than both ids.
+    var isExact: Bool { incomplete == 0 && fingerprinted == 0 && ambiguous == 0 }
+    var operations: Int { identified + incomplete + fingerprinted + ambiguous }
+    var uncertain: Int { operations - identified }
+
+    mutating func add(_ kind: Kind, _ n: Int = 1) {
+        switch kind {
+        case .identified: identified += n
+        case .incomplete: incomplete += n
+        case .fingerprinted: fingerprinted += n
+        case .ambiguous: ambiguous += n
+        }
+    }
+
+    static func + (a: IdentityCoverage, b: IdentityCoverage) -> IdentityCoverage {
+        IdentityCoverage(identified: a.identified + b.identified, incomplete: a.incomplete + b.incomplete,
+                         fingerprinted: a.fingerprinted + b.fingerprinted, ambiguous: a.ambiguous + b.ambiguous)
+    }
+
+    static func += (a: inout IdentityCoverage, b: IdentityCoverage) { a = a + b }
+}
+
 struct Totals {
     var tokens = 0
     var cost = CostEstimate.zero
+    /// Claude only; Grok turns are deduplicated by their own rule and aren't counted here.
+    var identity = IdentityCoverage()
 }
 
 struct DayBar: Identifiable {
@@ -109,7 +148,9 @@ extension UsageSummary {
         guard var r = a ?? b else { return nil }
         guard let a, let b else { return r }
         // Estimates add field by field, so one provider's incomplete cost keeps the combined total incomplete (R7).
-        func add(_ x: Totals, _ y: Totals) -> Totals { Totals(tokens: x.tokens + y.tokens, cost: x.cost + y.cost) }
+        func add(_ x: Totals, _ y: Totals) -> Totals {
+            Totals(tokens: x.tokens + y.tokens, cost: x.cost + y.cost, identity: x.identity + y.identity)
+        }
         r.today = add(a.today, b.today)
         r.week = add(a.week, b.week)
         r.month = add(a.month, b.month)
@@ -401,18 +442,27 @@ enum LedgerClearFailure: Error, Equatable {
 /// Paths are only held in memory to read the files.
 final class Ledger {
     private struct FileMark: Codable { var offset: UInt64 }
-    /// What has been counted for one message id + request id, per model.
-    private struct Seen: Codable { var hour: Int; var parts: [String: Agg] }
-    /// Version 4 (R8): `files` and `seen` are keyed by opaque ids. Version 3 keyed them by raw paths and ids.
+    /// What has been counted for one operation, per model, and how the operation was identified (#55).
+    private struct Seen: Codable { var hour: Int; var parts: [String: Agg]; var identity: IdentityCoverage.Kind }
+    /// Which operation carries a single message id or request id (#55): the one pair with it, or `ambiguous` once a
+    /// second pair has it too. `hour` is the newest of their hours, for pruning.
+    private struct Link: Codable { var target: String; var hour: Int }
+    /// Version 5 (#55): `seen` also holds operations known by one id or by a fingerprint, `links` maps single ids to
+    /// pairs, and `identity` counts operations per hour by how they were identified. Version 4 counted records
+    /// without ids on every read and treated empty ids as an id, so its totals can't be carried over. Version 4 (R8)
+    /// keyed `files` and `seen` by opaque ids; version 3 by raw paths and ids.
     private struct State: Codable {
-        var version = 4
+        var version = 5
         /// An opaque id of a fixed input under the key the ids were made with, so a cache is only loaded with that key
         /// (a restored old cache next to a newer key would otherwise re-read and double count everything).
         var keyCheck = ""
         var files: [String: FileMark] = [:]
         var seen: [String: Seen] = [:]
+        var links: [String: Link] = [:]
         var hours: [Int: [String: Agg]] = [:]
+        var identity: [Int: IdentityCoverage] = [:]
     }
+    private static let ambiguous = "ambiguous"
     static let cacheName = "claude-ledger.json"
     static let keyName = "claude-ledger.key"
     struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
@@ -466,7 +516,9 @@ final class Ledger {
     // MARK: Opaque ids (R8)
 
     /// HMAC-SHA256 over a domain and length-prefixed parts, so different kinds and splits of input can't collide.
-    private func opaqueID(_ domain: String, _ parts: String...) -> String {
+    private func opaqueID(_ domain: String, _ parts: String...) -> String { opaqueID(domain, parts) }
+
+    private func opaqueID(_ domain: String, _ parts: [String]) -> String {
         var mac = HMAC<SHA256>(key: key)
         for part in [domain] + parts {
             let bytes = Data(part.utf8)
@@ -486,6 +538,8 @@ final class Ledger {
     private func fileID(_ path: String) -> String { opaqueID("file", path) }
     private var keyCheck: String { opaqueID("key-check") }
     private func messageID(_ id: String, _ request: String) -> String { opaqueID("message", id, request) }
+    private func messageOnlyID(_ id: String) -> String { opaqueID("message-only", id) }
+    private func requestOnlyID(_ request: String) -> String { opaqueID("request-only", request) }
 
     private var claudeRoots: [URL] {
         [home.appendingPathComponent(".claude/projects"), home.appendingPathComponent(".config/claude/projects")]
@@ -514,7 +568,8 @@ final class Ledger {
             // Summaries only change with new data, a new window, a new day or new prices.
             let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(calendar.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
-                cachedSummaries = (summarize(claudeHours(), windowStart: windowStart), summarize(grokHours(), windowStart: nil))
+                cachedSummaries = (summarize(claudeHours(), identity: state.identity, windowStart: windowStart),
+                                   summarize(grokHours(), identity: [:], windowStart: nil))
                 lastSummaryKey = key
             }
             completion(cachedSummaries!.0, cachedSummaries!.1, lastActivity)
@@ -606,6 +661,8 @@ final class Ledger {
         if state.hours.keys.contains(where: { $0 < minHour }) {
             state.hours = state.hours.filter { $0.key >= minHour }
             state.seen = state.seen.filter { $0.value.hour >= minHour }
+            state.links = state.links.filter { $0.value.hour >= minHour }
+            state.identity = state.identity.filter { $0.key >= minHour }
             dirty = true
         }
     }
@@ -689,29 +746,138 @@ final class Ledger {
             parts[sub, default: Agg(calls: 0)].add(Self.agg(it))
         }
 
-        guard let id = msg.string("id"), let req = obj.string("requestId") else {
+        let id = Self.usableID(msg["id"]), req = Self.usableID(obj["requestId"])
+        switch (id, req) {
+        case let (id?, req?):
+            let key = messageID(id, req)
+            let single = [messageOnlyID(id), requestOnlyID(req)]
+            // Operations first seen with one id that no other pair carries are this pair's operation: the first keeps
+            // its hour and becomes the pair's, a second (the other id) is merged into it, and only growth is added.
+            // Either way the operation stays incomplete.
+            if state.seen[key] == nil {
+                for s in single where state.links[s] == nil {
+                    guard let partial = state.seen.removeValue(forKey: s) else { continue }
+                    if state.seen[key] == nil {
+                        state.seen[key] = partial
+                    } else {
+                        uncount(partial)
+                        count(partial.parts, hour: partial.hour, key: key, kind: .incomplete)
+                    }
+                }
+            }
+            count(parts, hour: hour, key: key, kind: .identified)
+            let at = state.seen[key]!.hour
+            for s in single {
+                if let l = state.links[s], l.target != key {
+                    state.links[s] = Link(target: Self.ambiguous, hour: max(l.hour, at))
+                } else {
+                    state.links[s] = Link(target: key, hour: max(state.links[s]?.hour ?? at, at))
+                }
+            }
+        case (let id?, nil), (nil, let id?):
+            let single = req == nil ? messageOnlyID(id) : requestOnlyID(id)
+            switch state.links[single]?.target {
+            case nil: count(parts, hour: hour, key: single, kind: .incomplete)
+            case Self.ambiguous?:
+                // More than one pair carries this id: joining either could merge two operations, so it stays apart.
+                count(parts, hour: hour, key: single, kind: .ambiguous)
+                reclassify(single, .ambiguous)
+            case let pair?:
+                count(parts, hour: hour, key: pair, kind: .identified)
+                reclassify(pair, .incomplete)
+            }
+        case (nil, nil):
+            count(parts, hour: hour, key: fingerprint(obj, msg, usage), kind: .fingerprinted)
+        }
+    }
+
+    /// Adds a record to the operation `key`: all of it if the operation is new, else only its growth, since streaming
+    /// logs the same message several times with growing counts.
+    private func count(_ parts: [String: Agg], hour: Int, key: String, kind: IdentityCoverage.Kind) {
+        guard var old = state.seen[key] else {
             for (m, a) in parts { state.hours[hour, default: [:]][m, default: Agg()].add(a) }
+            state.seen[key] = Seen(hour: hour, parts: parts, identity: kind)
+            state.identity[hour, default: IdentityCoverage()].add(kind)
             changeCounter += 1
             return
         }
-        let key = messageID(id, req)
-        if var old = state.seen[key] {
-            // Streaming logs the same message several times with growing counts; count only the growth.
-            for (m, a) in parts {
-                let prev = old.parts[m] ?? Agg(calls: 0)
-                let delta = a.growth(from: prev)
-                guard delta.total > 0 else { continue }
-                state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
-                old.parts[m] = a.maxed(with: prev)
-                changeCounter += 1
-            }
-            state.seen[key] = old
-        } else {
-            for (m, a) in parts { state.hours[hour, default: [:]][m, default: Agg()].add(a) }
-            state.seen[key] = Seen(hour: hour, parts: parts)
+        for (m, a) in parts {
+            let prev = old.parts[m] ?? Agg(calls: 0)
+            let delta = a.growth(from: prev)
+            guard delta.total > 0 else { continue }
+            state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
+            // Growth adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
+            // operation added to `hours` (needed to take it back when two operations turn out to be one).
+            var merged = a.maxed(with: prev)
+            merged.calls = prev.calls
+            old.parts[m] = merged
             changeCounter += 1
         }
+        state.seen[key] = old
     }
+
+    /// Takes back everything an operation added to `hours` and `identity`.
+    private func uncount(_ s: Seen) {
+        for (m, a) in s.parts {
+            guard var b = state.hours[s.hour]?[m] else { continue }
+            b.input -= a.input; b.output -= a.output
+            b.cacheWrite5m -= a.cacheWrite5m; b.cacheWrite1h -= a.cacheWrite1h
+            b.cacheRead -= a.cacheRead; b.calls -= a.calls
+            state.hours[s.hour]![m] = b.total == 0 && b.calls == 0 ? nil : b
+        }
+        if state.hours[s.hour]?.isEmpty == true { state.hours[s.hour] = nil }
+        state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
+        if state.identity[s.hour]?.operations == 0 { state.identity[s.hour] = nil }
+        changeCounter += 1
+    }
+
+    /// Moves an operation to a less certain kind. Never back: a pair that was joined by one id stays incomplete.
+    private func reclassify(_ key: String, _ kind: IdentityCoverage.Kind) {
+        guard var s = state.seen[key], s.identity != kind, s.identity != .ambiguous,
+              !(s.identity == .incomplete && kind == .identified) else { return }
+        state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
+        state.identity[s.hour, default: IdentityCoverage()].add(kind)
+        s.identity = kind
+        state.seen[key] = s
+        changeCounter += 1
+    }
+
+    /// An id the ledger can use: a string with something other than whitespace in it. Missing, empty, blank and
+    /// non-string ids are all absent (P4), never an identity shared by every record that has one.
+    static func usableID(_ v: Any?) -> String? {
+        guard let s = v as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return s
+    }
+
+    /// For a record with neither id: a keyed hash of its timestamp, model and every usage counter, in a fixed order,
+    /// as written (absent, a number, or something else). Nothing about where the record was read is in it, so the
+    /// same record in a rewritten, restored or copied file is the same operation. It is best effort (#9): a streamed
+    /// record whose counters grew gets a new fingerprint, and two operations that really are identical get one.
+    private func fingerprint(_ obj: [String: Any], _ msg: [String: Any], _ usage: [String: Any]) -> String {
+        func text(_ v: Any?) -> String {
+            switch v {
+            case nil: return "-"
+            case let s as String: return "s:" + s
+            case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID(): return "n:" + n.stringValue
+            default: return "x"
+            }
+        }
+        func counters(_ u: [String: Any]) -> [String] {
+            let cc = u.dict("cache_creation")
+            return Self.fingerprintCounters.map { text(u[$0]) }
+                + ["cc:" + (cc == nil ? text(u["cache_creation"]) : "{}")]
+                + Self.fingerprintBreakdown.map { text(cc?[$0]) }
+        }
+        var parts = [text(obj["timestamp"]), text(msg["model"])] + counters(usage)
+        let iterations = usage["iterations"] as? [[String: Any]] ?? []
+        parts.append("iterations:\(usage["iterations"] == nil ? "-" : String(iterations.count))")
+        for it in iterations { parts += [text(it["type"]), text(it["model"])] + counters(it) }
+        return opaqueID("fingerprint", parts)
+    }
+
+    private static let fingerprintCounters = ["input_tokens", "output_tokens", "cache_creation_input_tokens",
+                                              "cache_read_input_tokens"]
+    private static let fingerprintBreakdown = ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
 
     private static func agg(_ usage: [String: Any]) -> Agg {
         var a = Agg(input: usage.int("input_tokens"), output: usage.int("output_tokens"),
@@ -807,7 +973,7 @@ final class Ledger {
     // MARK: Summaries
 
     /// Calendar-day windows like ccusage: today, the last 7 days and the last 30 days, all including today.
-    private func summarize(_ hours: [Int: [String: Agg]], windowStart: Date?) -> UsageSummary {
+    private func summarize(_ hours: [Int: [String: Agg]], identity: [Int: IdentityCoverage], windowStart: Date?) -> UsageSummary {
         let cal = calendar
         let today = cal.startOfDay(for: now())
         let weekStart = cal.date(byAdding: .day, value: -6, to: today)!
@@ -842,6 +1008,15 @@ final class Ledger {
                 m.1 += c
                 models[model] = m
             }
+        }
+        // How the operations were identified (#55), by the hour each operation was first read in, like its tokens.
+        for (hour, c) in identity {
+            let date = Date(timeIntervalSince1970: Double(hour) * 3600)
+            guard date >= monthStart else { continue }
+            s.month.identity += c
+            if date >= weekStart { s.week.identity += c }
+            if date >= today { s.today.identity += c }
+            if let wh = windowHour, hour >= wh { s.window!.identity += c }
         }
         s.bars = bars.values.sorted { ($0.day, $0.family) < ($1.day, $1.family) }
         s.models = models.map { ModelRow(model: $0.key, tokens: $0.value.0, cost: $0.value.1) }

@@ -5,14 +5,14 @@
     "file truncation",
     "file deletion"
   ],
-  "classification": "defect",
+  "classification": "pass",
   "followUp": "#55",
   "policy": "P4 and P12: re-reading a file must not count its records again, ids or not.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 4,
   "duplicates": 2,
-  "derivation": "K1 [100, 50] and K2 [200, 20] = 370 throughout. Today: the shorter rewrite (K2 only) is read from offset 0 and K2 is counted again (590). After deletion and restore, a ledger that did a full scan while the file was gone forgets its offset and counts K2 a third time (810); a ledger only tailing keeps the offset, sees the same size and reads nothing (590). A fresh index of the final file is K2 alone: 220.",
+  "derivation": "K1 [100, 50] and K2 [200, 20] = 370 throughout. Both have neither id: K2 has the same fingerprint wherever and however often it is read.",
   "steps": [
     {
       "ops": [
@@ -48,15 +48,6 @@
         },
         "operations": 2,
         "month": 370
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [500, 90, 0, 0, 0, 3]
-          }
-        },
-        "operations": 3,
-        "month": 590
       }
     },
     {
@@ -74,15 +65,6 @@
         },
         "operations": 2,
         "month": 370
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [500, 90, 0, 0, 0, 3]
-          }
-        },
-        "operations": 3,
-        "month": 590
       }
     },
     {
@@ -106,53 +88,12 @@
         },
         "today": 370,
         "week": 370,
-        "coverage": "unavailable"
-      },
-      "baselineByMode": {
-        "tail": {
-          "hours": {
-            "2026-03-10T16": {
-              "claude-test-1": [500, 90, 0, 0, 0, 3]
-            }
-          },
-          "operations": 3,
-          "month": 590,
-          "days": {
-            "2026-03-10": 590
-          },
-          "today": 590,
-          "week": 590,
-          "coverage": "unavailable"
-        },
-        "fullScan": {
-          "hours": {
-            "2026-03-10T16": {
-              "claude-test-1": [700, 110, 0, 0, 0, 4]
-            }
-          },
-          "operations": 4,
-          "month": 810,
-          "days": {
-            "2026-03-10": 810
-          },
-          "today": 810,
-          "week": 810,
-          "coverage": "unavailable"
-        },
-        "relaunch": {
-          "hours": {
-            "2026-03-10T16": {
-              "claude-test-1": [700, 110, 0, 0, 0, 4]
-            }
-          },
-          "operations": 4,
-          "month": 810,
-          "days": {
-            "2026-03-10": 810
-          },
-          "today": 810,
-          "week": 810,
-          "coverage": "unavailable"
+        "coverage": "unavailable",
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 2,
+          "ambiguous": 0
         }
       }
     }
@@ -171,7 +112,13 @@
       },
       "today": 220,
       "week": 220,
-      "coverage": "unavailable"
+      "coverage": "unavailable",
+      "identity": {
+        "identified": 0,
+        "incomplete": 0,
+        "fingerprinted": 1,
+        "ambiguous": 0
+      }
     }
   }
 }

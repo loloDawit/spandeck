@@ -3,14 +3,14 @@
   "matrix": [
     "inconsistent request ids"
   ],
-  "classification": "defect",
+  "classification": "pass",
   "followUp": "#55",
   "policy": "P4: an empty id is a missing id, not an identity shared by every record that has one.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 2,
   "duplicates": 0,
-  "derivation": "16:20Z [100, 50] and 17:20Z [100, 70] are separate operations: 320 tokens in two hours. Today both share the key of id \"\" + request \"\": the second only adds its output growth (+20) to the first's hour, giving [100, 70] in hour 16 and 170 tokens.",
+  "derivation": "16:20Z [100, 50] and 17:20Z [100, 70] are separate operations: 320 tokens in two hours. Both records have neither usable id and different timestamps, so two fingerprints.",
   "steps": [
     {
       "ops": [
@@ -36,22 +36,13 @@
         },
         "today": 320,
         "week": 320,
-        "coverage": "unavailable"
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [100, 70, 0, 0, 0, 1]
-          }
-        },
-        "operations": 1,
-        "month": 170,
-        "days": {
-          "2026-03-10": 170
-        },
-        "today": 170,
-        "week": 170,
-        "coverage": "unavailable"
+        "coverage": "unavailable",
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 2,
+          "ambiguous": 0
+        }
       }
     }
   ]

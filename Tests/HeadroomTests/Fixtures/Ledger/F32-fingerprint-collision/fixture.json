@@ -1,0 +1,46 @@
+{
+  "title": "Two different operations with identical records and no ids",
+  "matrix": [
+    "missing request ids"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4 (accepted limitation): with neither id, two operations whose timestamp, model and counters are all identical can't be told apart and count once. The total is marked uncertain, not exact.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 2,
+  "duplicates": 1,
+  "derivation": "Two separate operations both logged as 16:25:00 [100, 50] without ids. Really 300 tokens; the fingerprint can't distinguish them, so 150, one fingerprinted operation. This expected value is the agreed best effort, not the true total.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 1,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 150
+        },
+        "today": 150,
+        "week": 150,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

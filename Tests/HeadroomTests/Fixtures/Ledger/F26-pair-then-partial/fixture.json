@@ -1,0 +1,95 @@
+{
+  "title": "A complete pair, then partial records of it in another file",
+  "matrix": [
+    "missing request ids",
+    "duplicates across files"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4: a later record with one id joins the one pair that carries it, in any file, and makes it incomplete. Read in either file order, the result is the same.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3,
+  "duplicates": 2,
+  "derivation": "Pair (msg_26, req_26) [100, 50] in s1: identified, 150. msg_26 alone [100, 50] in s2: no growth, but the operation is now joined by one id: incomplete. req_26 alone [100, 70] appended to s2: +20, 170. A rebuild may read s2 first: msg_26 [100, 50] and req_26 [100, 70] are two incomplete operations (220) until the pair arrives, which takes over the first and merges the second: max [100, 70], one operation, 170.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "p.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 1,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "m.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 150,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "r.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 70, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 170,
+        "identity": {
+          "identified": 0,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 170
+        },
+        "today": 170,
+        "week": 170,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "title": "A streamed message without ids, logged with growing counters",
+  "matrix": [
+    "missing request ids",
+    "streaming: increasing counters"
+  ],
+  "classification": "pass",
+  "followUp": "#55",
+  "policy": "P4 (accepted limitation): with neither id, each different snapshot of a streamed message has its own fingerprint and is counted, so streaming without ids overcounts. The total is marked uncertain, not exact.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3,
+  "duplicates": 2,
+  "derivation": "One streamed message logged as [100, 50] and [100, 80] at 16:35:00 and [100, 120] at 16:35:01. Really [100, 120], 220; three fingerprints count all three: input 300, output 250, 550. A re-read of the same file adds nothing.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [300, 250, 0, 0, 0, 3]
+          }
+        },
+        "operations": 3,
+        "month": 550,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 3,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [300, 250, 0, 0, 0, 3]
+          }
+        },
+        "operations": 3,
+        "month": 550,
+        "identity": {
+          "identified": 0,
+          "incomplete": 0,
+          "fingerprinted": 3,
+          "ambiguous": 0
+        },
+        "days": {
+          "2026-03-10": 550
+        },
+        "today": 550,
+        "week": 550,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}
