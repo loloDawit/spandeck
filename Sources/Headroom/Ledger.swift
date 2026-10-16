@@ -18,6 +18,8 @@ struct Agg: Codable {
 
     /// Saturating, like `add`: counters are validated below 2^53 (#58), but enough of them must still not trap.
     var total: Int { [output, cacheWrite5m, cacheWrite1h, cacheRead].reduce(input) { $0.saturatingAdd($1) } }
+    /// A counter or the total was held at `Int.max`, so the true value is unknown (#58).
+    var isSaturated: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, total].contains(.max) }
 
     /// Field-wise growth from `old` to self (never negative); used when a streamed message is logged again.
     func growth(from old: Agg) -> Agg {
@@ -75,8 +77,8 @@ struct CostEstimate: Equatable, Sendable {
     var value: Double? { coverage == .complete ? known : nil }
 
     static func + (a: CostEstimate, b: CostEstimate) -> CostEstimate {
-        CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens + b.knownTokens,
-                     unknownTokens: a.unknownTokens + b.unknownTokens)
+        CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens.saturatingAdd(b.knownTokens),
+                     unknownTokens: a.unknownTokens.saturatingAdd(b.unknownTokens))
     }
 
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
@@ -168,6 +170,20 @@ struct DataCompleteness: Decodable, Equatable, Sendable {
     static func += (a: inout DataCompleteness, b: DataCompleteness) { a = a + b }
 }
 
+/// Whether token quantities are exact (#58), independent of identity, completeness and cost coverage. Claude only.
+struct QuantityUncertainty: Equatable, Sendable {
+    /// A sum exceeded `Int.max` and was held there: the total shown is less than the true one.
+    var saturated = false
+
+    var isExact: Bool { !saturated }
+
+    static func + (a: QuantityUncertainty, b: QuantityUncertainty) -> QuantityUncertainty {
+        QuantityUncertainty(saturated: a.saturated || b.saturated)
+    }
+
+    static func += (a: inout QuantityUncertainty, b: QuantityUncertainty) { a = a + b }
+}
+
 struct Totals {
     var tokens = 0
     var cost = CostEstimate.zero
@@ -175,6 +191,16 @@ struct Totals {
     var identity = IdentityCoverage()
     /// Claude only (#58): an unread Claude record says nothing about Grok.
     var completeness = DataCompleteness()
+    /// Claude only (#58).
+    var quantity = QuantityUncertainty()
+
+    /// Adds `t` tokens, holding the sum at `Int.max` and saying so instead of trapping (#58). A sum that lands on
+    /// `Int.max` can't be told from a held one, so it counts as held too.
+    mutating func addTokens(_ t: Int, saturated: Bool = false) {
+        let (r, overflow) = tokens.addingReportingOverflow(t)
+        tokens = overflow ? .max : r
+        if saturated || tokens == .max { quantity.saturated = true }
+    }
 }
 
 struct DayBar: Identifiable {
@@ -209,8 +235,11 @@ extension UsageSummary {
         guard let a, let b else { return r }
         // Estimates add field by field, so one provider's incomplete cost keeps the combined total incomplete (R7).
         func add(_ x: Totals, _ y: Totals) -> Totals {
-            Totals(tokens: x.tokens.saturatingAdd(y.tokens), cost: x.cost + y.cost, identity: x.identity + y.identity,
-                   completeness: x.completeness + y.completeness)
+            var t = Totals(cost: x.cost + y.cost, identity: x.identity + y.identity,
+                           completeness: x.completeness + y.completeness, quantity: x.quantity + y.quantity)
+            t.addTokens(x.tokens)
+            t.addTokens(y.tokens)
+            return t
         }
         r.today = add(a.today, b.today)
         r.week = add(a.week, b.week)
@@ -953,9 +982,19 @@ final class Ledger {
     }
 
     /// Takes back everything an operation added to `hours` and `identity`.
+    /// `s` must already be gone from `seen`.
     private func uncount(_ s: Seen) {
         for (m, a) in s.parts {
             guard var b = state.hours[s.hour]?[m] else { continue }
+            if b.isSaturated || a.isSaturated {
+                // A held sum has lost its true value, so subtracting from it would show a wrong remainder as exact
+                // (#58). Rebuild it from the operations still counted there: `count` keeps `hours` equal to the sum
+                // of their `parts`.
+                b = Agg()
+                for o in state.seen.values where o.hour == s.hour { if let p = o.parts[m] { b.add(p) } }
+                state.hours[s.hour]![m] = b.calls == 0 && b.total == 0 ? nil : b
+                continue
+            }
             b.input -= a.input; b.output -= a.output
             b.cacheWrite5m -= a.cacheWrite5m; b.cacheWrite1h -= a.cacheWrite1h
             b.cacheRead -= a.cacheRead; b.calls -= a.calls
@@ -1198,10 +1237,11 @@ final class Ledger {
             for (model, a) in byModel {
                 let c = pricing.estimate(model: model, a)
                 let t = a.total
-                s.month.tokens = s.month.tokens.saturatingAdd(t); s.month.cost += c
-                if date >= weekStart { s.week.tokens = s.week.tokens.saturatingAdd(t); s.week.cost += c }
-                if date >= today { s.today.tokens = s.today.tokens.saturatingAdd(t); s.today.cost += c }
-                if let wh = windowHour, hour >= wh { s.window!.tokens = s.window!.tokens.saturatingAdd(t); s.window!.cost += c }
+                let held = a.isSaturated
+                s.month.addTokens(t, saturated: held); s.month.cost += c
+                if date >= weekStart { s.week.addTokens(t, saturated: held); s.week.cost += c }
+                if date >= today { s.today.addTokens(t, saturated: held); s.today.cost += c }
+                if let wh = windowHour, hour >= wh { s.window!.addTokens(t, saturated: held); s.window!.cost += c }
 
                 let family = modelFamily(model)
                 let key = "\(day.timeIntervalSince1970)-\(family)"

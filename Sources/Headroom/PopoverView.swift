@@ -860,13 +860,32 @@ enum CompletenessText {
     }
 }
 
+/// Copy for token-quantity uncertainty (#58), kept apart from the views so tests can check it. Independent of
+/// identity, completeness and cost coverage: it says the counts themselves aren't exact.
+enum QuantityText {
+    static let provisional = "Some token counts are provisional. Totals may be over- or understated."
+
+    /// The note and its detail when any Claude token quantity in the 30 days isn't exact; nil otherwise.
+    static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
+        guard let q = claude?.month.quantity, !q.isExact else { return nil }
+        var causes: [String] = []
+        if q.saturated {
+            causes.append("Some totals are larger than SpanDeck can count, so they are shown at the largest value it "
+                          + "can hold, below the true amount.")
+        }
+        return (provisional, "In Claude Code's logs for the last 30 days: " + causes.joined(separator: " ")
+                    + " Costs are still estimates, not your bill.")
+    }
+}
+
 /// The notes under the usage tiles (#55, #58): one short line each, with the detail as a tooltip and for VoiceOver.
-/// What couldn't be read comes first, then how records were told apart. Cost coverage stays with the costs.
+/// What couldn't be read comes first, then uncertain quantities, then how records were told apart. Cost coverage
+/// stays with the costs.
 struct UsageNotes: View {
     let notes: [(text: String, detail: String)]
 
     nonisolated static func notes(_ claude: UsageSummary?) -> [(text: String, detail: String)] {
-        [CompletenessText.note(claude), IdentityText.note(claude)].compactMap { $0 }
+        [CompletenessText.note(claude), QuantityText.note(claude), IdentityText.note(claude)].compactMap { $0 }
     }
 
     var body: some View {
