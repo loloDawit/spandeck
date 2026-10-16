@@ -24,7 +24,7 @@ RV_USER=${RV_USER:-spandecktest}
 SHARED=${RV_SHARED:-/Users/Shared/spandeck-rv}
 # Written by the test account (the stage folder belongs to the build account); readable by the build account.
 RESULTS=${RV_RESULTS:-/Users/Shared/spandeck-rv-results}
-BUNDLE_ID=dev.headroom.Headroom
+BUNDLE_ID=${RV_BUNDLE_ID:-dev.headroom.Headroom}
 APP_SUPPORT="$HOME/Library/Application Support/Headroom"
 EVIDENCE_ROOT="$HOME/spandeck-rv-evidence"
 FIXTURE_MARK=".spandeck-rv-fixtures"
@@ -79,6 +79,7 @@ cmd_stage() {
     rm -rf "$dest/Headroom.app"
     cp -R build/Headroom.app "$dest/"
     cp .build/debug/Headroom "$dest/Headroom-debug"
+    clang -Wall -Wextra -O2 -o "$dest/procwatch" scripts/runtime/procwatch.c
     cp scripts/runtime-verify.sh "$dest/runtime-verify.sh"
     chmod -R a+rX "$SHARED"
     {
@@ -92,6 +93,7 @@ cmd_stage() {
         echo "release archs: $(lipo -archs "$dest/Headroom.app/Contents/MacOS/Headroom")"
         echo "release sha256: $(shasum -a 256 "$dest/Headroom.app/Contents/MacOS/Headroom" | cut -d' ' -f1)"
         echo "debug sha256: $(shasum -a 256 "$dest/Headroom-debug" | cut -d' ' -f1)"
+        echo "procwatch sha256: $(shasum -a 256 "$dest/procwatch" | cut -d' ' -f1) (scripts/runtime/procwatch.c)"
         echo "signature: $(codesign -dv "$dest/Headroom.app" 2>&1 | grep -E '^(Signature|TeamIdentifier|CodeDirectory)' | tr '\n' ' ')"
     } > "$dest/manifest.txt"
     echo "$sha" > "$SHARED/current"
@@ -176,27 +178,28 @@ EOF
     local dir="$projects/-Users-$RV_USER-rvpath$tok"
     mkdir -p "$dir"
     local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-    write_session() { # file lines
-        local f=$1 n=$2 i
+    write_session() { # file lines file-tag (message ids are unique per file, so nothing deduplicates across files)
+        local f=$1 n=$2 tag=$3 i
         : > "$f"
         for ((i = 1; i <= n; i++)); do
             printf '{"type":"user","cwd":"/Users/%s/rvpath%s","sessionId":"rvid%s-s","message":{"role":"user","content":"RVCANARY%s prompt %d"},"timestamp":"%s"}\n' \
                 "$RV_USER" "$tok" "$tok" "$tok" "$i" "$ts" >> "$f"
             # Two streaming copies of the same message (same id + requestId): counted once.
-            printf '{"type":"assistant","requestId":"req_rvid%s_%d","cwd":"/Users/%s/rvpath%s","message":{"id":"msg_rvid%s_%d","model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"%s"}\n' \
-                "$tok" "$i" "$RV_USER" "$tok" "$tok" "$i" "$tok" "$ts" >> "$f"
-            printf '{"type":"assistant","requestId":"req_rvid%s_%d","cwd":"/Users/%s/rvpath%s","message":{"id":"msg_rvid%s_%d","model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"%s"}\n' \
-                "$tok" "$i" "$RV_USER" "$tok" "$tok" "$i" "$tok" "$ts" >> "$f"
+            printf '{"type":"assistant","requestId":"req_rvid%s_%s_%d","cwd":"/Users/%s/rvpath%s","message":{"id":"msg_rvid%s_%s_%d","model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"%s"}\n' \
+                "$tok" "$tag" "$i" "$RV_USER" "$tok" "$tok" "$tag" "$i" "$tok" "$ts" >> "$f"
+            printf '{"type":"assistant","requestId":"req_rvid%s_%s_%d","cwd":"/Users/%s/rvpath%s","message":{"id":"msg_rvid%s_%s_%d","model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"%s"}\n' \
+                "$tok" "$tag" "$i" "$RV_USER" "$tok" "$tok" "$tag" "$i" "$tok" "$ts" >> "$f"
         done
         # One unpriced model: should show as n/a (R7) and appear by name in the cache.
-        printf '{"type":"assistant","requestId":"req_rvid%s_x","message":{"id":"msg_rvid%s_x","model":"claude-rvmodel%s","usage":{"input_tokens":7,"output_tokens":3}},"timestamp":"%s"}\n' \
-            "$tok" "$tok" "$tok" "$ts" >> "$f"
+        printf '{"type":"assistant","requestId":"req_rvid%s_%s_x","message":{"id":"msg_rvid%s_%s_x","model":"claude-rvmodel%s","usage":{"input_tokens":7,"output_tokens":3}},"timestamp":"%s"}\n' \
+            "$tok" "$tag" "$tok" "$tag" "$tok" "$ts" >> "$f"
     }
-    write_session "$dir/rvid$tok-main.jsonl" 20
+    write_session "$dir/rvid$tok-main.jsonl" 20 main
     local k
-    for ((k = 1; k <= extra; k++)); do write_session "$dir/rvid$tok-perf$k.jsonl" 1000; done
-    record "fixtures: 1 privacy session (20 messages streamed twice, 1 unpriced) + $extra timing sessions of 1000 messages"
-    record "expected Claude totals for the privacy session: claude-sonnet-4-5 20 calls, 200 input + 400 output tokens; claude-rvmodel$tok 1 call, unpriced"
+    for ((k = 1; k <= extra; k++)); do write_session "$dir/rvid$tok-perf$k.jsonl" 1000 "p$k"; done
+    local msgs=$(( 20 + extra * 1000 ))
+    record "fixtures: 1 privacy session (20 messages streamed twice, 1 unpriced) + $extra timing sessions of 1000 messages, ids unique per file"
+    record "expected totals: claude-sonnet-4-5 $msgs messages = $(( msgs * 30 )) tokens ($(( msgs * 10 )) input + $(( msgs * 20 )) output); claude-rvmodel$tok $(( 1 + extra )) messages = $(( (1 + extra) * 10 )) tokens, unpriced"
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -298,29 +301,37 @@ cmd_launch() {
     for _ in $(seq 1 100); do pid=$(app_pid); [ -n "$pid" ] && break; sleep 0.1; done
     [ -n "$pid" ] || { kill $logpid $toolpid 2>/dev/null; die "app did not start within 10 s"; }
     record "launch: pid $pid after $(( $(ms) - t0 )) ms"
-    : > "$d/children.txt"; : > "$d/sockets.txt"; : > "$d/samples.txt"
-    local end=$(( $(date +%s) + secs )) last=0
+    # Every fork of the app, reported by the kernel (kqueue): see scripts/runtime/procwatch.c. Started right after the
+    # pid appears, so a child in the first few milliseconds of launch could precede it; the app starts none then.
+    "$SHARED/$sha/procwatch" "$pid" > "$d/forks.txt" 2>&1 &
+    local watchpid=$!
+    for _ in $(seq 1 20); do grep -q " watching $pid" "$d/forks.txt" && break; sleep 0.1; done
+    grep -q " watching $pid" "$d/forks.txt" || record "launch: FAIL, fork monitor did not start: $(head -1 "$d/forks.txt")"
+    : > "$d/sockets.txt"; : > "$d/samples.txt"; : > "$d/consent.txt"
+    local end=$(( $(date +%s) + secs )) tick=0 consent="" was=""
     while [ "$(date +%s)" -lt "$end" ]; do
         kill -0 "$pid" 2>/dev/null || { record "launch: app exited early"; break; }
-        # Child processes, sampled every 0.1 s (a child shorter than that can be missed; see tool-log.txt).
-        ps -A -o pid=,ppid=,comm= | awk -v p="$pid" '$2==p' | while read -r cpid _ comm; do
-            grep -q "^$cpid " "$d/children.txt" || echo "$cpid $comm $(now)" >> "$d/children.txt"
-        done
-        if [ "$(date +%s)" -ne "$last" ]; then
-            last=$(date +%s)
-            lsof -nP -a -p "$pid" -i 2>/dev/null | tail -n +2 | awk '{print $8, $9, $10}' | sed "s/^/$(now) /" >> "$d/sockets.txt" || true
-            echo "$(( $(ms) - t0 )) $(ps -o %cpu=,rss= -p "$pid")" >> "$d/samples.txt"
+        lsof -nP -a -p "$pid" -i 2>/dev/null | tail -n +2 | awk '{print $8, $9, $10}' | sed "s/^/$(now) /" >> "$d/sockets.txt" || true
+        echo "$(( $(ms) - t0 )) $(ps -o %cpu=,rss= -p "$pid")" >> "$d/samples.txt"
+        # Consent settings every 5 s; a line is written at the start and whenever a value changes.
+        if [ $(( tick % 5 )) -eq 0 ]; then
+            consent="claude.limits.enabled=$(defaults read "$BUNDLE_ID" claude.limits.enabled 2>/dev/null || echo absent) grok.enabled=$(defaults read "$BUNDLE_ID" grok.enabled 2>/dev/null || echo absent)"
+            [ "$consent" = "$was" ] || { echo "$(now) $consent" >> "$d/consent.txt"; was=$consent; }
         fi
-        sleep 0.1
+        tick=$(( tick + 1 ))
+        sleep 1
     done
     nettop -P -L 1 -x -p "$pid" > "$d/nettop.txt" 2>&1 || echo "nettop unavailable" > "$d/nettop.txt"
-    { kill $logpid $toolpid; wait $logpid $toolpid; } 2>/dev/null || true
+    { kill $logpid $toolpid $watchpid; wait $logpid $toolpid $watchpid; } 2>/dev/null || true
     local app_events tool_events
     # Event lines only (the first line of each stream is its filter description).
     app_events=$(tail -n +2 "$d/app-log.txt" | grep -c -E 'nw_|Connection|Task <|SecItem|SecKeychain|SMAppService|register' || true)
-    # Any account-wide `security` / `grok` process, not only the app's children; attribute them using children.txt.
+    # Any account-wide `security` / `grok` process, not only the app's children; attribute them using forks.txt.
     tool_events=$(tail -n +2 "$d/tool-log.txt" | grep -c -E 'security\[|grok\[' || true)
-    record "launch: watched ${secs}s; child processes: $(wc -l < "$d/children.txt" | tr -d ' '); socket lines: $(wc -l < "$d/sockets.txt" | tr -d ' ')"
+    local forks; forks=$(grep -c ' fork ' "$d/forks.txt" || true)
+    record "launch: watched ${secs}s; child processes (kernel-reported forks): $forks; socket lines: $(wc -l < "$d/sockets.txt" | tr -d ' ')"
+    [ "$forks" -eq 0 ] || record "launch: children: $(grep ' fork ' "$d/forks.txt" | awk '{print $5}' | sort | uniq -c | tr '\n' ' ')"
+    record "launch: consent over time: $(tr '\n' ';' < "$d/consent.txt")"
     record "launch: app log network/security/login-item events: $app_events; security/grok process log lines: $tool_events"
     awk '{c+=$2; n++; if ($3>m) m=$3} END{if (n) printf "launch: mean CPU %.1f%% over %d samples, peak RSS %d KB\n", c/n, n, m}' "$d/samples.txt" \
         | while read -r line; do record "$line"; done

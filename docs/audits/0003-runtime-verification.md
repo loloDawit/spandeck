@@ -76,14 +76,14 @@ Expected results are for the current code. "Evidence today" lists what exists no
 | ID | Boundary | Expected | Evidence today | Runtime check (step) | Pass | Fail → stop? |
 |---|---|---|---|---|---|---|
 | V1 | Normal start | Menu-bar item appears; no error UI; no Dock icon | [code] | 7–8: launch, look at the menu bar and popover | Item shows gauges; popover opens | No item, or a crash → record |
-| V2 | Claude credential | No Keychain access, no prompt, no `security` child | [code] [mocked] `defaultLaunchSideEffects` [CI] | 7: `children.txt`, `tool-log.txt`, prompt watch over ≥ 330 s | No child; no Headroom-attributed `security` event; no prompt | Any → **stop** (§6) |
-| V3 | Grok credential and CLI | No `grok` child; no `auth.json` read | [code] [mocked] `GrokConsentTests` [CI] | 7: `children.txt`. A read of the absent `auth.json` can't be seen without root tracing | No `grok` child | `grok` child → **stop**. The read itself stays **[not verified]** |
+| V2 | Claude credential | No Keychain access, no prompt, no `security` child | [code] [mocked] `defaultLaunchSideEffects` [CI] | 7: `forks.txt` (kernel-reported forks, run 2 onward), `tool-log.txt`, prompt watch over ≥ 330 s; positive control in step 13b | No child; no Headroom-attributed `security` event; no prompt | Any → **stop** (§6) |
+| V3 | Grok credential and CLI | No `grok` child; no `auth.json` read | [code] [mocked] `GrokConsentTests` [CI] | 7: `forks.txt`. A read of the absent `auth.json` can't be seen without root tracing | No `grok` child | `grok` child → **stop**. The read itself stays **[not verified]** |
 | V4 | Network | No connection by the app | [code] [mocked] (transport fake records none) [CI] | 7: `lsof -i` every 1 s, `nettop` bytes at the end, app log network events | No socket lines; `nettop` 0 bytes; no `nw_` / `Task <` events | Any → **stop**, record hostnames only |
 | V5 | Pricing | No download; `pricing-source.json` absent | [code] [mocked] `offlineStartupUsesBundledPricing` | 6, 9: V4 plus `app-support.txt` | Absent and no network | File present, or network → **stop** |
 | V6 | Login item | Not registered; no "Login item added" notification | [code] [mocked] `existingLoginItemIsLeftAlone`, `defaultLaunchSideEffects` | 7–8: Login Items list, notifications, ServiceManagement log events | Not listed; no notification | Listed → **stop** |
 | V7 | Preferences | Consent keys absent or false; no unexpected keys | [code] | 9: `preferences.txt` | `claude.limits.enabled` / `grok.enabled` absent or 0. AppKit status-item keys may appear and are recorded | Consent key true → **stop** |
 | V8 | Files written | Only `~/Library/Application Support/Headroom/` (`0700`) with `claude-ledger.json` and `.key` (`0600`); macOS-owned files attributed separately | [code] [mocked] mode assertions | 9: `app-support.txt`, `new-files.txt` | Modes as stated; no other app files | Files outside scope → **stop** |
-| V9 | Background work | No power assertion; no subprocesses; timers only | [code] | 7, 9: `assertions.txt`, `children.txt`, CPU samples | No assertion; 0 children over ≥ 330 s (covers the 60 s, 10 s and 5 min timers) | Unexpected process → record |
+| V9 | Background work | No power assertion; no subprocesses; timers only | [code] | 7, 9: `assertions.txt`, `forks.txt`, CPU samples | No assertion; 0 children over ≥ 330 s (covers the 60 s, 10 s and 5 min timers) | Unexpected process → record |
 | V10 | Cache minimization | Schema 4; `files`/`seen` keys are 32-hex ids; no `/`; no content, path or id canary; model canary present (proves indexing happened) | [mocked] `ledgerCacheKeepsNoPathsOrContent` | 9: `canaries.txt` cache summary | As expected | Any canary or `/` → **stop**, file an issue |
 | V11 | Accounting display | `claude-sonnet-4-5` 600 tokens; `claude-rvmodel…` shown as unpriced; totals marked partial (`≥$`) | [code] [mocked] (fixture parsed by the production `Ledger`, §9) | 8: popover screenshot | Matches | Wrong totals → record |
 | V12 | Temporary files | No `.claude-ledger.*.tmp-*` after quit | [code] [mocked] | 10–11: `app-support.txt` after quit | None | Leftovers → record |
@@ -111,13 +111,53 @@ The script is standard macOS shell (bash 3.2, `osascript -l JavaScript`, `lsof`,
   - the written cache contains the model canary and no content, path or id canary, and no `/`.
 - **Cache check, against hand-made caches:** a clean v4-shaped cache passes. A leaky one is flagged on every canary, on `/` and on non-hex ids.
 - **Monitor, against a stand-in program named `Headroom`** (not the app). It caught:
-  - 0.5-second child processes (`children.txt`);
+  - 0.5-second child processes (`children.txt`, the run 1 sampler);
   - a loopback listening socket (`lsof`);
   - a `nettop` row without admin rights.
 
   A stand-in "release" build that wrote PNGs was reported as failing the snapshot check.
 - **`stage`:** built `83a9af8`, a universal ad-hoc release build plus the arm64 debug build, into a scratch folder, and launched nothing.
 - `shellcheck -S warning` is clean.
+
+### Since run 1: kernel-reported forks and consent capture
+
+Run 1 showed that the 0.1 s process sampler and the log streams missed `security` runs that are known to have happened (§8.2). From run 2 onward:
+- **`launch` uses `procwatch`** (`scripts/runtime/procwatch.c`, compiled by `stage`; its hash is in the manifest).
+  - It registers a `kqueue` `EVFILT_PROC` filter (`NOTE_FORK | NOTE_EXEC | NOTE_EXIT`) on the app's pid, so the kernel reports every fork. Nothing is sampled, and no privileges are needed for a same-user process.
+  - On each fork it looks up the new child's path at once. If the child is already gone, it still logs `fork child-already-exited`, so the count stays complete.
+  - It's started right after the pid appears. The app starts no child in its first milliseconds, and the 60 s and 10 s timers come later.
+- **`launch` records `claude.limits.enabled` and `grok.enabled`** at the start, every 5 s, and on every change (`consent.txt`).
+- **`fixtures` gives every file its own message ids,** so the timing sessions no longer deduplicate into the privacy session. The expected totals are printed.
+
+**Checked here (tool checks, not app evidence):**
+- **Stand-in program named `Headroom`, started by `open` through `launch`:** `procwatch` reported **9 of 9** children, with paths, in 3 runs out of 3:
+  - 5 through Foundation `Process` with a pipe, the way `runProcess` does it;
+  - 3 through raw `posix_spawn`, 5 ms apart, each running `/usr/bin/true`, which exits almost at once;
+  - 1 from `Task.detached`, like `grok models`.
+- **Fixtures with 2 timing files:** the production `Ledger` (a temporary test, not committed) gave exactly the printed totals: `claude-sonnet-4-5` 60,600 tokens, complete; the unpriced model 30 tokens, unavailable.
+- `shellcheck -S warning` is clean, and `clang -Wall -Wextra` gives no warnings.
+
+### Run 2 procedure (rerun of V2, V3, V9 and V14, plus the consent question)
+
+Build with `scripts/runtime-verify.sh stage` in your normal account, after this change is merged (or from its branch). Then, in `spandecktest`:
+1. **Reset:** `$RV clean`, then check that Login Items doesn't list Headroom.
+2. **Gate:** `$RV preflight`. Any FAIL → stop.
+3. **Fixtures:** `$RV fixtures 50`, then `$RV capture 0-before`.
+4. **Main launch:** `$RV launch 330 main`.
+   - You may open the popover and look at it.
+   - **Don't click "Enable Claude plan limits" or "Set up Grok credits…".** Don't change Settings.
+   - Expect `forks: 0` and `consent ... absent` throughout.
+5. **While running:** `$RV capture 1-running`.
+6. **Quit** from the app's menu, then `$RV capture 2-after-quit`.
+7. **Relaunch:** `$RV launch 120 relaunch` (V14: consent still absent, still 0 forks), then quit from the menu.
+8. **Positive control** (shows the monitor sees a `security` run in this account):
+   - `$RV launch 90 control`, then click **Enable Claude plan limits** once.
+   - There is no Keychain item, so `security` finds nothing and nothing is sent.
+   - Expect at least one `fork child … /usr/bin/security` in `launch-control/forks.txt`, plus another every 60 s, and `claude.limits.enabled=1` from the click on.
+   - Then Settings ▸ **Turn off Claude plan limits**, and quit.
+9. **Finish:** `$RV summary`, then `$RV clean`.
+
+**Stop conditions (§6) apply.** In particular, any fork or consent change in steps 4–7 means stop and keep the evidence.
 
 ## 5. Procedure (owner, in the `spandecktest` account)
 
@@ -264,7 +304,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 - **Sampling:** child processes are sampled every 0.1 s, and sockets every 1 s. A process or connection shorter than that can be missed. **Run 1 confirmed this:** `security` runs that the code and UI show happened were not recorded (§8.2).
   - The unified log stream (`process == "Headroom"`, network, security and ServiceManagement subsystems) adds an event record, but hostnames are usually `<private>`.
-  - The `security` / `grok` log covers the whole account. On the developer account it showed about 15 `security` lines per second from other software, so it's only meaningful in a quiet test account, and only alongside `children.txt`.
+  - The `security` / `grok` log covers the whole account. On the developer account it showed about 15 `security` lines per second from other software, so it's only meaningful in a quiet test account, and only alongside `forks.txt`.
 - **File reads aren't observable without root** (`fs_usage`, `eslogger`). A read of an absent `~/.grok/auth.json` or of transcripts can't be seen directly. Reads are inferred from writes, child processes and the UI.
 - **An empty network snapshot isn't proof** that no short connection happened. V4 combines three methods and still lists this limit.
 - **File attribution:** `new-files.txt` lists every file changed in the home folder since preflight. macOS services write there too, so each entry is attributed by hand.
@@ -274,7 +314,8 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 - [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
 - [ ] The consent change resolved by the rerun: no interaction with the consent card; `claude.limits.enabled` captured at fixed times and staying absent.
-- [ ] A monitor that sees every child process (and login-item registration), checked against a known positive. Then rerun V2, V3, V6, V9 and V14, without enabling consent.
+- [x] A monitor that sees every child process: `procwatch`, checked against a stand-in. Its check in the test account is run 2, step 8.
+- [ ] Run 2: V2, V3 (fork part), V9 and V14, with consent left alone, plus the positive control. Login-item registration stays an owner observation (V6 and V15 passed that way).
 - [ ] Each confirmed defect filed as its own issue; none silently fixed.
 - [ ] Inventory §9 item "Default launch confirmed with reproducible runtime observations" updated from §8.
 - [ ] Roadmap and inventory status updated with the [runtime] results.
