@@ -17,7 +17,7 @@ Where the ledger does something else today, `baseline` records what it does. Tha
   "title": "…",
   "matrix": ["rows of the #6 fixture matrix this covers"],
   "classification": "pass | defect | ambiguous",
-  "followUp": "#55",            // where a defect or an open policy is tracked
+  "followUp": "#55",            // where a defect or an open policy is tracked, or the fix a passing fixture verifies
   "policy": "Pn: …",            // the rule the expected values assume
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z", // the ledger's clock for this fixture
