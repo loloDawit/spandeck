@@ -228,7 +228,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 | V10 Cache minimization | **Pass** [runtime] | Schema 4. 51 `files` and 1001 `seen` entries, all 32-hex ids. Hex `keyCheck`. No `/`. No content, path or id canary. The model canary is present, which shows indexing ran. The same result held at every capture, including after clear and after relaunch. |
 | V11 Accounting display | **Pass** [runtime] | `claude-sonnet-4-5` shows 30.0K tokens at $0.33, and `claude-rvmodel…` shows 10 tokens at n/a. Totals read `≥$0.33`, with an explanation and "?" on the chart. 30.0K is correct: the timing sessions reused the privacy session's message ids, so 51,020 streamed records deduplicated to 1000 unique messages of 30 tokens each. That's a fixture design flaw (§8.2); the app's arithmetic is right ($3/M input, $15/M output). |
 | V12 Temporary files | **Pass** [runtime] | No `.claude-ledger.*.tmp-*` after quit. |
-| V13 Clear cached usage | **Partly verified** [runtime] | The confirmation text names only the cache and key, and says transcripts, credentials, prices and consent are kept. After confirming: "Cached usage data cleared. Totals are being rebuilt". The rebuild took about 6 s at 55–97 % CPU, and totals were unchanged. A new key and byte-identical transcripts depend on the owner's `shasum` comparison (§8.3). |
+| V13 Clear cached usage | **Pass** [runtime] | The confirmation text names only the cache and key, and says transcripts, credentials, prices and consent are kept. After confirming: "Cached usage data cleared. Totals are being rebuilt". The rebuild took about 6 s at 55–97 % CPU, and totals were unchanged.<br>Owner's `shasum` comparison (equality only, no hashes shared): `claude-ledger.key` **different** before and after, so a new key was made and the old one didn't come back; fixture transcripts **same**, so they weren't modified. |
 | V14 "Off" persists | **Not verified** | Consent was on before the relaunch, so this tested the reverse: **consent on persisted** across the relaunch (`claude.limits.enabled = 1` at 05:22:35). Needs a rerun with consent never enabled. |
 | V15 Login item opt-in | **Pass** [runtime, owner observation] | After Settings ▸ Launch at login, macOS showed a notification and listed "Headroom — Application" under Open at Login (screenshot 05:23:46). Turning the toggle off removed it. |
 | V16 Consent-enabled paths | **Not verified** (by design) | — |
@@ -257,7 +257,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 1. **Consent change:** the owner is unsure. Left unresolved until the rerun (§8.2).
 2. ~~**Login items** (V6, V15)~~: answered. It was absent before the toggle, a notification appeared on enabling, and it was removed on disabling.
-3. **V13 hashes:** do `key-before.txt` and `key-after.txt` in `~/spandeck-rv-evidence/` differ, and do `fixtures-before.txt` and `fixtures-after.txt` match? Just "same" or "different" for each; don't send the hashes.
+3. ~~**V13 hashes**~~: answered. Key: different; fixtures: same.
 4. **V18 visual check:** does the debug `popover.png` (in the run's `snapshot-debug/` folder) show only built-in synthetic models, and not `claude-rvmodel…`?
 
 ## 9. Observation limits
@@ -273,7 +273,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 ## 10. What #3 still needs
 
 - [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
-- [ ] Owner input in §8.3: the V13 hash comparison and the V18 image check.
+- [ ] Owner input in §8.3: the V18 image check.
 - [ ] The consent change resolved by the rerun: no interaction with the consent card; `claude.limits.enabled` captured at fixed times and staying absent.
 - [ ] A monitor that sees every child process (and login-item registration), checked against a known positive. Then rerun V2, V3, V6, V9 and V14, without enabling consent.
 - [ ] Each confirmed defect filed as its own issue; none silently fixed.
