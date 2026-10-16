@@ -41,7 +41,7 @@ Each id is one of:
 - `HMAC-SHA256(key, "file" | path)`;
 - `HMAC-SHA256(key, "message" | message id | request id)` for a record with both ids;
 - `HMAC-SHA256(key, "message-only" | message id)` or `HMAC-SHA256(key, "request-only" | request id)` for a record with one (#55);
-- `HMAC-SHA256(key, "fingerprint" | time | model | each usage counter …)` for a record with neither. The time is the instant as parsed, in milliseconds since 1970, so `Z`, `+00:00`, other offsets and trailing fractional zeros don't matter. The model is used as written. Every counter the ledger reads (including the cache breakdown and iterations) follows in a fixed order, each as absent, its numeric value (`50`, `50.0` and `5e1` are the same) or something else. No path or offset is in it.
+- `HMAC-SHA256(key, "fingerprint" | time | model | each usage counter …)` for a record with neither. The time is the instant as parsed, in milliseconds since 1970, so `Z`, `+00:00`, other offsets and trailing fractional zeros don't matter. Two records whose times differ by less than a millisecond get the same time. The model is used as written. Every counter the ledger reads (including the cache breakdown and iterations) follows in a fixed order, each as absent, its numeric value (`50`, `50.0` and `5e1` are the same) or something else. No path or offset is in it.
 
 In every case:
 - every part is length-prefixed;
