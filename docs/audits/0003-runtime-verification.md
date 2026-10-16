@@ -94,7 +94,7 @@ Expected results are for the current code. "Evidence today" lists what exists no
 
 ## 4. Tool: `scripts/runtime-verify.sh`
 
-The script is standard macOS shell (bash 3.2, `osascript -l JavaScript`, `lsof`, `nettop`, `log`, `pmset`). It needs no admin rights and installs nothing. Evidence is written to `~/spandeck-rv-evidence/<run>/` (`0700`), and `summary` writes a sanitized copy to the shared stage folder. Evidence contains file names, modes, counts and pass/fail lines. It never contains transcript text, credential values or network payloads.
+The script is standard macOS shell (bash 3.2, `osascript -l JavaScript`, `lsof`, `nettop`, `log`, `pmset`). It needs no admin rights and installs nothing. Evidence is written to `~/spandeck-rv-evidence/<run>/` (`0700`), and `summary` writes a sanitized copy to `/Users/Shared/spandeck-rv-results/`. Evidence contains file names, modes, counts and pass/fail lines. It never contains transcript text, credential values or network payloads.
 
 **How the tool itself was checked (2026-10-16, in this session; this is not evidence about the app):**
 - `preflight` refuses the developer account by name. With the account name spoofed, it refuses again because the account is an administrator. In both cases it stops before creating anything.
@@ -145,7 +145,7 @@ The script is standard macOS shell (bash 3.2, `osascript -l JavaScript`, `lsof`,
     - Launch the app with `$RV launch 60 loginitem`. Turn on Settings ▸ Launch at login, then check Login Items and the notification, and screenshot both.
     - Turn the toggle off, check again, and quit.
     - If it stays listed, remove it in System Settings.
-15. `$RV summary`. This writes `/Users/Shared/spandeck-rv/<sha>/results-<run>.md`. Read it before sharing; it should contain only names, modes, counts and pass/fail lines.
+15. `$RV summary`. This writes `/Users/Shared/spandeck-rv-results/results-<sha>-<run>.md`, a folder the test account creates and your account can read. Read it before sharing; it should contain only names, modes, counts and pass/fail lines.
 
 ## 6. Stop conditions
 
@@ -185,7 +185,7 @@ In `spandecktest`:
 3. Check Login Items again.
 
 In your normal account, when you're done:
-- Run `rm -rf /Users/Shared/spandeck-rv`.
+- Run `rm -rf /Users/Shared/spandeck-rv`. The test account removes `/Users/Shared/spandeck-rv-results` once the results are recorded.
 - Deleting the `spandecktest` account is your call; nothing here deletes accounts.
 
 ## 8. Results
