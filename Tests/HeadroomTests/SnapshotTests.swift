@@ -93,9 +93,14 @@ struct SnapshotTests {
         #expect(s.claudeUsage?.month.tokens == 14 * 600_000 && s.claudeUsage?.month.cost.coverage == .complete)
         #expect(s.claudeError == nil && s.grokFailure == nil && s.indexing == nil)
 
-        let text = [s.claudeLimits?.plan ?? "", s.grokPlan?.periodName ?? "", s.grokPlan?.products.map(\.name).joined() ?? "",
-                    (s.claudeUsage?.models.map(\.model) ?? []).joined(), (s.grokUsage?.models.map(\.model) ?? []).joined(),
-                    (s.claudeLimits?.all.map(\.name) ?? []).joined()].joined(separator: "|")
+        // Split up so older compilers can type-check it in time.
+        let products: [String] = s.grokPlan?.products.map(\.name) ?? []
+        let claudeModels: [String] = s.claudeUsage?.models.map(\.model) ?? []
+        let grokModels: [String] = s.grokUsage?.models.map(\.model) ?? []
+        let limits: [String] = s.claudeLimits?.all.map(\.name) ?? []
+        let parts: [String] = [s.claudeLimits?.plan ?? "", s.grokPlan?.periodName ?? "", products.joined(),
+                               claudeModels.joined(), grokModels.joined(), limits.joined()]
+        let text = parts.joined(separator: "|")
         for personal in [NSUserName(), NSFullUserName(), NSHomeDirectory(), Host.current().localizedName ?? "",
                          ProcessInfo.processInfo.hostName] where personal.count > 2 {
             #expect(!text.localizedCaseInsensitiveContains(personal), "\(personal)")
