@@ -1,0 +1,60 @@
+{
+  "title": "Daylight saving ends (Los Angeles, 2026-11-01, 01:00-02:00 happens twice)",
+  "matrix": [
+    "time-zone and daylight-saving boundaries",
+    "hourly and daily totals"
+  ],
+  "classification": "pass",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-11-03T20:00:00Z",
+  "records": 7,
+  "duplicates": 0,
+  "derivation": "06:59Z Nov 1 = Oct 31 23:59 PDT (1). 07:00Z = Nov 1 00:00 PDT (2); 08:30Z = 01:30 PDT (4) and 09:30Z = 01:30 PST (8) are separate hours with the same wall-clock time; 07:59Z Nov 2 = Nov 1 23:59 PST (16): the 25-hour Nov 1 = 30. 08:00Z Nov 2 = Nov 2 00:00 PST (32). 08:00Z Nov 3 = Nov 3 00:00 PST (64). Today 64; week (from Oct 28) and 30 days 127.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-11-01T06": {
+            "claude-test-1": [1, 0, 0, 0, 0, 1]
+          },
+          "2026-11-01T07": {
+            "claude-test-1": [2, 0, 0, 0, 0, 1]
+          },
+          "2026-11-01T08": {
+            "claude-test-1": [4, 0, 0, 0, 0, 1]
+          },
+          "2026-11-01T09": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          },
+          "2026-11-02T07": {
+            "claude-test-1": [16, 0, 0, 0, 0, 1]
+          },
+          "2026-11-02T08": {
+            "claude-test-1": [32, 0, 0, 0, 0, 1]
+          },
+          "2026-11-03T08": {
+            "claude-test-1": [64, 0, 0, 0, 0, 1]
+          }
+        },
+        "operations": 7,
+        "days": {
+          "2026-10-31": 1,
+          "2026-11-01": 30,
+          "2026-11-02": 32,
+          "2026-11-03": 64
+        },
+        "today": 64,
+        "week": 127,
+        "month": 127,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

@@ -347,7 +347,8 @@ func refreshLedger(_ ledger: Ledger) async -> (claude: UsageSummary, grok: Usage
 /// never sleep for minutes.
 final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var current = Date()
+    private var current: Date
+    init(_ start: Date = Date()) { current = start }
     var now: Date { lock.withLock { current } }
     func advance(_ seconds: TimeInterval) { lock.withLock { current = current.addingTimeInterval(seconds) } }
 }

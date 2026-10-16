@@ -1,0 +1,88 @@
+{
+  "title": "A transcript deleted and restored",
+  "matrix": [
+    "file deletion"
+  ],
+  "classification": "pass",
+  "policy": "P12: usage already counted stays counted when its transcript is deleted; restoring it adds nothing.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3,
+  "duplicates": 1,
+  "derivation": "A [100, 50] at 16Z and B [200, 20] at 17Z = 370 after the deletion of B's file and after its restore.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/a.jsonl",
+          "from": "a.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/b.jsonl",
+          "from": "b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          },
+          "2026-03-10T17": {
+            "claude-test-1": [200, 20, 0, 0, 0, 1]
+          }
+        },
+        "operations": 2,
+        "month": 370
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "delete",
+          "path": "-synthetic-p1/b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          },
+          "2026-03-10T17": {
+            "claude-test-1": [200, 20, 0, 0, 0, 1]
+          }
+        },
+        "operations": 2,
+        "month": 370
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/b.jsonl",
+          "from": "b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 50, 0, 0, 0, 1]
+          },
+          "2026-03-10T17": {
+            "claude-test-1": [200, 20, 0, 0, 0, 1]
+          }
+        },
+        "operations": 2,
+        "month": 370,
+        "days": {
+          "2026-03-10": 370
+        },
+        "today": 370,
+        "week": 370,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

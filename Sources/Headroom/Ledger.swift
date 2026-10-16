@@ -444,10 +444,19 @@ final class Ledger {
     private let pricing: Pricing
     private let usageNeedle = Array(#""usage":{"#.utf8)
 
-    init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil) {
+    /// The current time and the calendar for day boundaries. Injectable so accounting fixtures (#6) can pin "now" and
+    /// the time zone; by default the real clock and `Calendar.current`, read on every use as before.
+    private let now: @Sendable () -> Date
+    private let fixedCalendar: Calendar?
+    private var calendar: Calendar { fixedCalendar ?? .current }
+
+    init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }, calendar: Calendar? = nil) {
         self.home = home
         self.storage = storage ?? PrivateDirectory(url: appSupport)
         self.pricing = pricing
+        self.now = now
+        self.fixedCalendar = calendar
     }
 
     /// Why the cache isn't being saved, if it isn't; nil when it is (or nothing was tried yet).
@@ -487,23 +496,23 @@ final class Ledger {
                  completion: @escaping (_ claude: UsageSummary, _ grok: UsageSummary, _ lastActivity: Date) -> Void) {
         queue.async { [self] in
             if !loaded { loadCache(); loaded = true }
-            let full = Date().timeIntervalSince(lastFullScan) >= 300
+            let full = now().timeIntervalSince(lastFullScan) >= 300
             if full {
                 scanClaude(progress: progress)
                 scanGrok()
-                lastFullScan = Date()
+                lastFullScan = now()
             } else {
                 discoverNewFiles()
                 tailHotFiles()
                 scanGrok()
             }
             // Encoding the cache is the most expensive step, so only persist occasionally (and on quit).
-            if dirty, lastSave == .distantPast || Date().timeIntervalSince(lastSave) > 600 {
+            if dirty, lastSave == .distantPast || now().timeIntervalSince(lastSave) > 600 {
                 saveCache()
             }
             progress(nil)
             // Summaries only change with new data, a new window, a new day or new prices.
-            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)|\(pricing.generation)"
+            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(calendar.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
                 cachedSummaries = (summarize(claudeHours(), windowStart: windowStart), summarize(grokHours(), windowStart: nil))
                 lastSummaryKey = key
@@ -558,12 +567,12 @@ final class Ledger {
     // MARK: Claude
 
     private func scanClaude(progress: (String?) -> Void) {
-        let cutoff = Date().addingTimeInterval(-Double(Self.retentionDays) * 86400)
+        let cutoff = now().addingTimeInterval(-Double(Self.retentionDays) * 86400)
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
         var candidates: [(path: String, id: String, size: UInt64)] = []
         var present = Set<String>()
         var hot = Set<String>()
-        let hotCutoff = Date().addingTimeInterval(-2 * 3600)
+        let hotCutoff = now().addingTimeInterval(-2 * 3600)
 
         for root in claudeRoots {
             guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { continue }
@@ -603,7 +612,7 @@ final class Ledger {
 
     /// Cheap new-file check between full scans: only lists project folders touched in the last two hours.
     private func discoverNewFiles() {
-        let hotCutoff = Date().addingTimeInterval(-2 * 3600)
+        let hotCutoff = now().addingTimeInterval(-2 * 3600)
         let fm = FileManager.default
         func recent(_ url: URL) -> Bool {
             ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast) >= hotCutoff
@@ -721,6 +730,12 @@ final class Ledger {
 
     private func claudeHours() -> [Int: [String: Agg]] { state.hours }
 
+    /// Claude's hour buckets (hours since 1970 UTC, then model), read on the ledger queue. For accounting fixtures and
+    /// audits (#6); the app doesn't use it.
+    func claudeHourlyUsage(completion: @escaping ([Int: [String: Agg]]) -> Void) {
+        queue.async { [self] in completion(state.hours) }
+    }
+
     // MARK: Grok
 
     private func scanGrok() {
@@ -793,8 +808,8 @@ final class Ledger {
 
     /// Calendar-day windows like ccusage: today, the last 7 days and the last 30 days, all including today.
     private func summarize(_ hours: [Int: [String: Agg]], windowStart: Date?) -> UsageSummary {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        let cal = calendar
+        let today = cal.startOfDay(for: now())
         let weekStart = cal.date(byAdding: .day, value: -6, to: today)!
         let monthStart = cal.date(byAdding: .day, value: -29, to: today)!
         let windowHour = windowStart.map { Int($0.timeIntervalSince1970 / 3600) }
@@ -873,7 +888,7 @@ final class Ledger {
     private func saveCache() {
         state.keyCheck = keyCheck
         guard let data = try? JSONEncoder().encode(state) else { return }
-        lastSave = Date()
+        lastSave = now()
         do {
             if !keyPersisted {
                 try storage.write(key.withUnsafeBytes { Data($0) }, to: Self.keyName)

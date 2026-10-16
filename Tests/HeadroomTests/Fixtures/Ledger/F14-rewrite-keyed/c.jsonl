@@ -1,0 +1,1 @@
+{"type":"assistant","timestamp":"2026-03-10T16:02:00Z","requestId":"req_14c","message":{"id":"msg_14c","model":"claude-test-1","usage":{"input_tokens":300,"output_tokens":30,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}

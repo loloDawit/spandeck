@@ -1,0 +1,46 @@
+{
+  "title": "Retention (32 days kept) and the 30-day total",
+  "matrix": [
+    "hourly and daily totals",
+    "cache reload, reindexing"
+  ],
+  "classification": "pass",
+  "policy": "P16: hours older than 32 days are dropped with their dedupe keys; the 30-day total starts at local midnight 29 days before today.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 0,
+  "derivation": "The 30 days start Feb 9 00:00 PST = 08:00Z; retention starts 32 x 24 h before now = Feb 6 19:00Z. 07:59Z Feb 9 (1): kept, before the 30 days. 08:00Z Feb 9 (2): in the 30 days. 18:59Z Feb 6 (4): dropped. 19:00Z Feb 6 (8): kept, before the 30 days. Month 2, week 0, today 0; Feb 9 = 2.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-02-09T07": {
+            "claude-test-1": [1, 0, 0, 0, 0, 1]
+          },
+          "2026-02-09T08": {
+            "claude-test-1": [2, 0, 0, 0, 0, 1]
+          },
+          "2026-02-06T19": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          }
+        },
+        "operations": 3,
+        "days": {
+          "2026-02-09": 2
+        },
+        "today": 0,
+        "week": 0,
+        "month": 2,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "title": "Daylight saving starts (Los Angeles, 2026-03-08, 02:00 PST -> 03:00 PDT)",
+  "matrix": [
+    "time-zone and daylight-saving boundaries",
+    "hourly and daily totals"
+  ],
+  "classification": "pass",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 7,
+  "duplicates": 0,
+  "derivation": "Input tokens 1, 2, 4, ... 64 identify the records. 07:59Z Mar 7 = Mar 6 23:59 PST (1). 08:00Z Mar 7 = Mar 7 00:00 PST (2). 09:30Z Mar 8 = 01:30 PST (4) and 10:30Z = 03:30 PDT (8), so the 23-hour Mar 8 also has 06:59Z Mar 9 = 23:59 PDT (16): Mar 8 = 28. 07:00Z Mar 9 = Mar 9 00:00 PDT (32). 07:00Z Mar 10 = Mar 10 00:00 PDT (64). Today (Mar 10) 64; the week starts Mar 4 and the 30 days Feb 9, so both are 127.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-07T07": {
+            "claude-test-1": [1, 0, 0, 0, 0, 1]
+          },
+          "2026-03-07T08": {
+            "claude-test-1": [2, 0, 0, 0, 0, 1]
+          },
+          "2026-03-08T09": {
+            "claude-test-1": [4, 0, 0, 0, 0, 1]
+          },
+          "2026-03-08T10": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          },
+          "2026-03-09T06": {
+            "claude-test-1": [16, 0, 0, 0, 0, 1]
+          },
+          "2026-03-09T07": {
+            "claude-test-1": [32, 0, 0, 0, 0, 1]
+          },
+          "2026-03-10T07": {
+            "claude-test-1": [64, 0, 0, 0, 0, 1]
+          }
+        },
+        "operations": 7,
+        "days": {
+          "2026-03-06": 1,
+          "2026-03-07": 2,
+          "2026-03-08": 28,
+          "2026-03-09": 32,
+          "2026-03-10": 64
+        },
+        "today": 64,
+        "week": 127,
+        "month": 127,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

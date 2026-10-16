@@ -1,0 +1,40 @@
+{
+  "title": "Streaming counters that go down as well as up",
+  "matrix": [
+    "streaming: decreasing counters"
+  ],
+  "classification": "ambiguous",
+  "followUp": "#9",
+  "policy": "P2: repeated records of one operation are cumulative snapshots; each field counts its largest value, so totals never go down. Using the last record (180) or the first (350) are the alternatives.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3,
+  "duplicates": 2,
+  "derivation": "input max(100,90,100) = 100; output max(50,120,80) = 120; cache read max(200,200,0) = 200. 420 tokens, one operation.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 120, 0, 0, 200, 1]
+          }
+        },
+        "operations": 1,
+        "month": 420,
+        "days": {
+          "2026-03-10": 420
+        },
+        "today": 420,
+        "week": 420,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

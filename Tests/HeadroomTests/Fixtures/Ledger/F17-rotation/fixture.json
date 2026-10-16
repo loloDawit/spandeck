@@ -1,0 +1,61 @@
+{
+  "title": "Rotation: the transcript is renamed and a new one starts at the old path",
+  "matrix": [
+    "file rotation"
+  ],
+  "classification": "pass",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 5,
+  "duplicates": 2,
+  "derivation": "A [100, 50] and B [200, 20] = 370. Renamed to s1-0001.jsonl (read again, deduplicated) and a new s1.jsonl with C [3, 3], shorter than the old offset: 376, 3 operations.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "ab.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [300, 70, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 370
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "rename",
+          "path": "-synthetic-p1/s1.jsonl",
+          "to": "-synthetic-p1/s1-0001.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "c.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [303, 73, 0, 0, 0, 3]
+          }
+        },
+        "operations": 3,
+        "month": 376,
+        "days": {
+          "2026-03-10": 376
+        },
+        "today": 376,
+        "week": 376,
+        "coverage": "unavailable"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "title": "Streaming re-logs one message with growing counters",
+  "matrix": ["streaming: increasing counters"],
+  "classification": "pass",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3, "duplicates": 2,
+  "derivation": "One message id + request id logged three times. Each field is the largest value seen: input 100, output max(50,80,120) = 120, cache read max(0,0,30) = 30. One operation, 250 tokens, all in its first record's hour (16 UTC = 09 PDT, Mar 10).",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "r1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 50, 0, 0, 0, 1]}}, "operations": 1, "month": 150}},
+    {"ops": [{"op": "append", "path": "-synthetic-p1/s1.jsonl", "from": "r2.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 80, 0, 0, 0, 1]}}, "operations": 1, "month": 180}},
+    {"ops": [{"op": "append", "path": "-synthetic-p1/s1.jsonl", "from": "r3.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 120, 0, 0, 30, 1]}}, "operations": 1,
+                "days": {"2026-03-10": 250}, "today": 250, "week": 250, "month": 250, "coverage": "unavailable",
+                "models": {"claude-test-1": "unavailable"}}}
+  ]
+}
