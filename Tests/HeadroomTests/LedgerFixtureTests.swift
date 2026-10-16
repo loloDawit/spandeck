@@ -4,9 +4,11 @@ import Testing
 
 /// #6: accounting fixtures. Each folder under `Fixtures/Ledger` holds synthetic JSONL inputs and a `fixture.json` whose
 /// expected values were worked out by hand from the policies in `Fixtures/Ledger/README.md`, never by running the
-/// ledger. Every fixture runs three ways that must agree: one ledger tailing the changes, one doing a full scan on
-/// every refresh, and a new ledger over the saved cache before every step (a relaunch). Separately, the cache is
-/// cleared after the last step and the files are indexed again from scratch.
+/// ledger. Every fixture runs three ways: one ledger tailing the changes, one doing a full scan on every refresh, and
+/// a new ledger over the saved cache before every step (a relaunch). Separately, the cache is cleared after the last
+/// step and the files are indexed again from scratch. The expected result is the same in every mode. Today's ledger
+/// doesn't always agree with itself: F15's `baselineByMode` records different totals depending on whether a full scan
+/// ran while a file was missing.
 ///
 /// A fixture's `expect` is the correct result. Where today's ledger differs, `baseline` records what it does instead;
 /// the baseline must hold exactly, and the expected result is checked as a known issue naming its follow-up.

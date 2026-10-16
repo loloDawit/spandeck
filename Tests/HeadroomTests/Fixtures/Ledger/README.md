@@ -56,6 +56,8 @@ The fields of an expectation are all optional, and only the fields present are c
 | `relaunch` | `flush()` and a new ledger over the same cache before each step. |
 | `rebuild` | All steps, then `clearCache`, then a fresh index of the files left on disk. |
 
+The expected result (`expect`) is the same in every mode, but today's ledger doesn't always agree with itself: F15's `baselineByMode` deliberately records different totals depending on whether a full scan ran while a file was missing (#55).
+
 After every step a second refresh with no changes must return the same result. `unsavedProgressIsNotCountedTwice` additionally starts a new ledger from a cache saved before the last records were counted, as after a crash.
 
 ## Policies the expected values assume

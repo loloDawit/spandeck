@@ -6,7 +6,7 @@
   ],
   "classification": "defect",
   "followUp": "#55",
-  "policy": "P4: when one id is missing, the other alone identifies the operation (a request id is unique per API request, a message id per response). Records with neither can't be deduplicated and are counted every time, but they are ambiguous and should be reported as such.",
+  "policy": "P4: when one id is missing, the other alone identifies the operation (a request id is unique per API request, a message id per response). An empty id is a missing id. Records with neither id are counted once each, are never counted again when a file is re-read, and make the total uncertain (reported as such).",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 6,

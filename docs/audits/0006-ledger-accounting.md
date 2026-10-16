@@ -29,6 +29,7 @@ No real transcripts, accounts or network access were used. CI was not run.
   - both DST transitions;
   - an unsaved cache after a crash.
 - **Consistent but wrong:** an in-place overwrite (#56) gives the same wrong total in every mode. Consistency across modes doesn't prove correctness.
+- **Modes don't always agree:** F15 (records without ids, deleted and restored) deliberately records different totals per mode: 590 when only tailing, 810 after a full scan or a relaunch. The expected result, 370, is the same in every mode (#55).
 - **Not yet trustworthy for analytics:**
   - totals that include records without ids (#55);
   - transcripts overwritten in place (#56);
