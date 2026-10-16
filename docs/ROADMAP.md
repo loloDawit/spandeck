@@ -2,9 +2,9 @@
 
 **Live status:** GitHub Project **SpanDeck — Product Roadmap** ([repository Projects tab](https://github.com/loloDawit/spandeck/projects)). Phases are GitHub Milestones `M0`–`M4`, with no dates. How tracking works: [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).
 
-**Snapshot:** 2026-10-15, `main` = `3972167`. If this page and the Project disagree, the Project is right.
+**Snapshot:** 2026-10-15, `main` = `6d51227`. If this page and the Project disagree, the Project is right.
 
-Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation. Evidence labels: **[mocked]** means it is shown by tests with injected dependencies, not observed on a real macOS system. Hosted CI has not been run (owner's budget decision, 2026-10-14). Test results so far are owner-reported local runs.
+Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation. Evidence labels: **[mocked]** means it is shown by tests with injected dependencies, not observed on a real macOS system. **[CI]** means the test suite passed on a GitHub-hosted runner. That shows the [mocked] tests pass on that toolchain. It doesn't show how the app behaves on a real Mac. Before 2026-10-15, test results were owner-reported local runs only. See [Hosted CI baseline](#hosted-ci-baseline).
 
 ## Now, next, later
 
@@ -12,11 +12,12 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 |---|---|---|---|---|
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
 | Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
-| Next 2 | R11: SHA-pin actions, least `permissions`, signing / notarization plan | M0 | In progress, #37 | Workflow and doc change only. Validate with local lint; don't run hosted CI without the owner's approval. |
+| Done | R11: SHA-pin actions, least `permissions`, signing / notarization plan, #37 | M0 | Done — PR #41 (`eca47fe`) | Workflow and doc change. Hardening check passes in hosted CI; nothing signed or notarized. |
 | Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Open | Last unmet acceptance item of #3. Needs a supported Mac and a dedicated account. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
 | Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
 | Later | #4 capability matrix and integration lifecycle spec, #10 supported Claude surfaces | M0 | Open | Feed M1 integrations and M2 adapters. |
+| Backlog | #46 blocking subprocesses can starve Swift's shared executor | M0 | Open, not prioritized | Working diagnosis from the CI failures; CI runs serially until it is resolved. |
 
 ## Remediation series (R1–R12)
 
@@ -33,10 +34,18 @@ From the security inventory in #3 ([`audits/0003-security-inventory.md`](audits/
 | R8 | Cache: opaque ids, `0600`/`0700`, migration, clear action | #33 → #34 | M1 | Merged [mocked] |
 | R9 | Honest User-Agent; back off after HTTP 401 | #24 → #25 | M1 | Merged [mocked] |
 | R10 | `--snapshot` limited to debug builds or synthetic data | #36 → #39 | M1 | Merged [mocked]; binaries not run |
-| R11 | CI / release hardening | #37 | M0 | **In progress** |
+| R11 | CI / release hardening | #37 → #41 | M0 | Merged [CI]; signing and notarization planned, not done |
 | R12 | Injectable dependencies and mocked launch tests | #12 → #14 | M0 | Merged |
 
-Done: 11 of 12 remediations (R1–R10, R12). In progress: R11 (#37).
+Done: **12 of 12** remediations (R1–R12) merged. That completes the remediation series. It doesn't complete M0 or M1, and it isn't a release approval.
+
+### Hosted CI baseline
+
+- **First green run:** [run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `main` = `6d51227` (2026-10-16 UTC). 187 tests passed, and the workflow hardening check passed.
+- **Runner:** `macos-15` arm64 (3 cores). Image `macos-15-arm64` 20260907.0337, default Xcode 16.4 according to the image README. The Swift version isn't printed in the log. Local development uses Xcode 26.6 / Swift 6.3.3.
+- **Serial tests:** CI runs `swift test --no-parallel` (PR #45). Run in parallel on 3 cores, tests whose fakes block a thread for up to 2 s timed out ([run 38843030419](https://github.com/loloDawit/spandeck/actions/runs/38843030419)). The working diagnosis and the conditions for running in parallel again are in #46.
+- **How we got there:** the push of merge #41 started the first hosted run, [38827646254](https://github.com/loloDawit/spandeck/actions/runs/38827646254). It failed because Xcode 16.4 couldn't type-check two test expressions. #42 and #43 fixed that compile failure, #44 replaced a 1 s wall-clock test bound, and #45 made the tests run serially.
+- **What CI shows:** the source compiles and the [mocked] tests pass on a hosted runner. **It doesn't show how the app behaves on a real Mac** (Keychain prompts, file modes, network traffic, login item), which still needs #3 Phase 2. CI builds no signed or notarized artifact.
 
 ## M0 — Security and accounting baseline (in progress)
 
@@ -50,7 +59,7 @@ Epic: #2. Research issues #3–#11 stay open until all their acceptance criteria
 - [ ] Checks for credential leakage and external egress. *Mocked launch-path tests show no credential read and no network request on default launch [mocked]; not observed at OS level.*
 - [ ] ADR: canonical events, source adapters, deduplication and storage (#9). *Blocked on #3, #5, #6, #7.*
 - [ ] Supported Claude observability surfaces and Bedrock coverage (#10). *Not started.*
-- [ ] CI, source-integrity and distribution audit (#11), including R11. *R11 in progress (#37): pinned actions, least permissions, signing / notarization plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)); the rest of #11 not started.*
+- [ ] CI, source-integrity and distribution audit (#11), including R11. *R11 merged (#37, PR #41): pinned actions, least permissions, signing / notarization plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md), plan only). Hosted CI green on `6d51227` ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), serial. The rest of #11 is open: Developer ID signing, notarization, a release gate in `release.yml`, and dependency and source-integrity review.*
 
 **Exit:** known risks recorded, core arithmetic regression-tested, and first hardening changes planned with measurable acceptance criteria. *Status: risks recorded at code level; hardening planned and mostly merged; arithmetic regression fixtures (#6) and performance baseline (#8) missing.*
 
@@ -108,7 +117,7 @@ Nothing should be published as a SpanDeck release until these are cleared:
 1. **No OS-level evidence.** Every safety claim so far is [mocked] or code-level (#3, audit §7 Phase 2).
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
 3. ~~**`--snapshot` can write real usage data to any path** until R10 merges (#36).~~ Resolved in source by R10 (#39); not verified by running a release binary.
-4. **No CI run and no signing or notarization.** Hosted CI is unavailable for budget reasons; R11 and #11 are open.
+4. **No signing or notarization.** Builds are signed ad hoc, and the Developer ID plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)) hasn't been carried out. If triggered, `release.yml` would still publish an ad-hoc-signed, unnotarized DMG; the release gate is open in #11. Hosted CI now passes ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), but it runs tests only, serially (#46).
 5. **No accounting regression fixtures or performance baseline** (#6, #8), so M0 cannot exit.
 
 ## Dependencies

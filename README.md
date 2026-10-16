@@ -40,7 +40,7 @@ swift build
 
 Those commands compile and test; they **do not install or launch** the application. The current build target is still named `Headroom`. Avoid the original `./build.sh install` until inherited permissions, credentials and auto-start behavior are audited.
 
-Current CI: [Swift tests](.github/workflows/test.yml), carried forward from Headroom. Build and test passing have not been independently verified for the SpanDeck fork.
+Current CI: [Swift tests](.github/workflows/test.yml), carried forward from Headroom and hardened in R11. The first green hosted run is [38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `6d51227`: 187 tests on `macos-15`, run serially (#46). CI runs the mocked test suite only. It doesn't verify the app on a real Mac, and nothing is signed or notarized ([roadmap](docs/ROADMAP.md#release-blockers)).
 
 ## Working with Claude Code
 

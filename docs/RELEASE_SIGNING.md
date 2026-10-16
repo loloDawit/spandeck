@@ -28,7 +28,7 @@ These were produced by `./build.sh dmg` into the git-ignored `build/` folder. No
 2. **Who holds the certificate.** Decide whether it is an individual or an organization Apple Developer account, who the Account Holder is, and who may sign.
 3. **Where signing happens.** Choose either:
    - (a) the maintainer's Mac, by hand, with a local Keychain;
-   - (b) a CI job with secrets. Hosted CI is currently not funded (owner, 2026-10-14), and secrets in CI need their own threat-model review.
+   - (b) a CI job with secrets. Hosted CI has run the test workflow since 2026-10-15, but signing in CI would still need a budget decision for macOS minutes, and secrets in CI need their own threat-model review.
 
    This plan describes (a) first, and (b) as a later option.
 4. **Hardened Runtime exceptions.** None are expected (below), but each one needs approval.
