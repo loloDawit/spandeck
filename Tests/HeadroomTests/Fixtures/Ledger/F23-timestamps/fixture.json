@@ -1,15 +1,43 @@
 {
   "title": "Timestamp formats, and a re-log whose timestamp is earlier than the first record",
-  "matrix": ["streaming: shifted timestamps", "time-zone boundaries"],
+  "matrix": [
+    "streaming: shifted timestamps",
+    "time-zone boundaries"
+  ],
   "classification": "pass",
   "policy": "P3 and P7: a re-logged operation stays in its first record's hour even when a later record's timestamp is earlier; a record whose time can't be read isn't counted (and should be reported).",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
-  "records": 8, "duplicates": 1,
+  "records": 8,
+  "duplicates": 1,
   "derivation": "16:00:00Z (1); 18:00+02:00 = 16:00Z (2); 16:59:59.123456789Z (4); 17:00:00.5-01:00 = 18:00:00.5Z (8, hour 18). Not counted: \"2026-03-10 16:00:00\" with no zone (16) and no timestamp (32). msg_23g: 16:30Z [64, 10], then 15:50Z [64, 20]: [64, 20] in hour 16. Hour 16 = [71, 20], 4 operations; hour 18 = [8, 0]: 99 tokens, 5 operations.",
   "steps": [
-    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
-     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [71, 20, 0, 0, 0, 4]}, "2026-03-10T18": {"claude-test-1": [8, 0, 0, 0, 0, 1]}},
-                "operations": 5, "days": {"2026-03-10": 99}, "month": 99}}
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [71, 20, 0, 0, 0, 4]
+          },
+          "2026-03-10T18": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          }
+        },
+        "operations": 5,
+        "days": {
+          "2026-03-10": 99
+        },
+        "month": 99,
+        "today": 99,
+        "week": 99,
+        "coverage": "unavailable"
+      }
+    }
   ]
 }

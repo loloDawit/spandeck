@@ -1,15 +1,43 @@
 {
   "title": "Sub-calls listed under usage.iterations, re-logged with growth",
-  "matrix": ["model changes during a session", "streaming: increasing counters"],
+  "matrix": [
+    "model changes during a session",
+    "streaming: increasing counters"
+  ],
   "classification": "pass",
+  "followUp": "#10",
   "policy": "P11 (assumption, unverified against Claude Code): the top-level usage covers the main model; iterations of another model are extra operations; iterations of type \"message\" or of the main model are already in the top-level usage.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
-  "records": 2, "duplicates": 1,
+  "records": 2,
+  "duplicates": 1,
   "derivation": "Haiku 4.5 main [10, 10]; claude-test-1 sub-call [30, 3] growing to [30, 7] in the re-log. 57 tokens, 2 operations. Known cost: Haiku 10 x $1/M + 10 x $5/M = $0.00006; the sub-call is unpriced, so partial.",
   "steps": [
-    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
-     "expect": {"hours": {"2026-03-10T16": {"claude-haiku-4-5-20251001": [10, 10, 0, 0, 0, 1], "claude-test-1": [30, 7, 0, 0, 0, 1]}},
-                "operations": 2, "month": 57, "coverage": "partial", "knownCost": 0.00006}}
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [10, 10, 0, 0, 0, 1],
+            "claude-test-1": [30, 7, 0, 0, 0, 1]
+          }
+        },
+        "operations": 2,
+        "month": 57,
+        "coverage": "partial",
+        "knownCost": 6e-05,
+        "days": {
+          "2026-03-10": 57
+        },
+        "today": 57,
+        "week": 57
+      }
+    }
   ]
 }

@@ -1,17 +1,48 @@
 {
   "title": "Cache-write breakdowns and cost coverage with one priced and one unpriced model",
-  "matrix": ["input, output, cache-read and cache-write breakdowns", "cost coverage", "unknown models"],
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns",
+    "cost coverage",
+    "unknown models"
+  ],
   "classification": "pass",
+  "followUp": "#58",
   "policy": "P9: when the 5m + 1h breakdown doesn't add up to cache_creation_input_tokens, the flat total is trusted and priced as 5m writes (ambiguous: the 1h share is then priced low).",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
-  "records": 4, "duplicates": 0,
+  "records": 4,
+  "duplicates": 0,
   "derivation": "Haiku 4.5: a [100, 50, 5m 200, 1h 100, read 1000]; b [10, 5, 5m 40] (no breakdown); c [1, 1] with total 300 but breakdown 100 + 100 -> 5m 300. Sum [111, 56, 540, 100, 1000, 3] = 1807. claude-test-1 d [5, 5] = 10, unpriced. Haiku 4.5 list prices per million: input $1, output $5, 5m write $1.25, 1h write $2, read $0.10 -> 111 + 280 + 675 + 200 + 100 = 1366 micro-dollars = $0.001366 known; 10 tokens unknown, so the month is partial.",
   "steps": [
-    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
-     "expect": {"hours": {"2026-03-10T16": {"claude-haiku-4-5-20251001": [111, 56, 540, 100, 1000, 3],
-                                            "claude-test-1": [5, 5, 0, 0, 0, 1]}},
-                "operations": 4, "month": 1817, "coverage": "partial", "knownCost": 0.001366,
-                "models": {"claude-haiku-4-5-20251001": "complete", "claude-test-1": "unavailable"}}}
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [111, 56, 540, 100, 1000, 3],
+            "claude-test-1": [5, 5, 0, 0, 0, 1]
+          }
+        },
+        "operations": 4,
+        "month": 1817,
+        "coverage": "partial",
+        "knownCost": 0.001366,
+        "models": {
+          "claude-haiku-4-5-20251001": "complete",
+          "claude-test-1": "unavailable"
+        },
+        "days": {
+          "2026-03-10": 1817
+        },
+        "today": 1817,
+        "week": 1817
+      }
+    }
   ]
 }

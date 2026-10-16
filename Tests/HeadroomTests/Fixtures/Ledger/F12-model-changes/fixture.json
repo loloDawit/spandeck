@@ -1,20 +1,61 @@
 {
   "title": "Model changes during a session, including a re-log of one message under another model",
-  "matrix": ["model changes during a session"],
+  "matrix": [
+    "model changes during a session"
+  ],
   "classification": "ambiguous",
   "followUp": "#9",
   "policy": "P10: one operation has one model; a later record of the same message id + request id with another model doesn't add a second operation's tokens. Unverified whether Claude Code ever writes this; the identity rule belongs to the ADR in #9.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
-  "records": 4, "duplicates": 1,
+  "records": 4,
+  "duplicates": 1,
   "derivation": "claude-test-1 [100, 10], Haiku 4.5 [200, 20], claude-test-2 [50, 5]; the re-log of msg_12a under claude-test-2 adds nothing: 385 tokens, 3 operations, Haiku cost 200 x $1/M + 20 x $5/M = $0.0003 known. Today the re-log's full counts go to claude-test-2 with no extra call: claude-test-2 [150, 15], 495 tokens.",
   "steps": [
-    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
-     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 10, 0, 0, 0, 1], "claude-haiku-4-5-20251001": [200, 20, 0, 0, 0, 1],
-                                            "claude-test-2": [50, 5, 0, 0, 0, 1]}},
-                "operations": 3, "month": 385, "coverage": "partial", "knownCost": 0.0003},
-     "baseline": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 10, 0, 0, 0, 1], "claude-haiku-4-5-20251001": [200, 20, 0, 0, 0, 1],
-                                              "claude-test-2": [150, 15, 0, 0, 0, 1]}},
-                  "operations": 3, "month": 495, "coverage": "partial", "knownCost": 0.0003}}
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1],
+            "claude-haiku-4-5-20251001": [200, 20, 0, 0, 0, 1],
+            "claude-test-2": [50, 5, 0, 0, 0, 1]
+          }
+        },
+        "operations": 3,
+        "month": 385,
+        "coverage": "partial",
+        "knownCost": 0.0003,
+        "days": {
+          "2026-03-10": 385
+        },
+        "today": 385,
+        "week": 385
+      },
+      "baseline": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1],
+            "claude-haiku-4-5-20251001": [200, 20, 0, 0, 0, 1],
+            "claude-test-2": [150, 15, 0, 0, 0, 1]
+          }
+        },
+        "operations": 3,
+        "month": 495,
+        "coverage": "partial",
+        "knownCost": 0.0003,
+        "days": {
+          "2026-03-10": 495
+        },
+        "today": 495,
+        "week": 495
+      }
+    }
   ]
 }

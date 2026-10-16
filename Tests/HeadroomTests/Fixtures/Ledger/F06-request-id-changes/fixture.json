@@ -1,14 +1,41 @@
 {
   "title": "One message id under two request ids",
-  "matrix": ["stable versus changing message ids", "inconsistent request ids"],
+  "matrix": [
+    "stable versus changing message ids",
+    "inconsistent request ids"
+  ],
   "classification": "ambiguous",
+  "followUp": "#9",
   "policy": "P5: the identity is message id + request id together (as in ccusage), so a different request id is a different operation. Unverified whether Claude Code ever logs one response under two request ids.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
-  "records": 2, "duplicates": 0,
+  "records": 2,
+  "duplicates": 0,
   "derivation": "Two operations of [100, 50]: [200, 100], 300 tokens.",
   "steps": [
-    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
-     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [200, 100, 0, 0, 0, 2]}}, "operations": 2, "month": 300}}
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [200, 100, 0, 0, 0, 2]
+          }
+        },
+        "operations": 2,
+        "month": 300,
+        "days": {
+          "2026-03-10": 300
+        },
+        "today": 300,
+        "week": 300,
+        "coverage": "unavailable"
+      }
+    }
   ]
 }
