@@ -10,6 +10,7 @@
 #     scripts/runtime-verify.sh preflight        safety gate; refuses to continue in an unsafe account
 #     scripts/runtime-verify.sh fixtures [N]     synthetic transcripts with canaries (+ N extra files for timing)
 #     scripts/runtime-verify.sh identity         after fixtures: add records with one id or none (#55 identity note)
+#     scripts/runtime-verify.sh completeness     after fixtures: add records that can't be read (#58 completeness note)
 #     scripts/runtime-verify.sh capture LABEL    record files, modes, preferences, assertions, canary hits
 #     scripts/runtime-verify.sh launch SECONDS [LABEL]  launch the app normally; watch processes, sockets, logs
 #     scripts/runtime-verify.sh quit             wait for you to quit the app from its menu
@@ -232,6 +233,33 @@ cmd_identity() {
     record "expected: totals grow by 180 claude-sonnet-4-5 tokens; the Token usage card shows \"Usage may be approximate: some records lack identifiers.\"; its help and VoiceOver label start \"Of 27 logged messages from Claude in the last 30 days, 4 were told apart without both a message id and a request id: 2 by one id, 1 with no id, by a fingerprint of timestamp, model and token counts, 1 by an id that more than one message shares\" (23 identified groups with fixtures but no timing sessions; add 1001 per timing session)"
 }
 
+cmd_completeness() {
+    gate
+    local run; run=$(run_dir)
+    [ -f "$run/canaries.txt" ] || die "run fixtures first"
+    local tok; tok=$(sed -n 's/^id=rvid//p' "$run/canaries.txt")
+    local dir="$HOME/.claude/projects/-Users-$RV_USER-rvpath$tok"
+    [ -d "$dir" ] && [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ] || die "fixture folder missing"
+    local f="$dir/rvid$tok-completeness.jsonl" ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    local m='"model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY'"$tok"' reply"}]'
+    {
+        # Cut off mid-record, with its newline: malformed. Its text must not reach the cache.
+        printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_cut","message":{"id":"msg_rvid%s_cut",%s,"usage":{"input_tokens":10,"outp\n' "$ts" "$tok" "$tok" "$m"
+        # No usable timestamp: undated.
+        printf '{"type":"assistant","timestamp":"not a time","requestId":"req_rvid%s_nots","message":{"id":"msg_rvid%s_nots",%s,"usage":{"input_tokens":10,"output_tokens":5}}}\n' "$tok" "$tok" "$m"
+        # Usage that isn't an object: invalid usage, dated.
+        printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_bad","message":{"id":"msg_rvid%s_bad",%s,"usage":"n/a"}}\n' "$ts" "$tok" "$tok" "$m"
+        # An output count that isn't a number: 10 tokens counted, the message flawed.
+        printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_flaw","message":{"id":"msg_rvid%s_flaw",%s,"usage":{"input_tokens":10,"output_tokens":"x"}}}\n' "$ts" "$tok" "$tok" "$m"
+        # Valid, written with a space after "usage": 30 tokens.
+        printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_space","message":{"id":"msg_rvid%s_space",%s,"usage": {"input_tokens":10,"output_tokens":20}}}\n' "$ts" "$tok" "$tok" "$m"
+        # A user record carrying usage: ignored, not unread.
+        printf '{"type":"user","timestamp":"%s","toolUseResult":{"usage":{"input_tokens":999}},"message":{"role":"user","content":"x"}}\n' "$ts"
+    } > "$f"
+    record "completeness: 6 lines (1 malformed, 1 undated, 1 invalid usage, 1 flawed, 1 spaced, 1 user record), 40 tokens"
+    record "expected: totals grow by 40 claude-sonnet-4-5 tokens and 2 identified groups; the Token usage card shows \"Some usage records couldn't be read. Totals may be incomplete.\" above any identity note; its help and VoiceOver label start \"In Claude Code's logs for the last 30 days, 3 records couldn't be read: 1 isn't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 2 of the unread records have no date, so they may belong to any period.\""
+}
+
 # ---------------------------------------------------------------------------------------------------------------
 # Summarizes the usage cache without printing any id, path or value other than counts and the schema version.
 inspect_cache() {
@@ -254,6 +282,12 @@ function run(argv) {
     const kinds = { identified: 0, incomplete: 0, fingerprinted: 0, ambiguous: 0 };
     for (const h of Object.values(c.identity || {})) for (const k in kinds) kinds[k] += Number(h[k] || 0);
     out.push('identity groups: ' + Object.keys(kinds).map(k => k + '=' + kinds[k]).join(' '));
+    const unread = Object.keys(c.unread || {});
+    const byKind = {};
+    for (const u of Object.values(c.unread || {})) byKind[u.kind] = (byKind[u.kind] || 0) + 1;
+    out.push('unread: ' + unread.length + ' entries, all 32-hex ids: ' + unread.every(x => hex32.test(x)) + ', kinds: '
+        + (Object.keys(byKind).sort().map(k => k + '=' + byKind[k]).join(' ') || 'none'));
+    out.push('flawed groups: ' + Object.values(c.flawed || {}).reduce((a, n) => a + Number(n), 0));
     out.push('keyCheck is 32-hex: ' + hex32.test(String(c.keyCheck)));
     out.push('contains "/": ' + text.includes('/'));
     for (const t of canaries) out.push('contains canary ' + t.split('=')[0] + ': ' + text.includes(t.split('=')[1]));
@@ -443,6 +477,6 @@ cmd_clean() {
 }
 
 case "${1:-}" in
-stage|preflight|fixtures|identity|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
+stage|preflight|fixtures|identity|completeness|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
 *) sed -n '2,20p' "$0"; exit 64 ;;
 esac

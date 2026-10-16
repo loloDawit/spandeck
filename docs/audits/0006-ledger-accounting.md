@@ -3,7 +3,7 @@
 **Issue:** #6 (M0, research). **Parent:** #2. **Code base:** `main` at `98c3ac3`, plus the test seam described in §6.
 **Fixtures:** [`Tests/HeadroomTests/Fixtures/Ledger`](../../Tests/HeadroomTests/Fixtures/Ledger/README.md). **Tests:** `Tests/HeadroomTests/LedgerFixtureTests.swift`.
 **Follow-ups:** #55, #56, #57, #58. Open policy questions are posted on #7, #9, #10 and #58.
-**Update:** #55 is fixed on branch `fix/55-missing-id-dedupe` (§8). Sections 1–7 describe the ledger before that fix, as audited.
+**Update:** #55 was fixed in #60 (§8). #58 is fixed on branch `fix/58-ledger-input-validation` (§9), except P9, which awaits a decision. Sections 1–7 describe the ledger before those fixes, as audited.
 
 This report covers Claude transcript accounting in `Ledger.swift`: identity, deduplication, incremental reading, the cache and time buckets. Grok usage files are covered only where R7 already tested them. Pricing values and pricing integrity are out of scope (#7, #11).
 
@@ -136,7 +136,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 | L1 | #55 | Records without a message id or request id are added every time they're read. Empty-string ids merge different operations | F04 (600 vs 255), F05 (170 vs 320), F15 (590 or 810 vs 370) | Inflation, and an undercount in the empty-id case; depends on refresh timing. **Fixed by #55 (§8)** |
 | L2 | #56 | An in-place overwrite of the same or larger size is taken for an append | F16 (480 vs 714) | Undercount; probably rare with Claude Code |
 | L3 | #57 | Usage is assigned to local days by whole UTC hours | F21 (today 4 vs 6) | Wrong day, every day, for half-hour zones |
-| L4 | #58 | Negative counters are subtracted; a breakdown without a flat total is dropped; `"usage": {` is skipped; unreadable records leave no trace | F10 (−839 vs 494), F09 | Wrong totals on unusual input; incomplete totals look complete |
+| L4 | #58 | Negative counters are subtracted; a breakdown without a flat total is dropped; `"usage": {` is skipped; unreadable records leave no trace | F10 (−839 vs 494), F09 | Wrong totals on unusual input; incomplete totals look complete. **Fixed by #58 (§9)**, except P9 |
 
 ### Ambiguous, needs a policy decision
 
@@ -154,7 +154,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 ### Missing test coverage (not added here)
 - **Real Claude Code record shapes.** The fixtures use the fields the ledger reads, as believed. A redacted, consented sample would confirm the identity, `iterations` and streaming assumptions (#10).
 - **Large files and many files.** These are left to #8. The fixtures prove correctness, not speed.
-- **Booleans and strings as counters.** Read as 1 or 0; this is in #58's scope and not tested.
+- **Booleans and strings as counters.** Read as 1 or 0 before #58; now covered by F36 (§9).
 - **Grok `usage.json`.** Only the R7 cost tests cover it. Its content-based dedupe key is noted on #7.
 - **Claude + Grok overlap.** By design they are summed as separate providers. No source overlap test exists.
 - **Concurrent writers.** A file appended to while it is being read was not simulated.
@@ -197,7 +197,7 @@ On Apple Silicon, macOS 26.5, Xcode 26.6, all local:
 A known issue that stops failing makes its test fail. That signals the fixture should be updated when a fix lands.
 
 ## 8. Update: the #55 fix
-**Branch:** `fix/55-missing-id-dedupe`, implementing the [P4 decision on #9](https://github.com/loloDawit/spandeck/issues/9#issuecomment-6220268374). **Status:** in review, not merged.
+**Branch:** `fix/55-missing-id-dedupe`, implementing the [P4 decision on #9](https://github.com/loloDawit/spandeck/issues/9#issuecomment-6220268374). **Status:** merged in #60.
 
 ### 8.1 What changed
 - **[code]** An id that is missing, empty, blank or not a string is absent. Record identity, in order:
@@ -240,3 +240,64 @@ The measurements used a debug build on an Apple M2 Pro, with three cases running
 
 Lookups are dictionary operations per record, with no scan of past identities.
 
+## 9. Update: the #58 fix
+**Branch:** `fix/58-ledger-input-validation`, implementing the contract proposed on [#58](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6225591077). **Status:** in review, not merged. P9 is unchanged and awaits a decision there.
+
+### 9.1 What changed
+- **[code]** Counters (P8): a counter is valid when it is a non-negative integral number below 2^53. Absent and `null` report nothing. Anything else is left out, never read as 0 or another number:
+  - a negative, a fraction, a string, a boolean, an object or an array;
+  - a number too large, or not finite.
+
+  The record's valid counters still count, and its identity group is marked *flawed* for good, through streamed growth and #55 joins. Iterations follow the same rules; a non-object element no longer drops every iteration.
+- **[code]** Overflow: sums saturate. Before, a counter of `1e30` made the test process trap (SIGTRAP), so a crafted transcript could crash the app.
+- **[code]** Cache-write breakdown: used when the flat total is absent, `null` or invalid. The P9 mismatch rule is untouched.
+- **[code]** Pre-filter: the quoted key `"usage"`, then optional spaces, tabs or CR, then `:`. Before, it needed the exact bytes `"usage":{`. It can't match `\"usage\"` inside text or `"usage"` as a value.
+- **[code]** Data completeness (P7), a new `DataCompleteness` on every total, separate from identity, cost coverage and cache issues:
+  - **unread records, by kind:** `malformed` (not a JSON object, or invalid UTF-8) and `undated` (no usable timestamp) have no period and are reported with every period; `invalidUsage` (usage isn't an object) is dated;
+  - **flawed groups,** in their hour;
+  - **pending files,** whose last line is still being written; not a warning.
+
+  Unread lines are kept as `HMAC(key, "unread" | line bytes)` with a kind and an hour, never their text. So a rescan, a truncating rewrite, a rename or a copy reports them once, and they stay reported after deletion, like counted usage (P12).
+- **[code]** The Token usage card shows *"Some usage records couldn't be read. Totals may be incomplete."* with a detail, as a tooltip and for VoiceOver. The identity note (#55) sits under it, in one small list of one-line notes.
+- **[code]** The cache is now version 6. A version 5 cache is deleted and re-indexed (`docs/USAGE_CACHE.md`).
+- **[test]** F10 now passes in every mode and on rebuild, with no baseline: 494 tokens, 1 flawed. F09 now asserts 2 malformed and 2 undated, F08 1 pending, and F23 2 undated. The other fixtures are unchanged, and every fixture now also asserts completeness: nothing unread unless stated.
+- **[test]** New fixtures:
+  - F36: invalid counters;
+  - F37: cache-write sources;
+  - F38: JSON whitespace, key order and ignored records;
+  - F39: unread records through rewrite, rename, copy and deletion;
+  - F40: appended unread records, also used for the crash-before-save test;
+  - F41: flaws through streaming and #55 joins.
+
+  Unit tests cover counter values, the pre-filter, periods, retention, saturation, the note copy, and the cache's contents and migration.
+- **[test]** Against `main`'s ledger:
+  - F10 gives −839, not 494;
+  - F37 gives 162, not 631;
+  - F38 gives 44, not 165;
+  - F41 subtracts its negatives;
+  - F36 traps.
+
+  Thirteen mutations of the fix (exact needle, negatives valid, no breakdown fallback, unread not deduplicated, flaws not sticky, flaws lost in an uncount or a join, pending never cleared, unread not pruned, timestamps checked before ignoring, no saturation, strict iterations) each fail at least one test.
+
+### 9.2 Limits that remain
+- **P9** is unchanged: a mismatched breakdown is still priced as 5-minute writes, and nothing says so.
+- **A line cut off before its `"usage"` key** looks like any other line and isn't reported.
+- **A broken line rewritten with different bytes** is reported again, until the old entry ages out (the F33 analogue).
+- **A file that can't be read at all** (permissions, I/O) is still not reported. That is file-level, not record-level, and may belong to #7.
+- **Partial counts:** an undated record whose message also has a valid copy is reported as unread although the message counted. A flawed group stays flawed even if a later copy has every counter valid. Both err towards saying less is known.
+- **Absent counters** report nothing and aren't flaws. Claude Code omits cache counters routinely, so "missing" here means "not reported", not "unknown".
+- **Pending files** aren't shown. A transcript whose writer crashed mid-line stays pending forever, which is P6.
+
+### 9.3 Cost (synthetic, see #8)
+Debug build, Apple M2 Pro, one run at a time. The data is 30,000 logged messages in 100 files: 120,000 lines and 151 MB. Each message has a ~1 KB user prompt, two streamed assistant snapshots, and a ~3 KB tool result quoting `\"usage\"` escaped. Every 50th message is written `"usage": {`.
+
+| | Before (`main`), 3 runs | After, 3 runs |
+|---|---|---|
+| First index | 6.26–8.11 s | 6.77–8.85 s |
+| Tail, 900 lines appended to a hot file | 0.037–0.043 s | 0.040 s |
+| Relaunch (load and first refresh) | 0.355–0.376 s | 0.334–0.362 s |
+| Cache size | 11.21 MB | 11.43 MB (+2.0%: the 600 spaced messages are now counted) |
+| Tokens | 21,256,200 | 21,629,700 (+373,500, exactly the spaced messages) |
+| Pre-filter alone over 147 MB, 3 rounds | 0.123–0.125 s | 0.133–0.134 s, the same 60,000 lines matched |
+
+The index time ranges overlap. The pre-filter adds about 0.01 s per 150 MB and parses no extra lines of this mix. Per-message cache size is unchanged, since a group without a flaw stores no flag.
