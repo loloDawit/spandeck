@@ -208,6 +208,8 @@ Phase 1 acceptance tests (all synthetic, run in `swift test`):
 
 **Status (2026-10-14): not done.** Still required to confirm OS-level behavior: login-item state and notification, absence of Keychain access and its prompt, real file modes, and the actual set of network destinations.
 
+**Status (2026-10-15): procedure ready, not run.** The steps below were written for the inherited code. The current expectations, verification matrix, safety gate, procedure and cleanup are in [0003-runtime-verification.md](0003-runtime-verification.md), using `scripts/runtime-verify.sh`. One example of the change: default launch should now make **no** network request, where step 3 below expects one to `raw.githubusercontent.com`. Runtime results will be recorded there. None exist yet.
+
 Only to confirm OS-level effects the mocks cannot (login-item notification, real file modes, real process tree):
 
 1. New macOS user account or VM with **no Claude Code or Grok credentials at all** — do not create synthetic Keychain items or Grok keys, so no credential leaves the machine.
