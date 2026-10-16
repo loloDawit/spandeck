@@ -230,8 +230,8 @@ struct DailyChart: View {
                     .foregroundStyle(by: .value("Model", b.family))
                     .cornerRadius(1.5)
             }
-            // R7: a day whose cost isn't fully known shows only its priced part, marked "?" so it doesn't read as a
-            // complete (or zero) cost. Token bars are unaffected.
+            // R7: a day whose cost isn't fully known shows only its priced part (with P9 minimums), marked "?" so it
+            // doesn't read as a complete (or zero) cost. Token bars are unaffected.
             if metric == .cost {
                 ForEach(summary.incompleteCostDays, id: \.day) { d in
                     PointMark(x: .value("Day", d.day, unit: .day), y: .value(metric.rawValue, d.known))
@@ -261,7 +261,7 @@ struct DailyChart: View {
         .frame(height: height)
     }
 
-    private func value(_ b: DayBar) -> Double { metric == .cost ? b.cost.known : Double(b.tokens) / 1e6 }
+    private func value(_ b: DayBar) -> Double { metric == .cost ? b.cost.lowerBound : Double(b.tokens) / 1e6 }
 }
 
 // MARK: - System
@@ -767,9 +767,13 @@ enum PricingText {
             m.prefix(3).joined(separator: ", ") + (m.count > 3 ? " and \(m.count - 3) more" : "")
         }
         let priced = claude?.uncostedModels ?? [], reported = grok?.uncostedModels ?? []
-        guard !priced.isEmpty || !reported.isEmpty, let total = UsageSummary.combine(claude, grok) else { return nil }
+        let tiers = claude?.uncertainCacheModels ?? []
+        guard !priced.isEmpty || !reported.isEmpty || !tiers.isEmpty, let total = UsageSummary.combine(claude, grok)
+        else { return nil }
         var causes: [String] = []
         if !priced.isEmpty { causes.append("no price for \(list(priced))") }
+        // P9 (#58): the logs' cache-write totals and their 5-minute/1-hour breakdown disagree or can't be read.
+        if !tiers.isEmpty { causes.append("cache writes of uncertain tier or amount for \(list(tiers))") }
         if !reported.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(reported)) turns") }
         return "≥ partial estimate, n/a no estimate: " + causes.joined(separator: "; ") + ". "
             + "\(Fmt.costDetail(total.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
@@ -840,7 +844,9 @@ enum CompletenessText {
                 kinds.append(n(c.invalidUsage, "has usage in a form SpanDeck doesn't recognize",
                                "have usage in a form SpanDeck doesn't recognize"))
             }
-            parts.append(n(c.unread, "record", "records") + " couldn't be read: " + kinds.joined(separator: ", ") + ".")
+            // Counted per distinct line: identical copies of a broken line are one (#58).
+            parts.append(n(c.unread, "record", "records") + " couldn't be read, counting identical lines once: "
+                         + kinds.joined(separator: ", ") + ".")
         }
         if c.flawed > 0 {
             parts.append(n(c.flawed, "message", "messages") + " had a token count that isn't a valid number; it was "
@@ -870,10 +876,15 @@ enum QuantityText {
         guard let q = claude?.month.quantity, !q.isExact else { return nil }
         var causes: [String] = []
         if q.saturated {
-            causes.append("Some totals are larger than SpanDeck can count, so they are shown at the largest value it "
+            causes.append("some totals are larger than SpanDeck can count, so they are shown at the largest value it "
                           + "can hold, below the true amount.")
         }
-        return (provisional, "In Claude Code's logs for the last 30 days: " + causes.joined(separator: " ")
+        if q.disputedTokens > 0 {
+            causes.append("\(Fmt.tokens(q.disputedTokens)) cache-write tokens are counted provisionally, because a "
+                          + "cache-write total and its 5-minute/1-hour breakdown disagree and the larger was used. The "
+                          + "true amount may be lower or higher, and their cost isn't estimated.")
+        }
+        return (provisional, "In Claude Code's logs for the last 30 days, " + causes.joined(separator: " Also, ")
                     + " Costs are still estimates, not your bill.")
     }
 }

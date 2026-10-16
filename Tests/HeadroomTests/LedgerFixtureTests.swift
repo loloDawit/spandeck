@@ -62,6 +62,13 @@ struct LedgerFixtureTests {
         /// What couldn't be read (#58). Unlike the other fields it is always checked: left out, it means everything was
         /// read and nothing is pending.
         var completeness: DataCompleteness?
+        /// P9 (#58), always checked like `completeness`: UTC hour → model → [tier-unresolved, disputed] cache-write
+        /// tokens, for buckets with either; left out, none.
+        var tiers: [String: [String: [Int]]]?
+        /// Whether the 30 days' token counts are exact (#58), always checked: left out, they are.
+        var quantity: QuantityUncertainty?
+        /// The P9 minimum for tier-unresolved cache writes, apart from `knownCost`.
+        var minimumCost: Double?
     }
 
     /// What one refresh produced, in the same terms as an expectation.
@@ -77,6 +84,9 @@ struct LedgerFixtureTests {
         var knownCost: Double
         var identity: IdentityCoverage
         var completeness: DataCompleteness
+        var tiers: [String: [String: [Int]]]
+        var quantity: QuantityUncertainty
+        var minimumCost: Double
 
         var operations: Int { hours.values.flatMap(\.values).reduce(0) { $0 + $1[5] } }
 
@@ -97,6 +107,11 @@ struct LedgerFixtureTests {
             if let c = e.knownCost, abs(c - knownCost) > 1e-12 { out.append("knownCost: expected \(c), got \(knownCost)") }
             check("identity", e.identity, identity)
             check("completeness", e.completeness ?? DataCompleteness(), completeness)
+            check("tiers", e.tiers ?? [:], tiers)
+            check("quantity", e.quantity ?? QuantityUncertainty(), quantity)
+            if let c = e.minimumCost, abs(c - minimumCost) > 1e-12 {
+                out.append("minimumCost: expected \(c), got \(minimumCost)")
+            }
             return out
         }
     }
@@ -194,11 +209,12 @@ struct LedgerFixtureTests {
             dayFormat.timeZone = calendar.timeZone
             dayFormat.dateFormat = "yyyy-MM-dd"
 
-            var hours: [String: [String: [Int]]] = [:]
+            var hours: [String: [String: [Int]]] = [:], tiers: [String: [String: [Int]]] = [:]
             for (hour, models) in raw {
                 let key = hourFormat.string(from: Date(timeIntervalSince1970: Double(hour) * 3600))
                 for (model, a) in models {
                     hours[key, default: [:]][model] = [a.input, a.output, a.cacheWrite5m, a.cacheWrite1h, a.cacheRead, a.calls]
+                    if a.unresolved != 0 || a.disputed != 0 { tiers[key, default: [:]][model] = [a.unresolved, a.disputed] }
                 }
             }
             var days: [String: Int] = [:]
@@ -210,7 +226,8 @@ struct LedgerFixtureTests {
                                window: s.window?.tokens, coverage: name(s.month.cost.coverage),
                                models: Dictionary(uniqueKeysWithValues: s.models.map { ($0.model, name($0.cost.coverage)) }),
                                knownCost: s.month.cost.known, identity: s.month.identity,
-                               completeness: s.month.completeness)
+                               completeness: s.month.completeness, tiers: tiers, quantity: s.month.quantity,
+                               minimumCost: s.month.cost.minimum)
         }
 
         /// Checks the baseline exactly when there is one, and the expected result (as a known issue if there's a
@@ -233,7 +250,7 @@ struct LedgerFixtureTests {
     // MARK: Tests
 
     @Test func everyFixtureIsComplete() throws {
-        #expect(Self.names.count == 41)
+        #expect(Self.names.count == 42)
         for name in Self.names {
             let f = try Self.load(name)
             #expect(["pass", "defect", "ambiguous"].contains(f.classification), "\(name)")

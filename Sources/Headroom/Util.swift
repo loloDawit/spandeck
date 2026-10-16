@@ -18,12 +18,12 @@ enum Fmt {
         return String(format: "$%.2f", v)
     }
 
-    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part is a lower
-    /// bound), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
+    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part, plus
+    /// any P9 minimum, is a lower bound), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
     static func cost(_ c: CostEstimate) -> String {
         switch c.coverage {
         case .complete: return usd(c.known)
-        case .partial: return "≥" + lowerBound(c.known)
+        case .partial: return "≥" + lowerBound(c.lowerBound)
         case .unavailable: return "n/a"
         }
     }
@@ -52,7 +52,17 @@ enum Fmt {
         switch c.coverage {
         case .complete: return "\(usd(c.known)) estimated"
         case .partial:
-            return "Partial estimate: \(lowerBound(c.known)) known; cost unknown for \(tokens(c.unknownTokens)) tokens"
+            // Known, minimum and unknown parts are named apart (P9, #58); a minimum is never called known.
+            var parts = ["\(lowerBound(c.known)) known"]
+            if c.minimumTokens > 0 {
+                parts.append("at least \(lowerBound(c.minimum)) for \(tokens(c.minimumTokens)) cache-write tokens of "
+                             + "unknown tier")
+            }
+            if c.unknownTokens > 0 { parts.append("cost unknown for \(tokens(c.unknownTokens)) tokens") }
+            if c.disputedTokens > 0 {
+                parts.append("cost unknown for \(tokens(c.disputedTokens)) provisional cache-write tokens")
+            }
+            return "Partial estimate: " + parts.joined(separator: "; ")
         case .unavailable: return "Cost unavailable: cost unknown for \(tokens(c.unknownTokens)) tokens"
         }
     }

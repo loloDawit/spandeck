@@ -24,10 +24,10 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 | `files` | opaque file id → byte offset | Read only what was appended to each transcript |
 | `seen` | opaque operation id → hour, token counts per model, how it was identified, and whether it was counted with an invalid counter (#58, only when it was) | Count a streamed message once as it grows, and a message repeated in a resumed session once |
 | `links` | opaque single id → opaque operation id (or `ambiguous`) + hour | Join a record that has only a message id or only a request id to the one pair that carries it (#55) |
-| `hours` | hour → model → token counts | Totals, windows and cost estimates |
+| `hours` | hour → model → token counts. Only where P9 applies (#58), also cache-write tokens whose tier is unresolved and tokens disputed between a flat total and its breakdown | Totals, windows and cost estimates. Each operation's counts in `seen` carry the same fields, so a #55 merge or a held (`Int.max`) sum can be rebuilt from them |
 | `identity` | hour → number of identity groups (logged messages with their streamed copies) identified by both ids, one id, a fingerprint, or an ambiguous id | The "Usage may be approximate" note (#55) |
 | `flawed` | hour → number of identity groups counted with an invalid counter left out | The "Some usage records couldn't be read" note (#58) |
-| `unread` | opaque line id → kind (`invalidUsage`, `undated` or `malformed`) + hour | Report a record that couldn't be read, once however often it is read again (#58). The hour is the record's own for `invalidUsage`; for the others it is the hour the line was found, used only for pruning |
+| `unread` | opaque line id → kind (`invalidUsage`, `undated` or `malformed`) + hour | Report a record that couldn't be read, once however often it is read again (#58). Identical broken lines, in one file or several, are one entry, so the count is of distinct lines, not of occurrences. The hour is the record's own for `invalidUsage`; for the others it is the hour the line was found, used only for pruning |
 | `version` | `6` | A different version is never loaded |
 | `keyCheck` | opaque id of a fixed input under the key | The cache is loaded only with the key it was written under. Otherwise, for example with an old cache restored from a backup after a clear made a new key, every id would miss and everything would be counted twice; such a cache is deleted and rebuilt |
 

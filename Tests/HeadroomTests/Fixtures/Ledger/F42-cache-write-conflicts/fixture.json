@@ -1,0 +1,104 @@
+{
+  "title": "A cache-write total and its breakdown disagreeing both ways, with a price and without",
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns",
+    "cost coverage",
+    "unknown models"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P9 (decided on #58): flat > breakdown keeps the flat total, tier unresolved, costed at least at the cheaper tier's rate (a minimum, apart from known costs). Breakdown > flat (an explicit flat 0 included) counts the larger provisionally: the flat total tier-unresolved, the rest disputed, unpriced, and reported as a quantity conflict. An invalid tier never matches. Without a price everything is unknown, minimum included. Conflicts survive streamed growth.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 11,
+  "duplicates": 3,
+  "derivation": "Haiku 4.5, each [1, 1] before growth: a flat 300 vs 100+100 -> 300 unresolved. b flat 100 vs 200+100 -> 100 unresolved, 200 disputed. c flat 0 vs 50+30 -> 80 disputed. d no flat -> 5m 40, 1h 60. e 30 = 10+20 -> 5m 10, 1h 20. f 5m \"x\" -> 20 unresolved, flawed. Haiku [6, 6, 50, 80, 0, 6], unresolved 420, disputed 280 = 842. claude-test-1 h flat 10 vs 30 -> [1, 1], 10 unresolved, 20 disputed = 32, all unpriced. m1 (msg_42m only) and m2 (req_42m only), claude-test-1, each flat 5 vs 5+5 -> [1, 1], 5 unresolved, 5 disputed: 12 each, incomplete. Step 1: 874 + 24 = 898. Known (Haiku per million: input $1, output $5, 5m $1.25, 1h $2): 6 + 30 + 62.5 + 160 = 258.5 micro-dollars; minimum 420 x $1.25 = 525 micro-dollars; 280 disputed and 32 unpriced tokens unknown. Step 2 re-logs b with output 3: growth +2 output only, its conflict unchanged: Haiku output 8, known 268.5 micro-dollars. It also writes the pair msg_42m + req_42m (#55): it takes over m1 and merges m2, which is taken back with its conflict (one group, still incomplete). claude-test-1 [2, 2, 2 calls], 15 unresolved, 25 disputed = 44. 876 + 12 = 888. Disputed in the 30 days: step 1 280 + 20 + 10 = 310, step 2 305. Before this decision, a b c and h went to 5m (300, 100, 0, 10 tokens) and the breakdowns' excess was dropped.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [6, 6, 50, 80, 0, 6],
+            "claude-test-1": [3, 3, 0, 0, 0, 3]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [420, 280],
+            "claude-test-1": [20, 30]
+          }
+        },
+        "month": 898,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "partial",
+          "claude-test-1": "unavailable"
+        },
+        "knownCost": 0.0002585,
+        "minimumCost": 0.000525,
+        "quantity": {
+          "disputedTokens": 310
+        },
+        "completeness": {
+          "flawed": 1
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 2,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "s2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [6, 8, 50, 80, 0, 6],
+            "claude-test-1": [2, 2, 0, 0, 0, 2]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [420, 280],
+            "claude-test-1": [15, 25]
+          }
+        },
+        "month": 888,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "partial",
+          "claude-test-1": "unavailable"
+        },
+        "knownCost": 0.0002685,
+        "minimumCost": 0.000525,
+        "quantity": {
+          "disputedTokens": 305
+        },
+        "completeness": {
+          "flawed": 1
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    }
+  ]
+}

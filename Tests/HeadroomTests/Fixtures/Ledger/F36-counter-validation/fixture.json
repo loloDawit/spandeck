@@ -11,7 +11,7 @@
   "now": "2026-03-10T19:00:00Z",
   "records": 12,
   "duplicates": 0,
-  "derivation": "a \"100\" -> input left out, [0, 50]. b true -> [0, 5]. c 1.5 -> [0, 2]. d null -> [0, 3], not a flaw. e explicit zeros -> [0, 0], 1 call. f 100.0 / 5e1 / 1e2 -> [100, 50, read 100]. g 1e30 -> [0, 7]. h 2^53 -> [0, 1]. i [10, 1] plus iteration claude-test-2 [20, output -4 left out] -> [20, 0, 1 call]; the element 42 is skipped. j cache_creation is a string -> flat 30 as 5m, [0, 1, 5m 30]. k object and array -> [0, 0]. l output -5 -> [40, 0]. claude-test-1: input 100+10+40 = 150, output 50+5+2+3+50+7+1+1+1 = 120, 5m 30, read 100, 12 calls; claude-test-2 [20, 0, 1 call]. 150+120+30+100+20 = 420 tokens. Flawed: a b c g h i j k l = 9 messages; d e f are not. Today the string, object and array read as 0 too, but true reads as 1, 1.5 as 1, 1e30 and 2^53 as their integer values, and the negatives subtract.",
+  "derivation": "a \"100\" -> input left out, [0, 50]. b true -> [0, 5]. c 1.5 -> [0, 2]. d null -> [0, 3], not a flaw. e explicit zeros -> [0, 0], 1 call. f 100.0 / 5e1 / 1e2 -> [100, 50, read 100]. g 1e30 -> [0, 7]. h 2^53 -> [0, 1]. i [10, 1] plus iteration claude-test-2 [20, output -4 left out] -> [20, 0, 1 call]; the element 42 is skipped. j cache_creation is a string -> the flat 30's tier is unknown (P9): [0, 1], 30 tier-unresolved. k object and array -> [0, 0]. l output -5 -> [40, 0]. claude-test-1: input 100+10+40 = 150, output 50+5+2+3+50+7+1+1+1 = 120, 30 tier-unresolved, read 100, 12 calls; claude-test-2 [20, 0, 1 call]. 150+120+30+100+20 = 420 tokens. Flawed: a b c g h i j k l = 9 messages; d e f are not. Today the string, object and array read as 0 too, but true reads as 1, 1.5 as 1, 1e30 and 2^53 as their integer values, and the negatives subtract.",
   "steps": [
     {
       "ops": [
@@ -24,8 +24,13 @@
       "expect": {
         "hours": {
           "2026-03-10T16": {
-            "claude-test-1": [150, 120, 30, 0, 100, 12],
+            "claude-test-1": [150, 120, 0, 0, 100, 12],
             "claude-test-2": [20, 0, 0, 0, 0, 1]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-test-1": [30, 0]
           }
         },
         "operations": 13,

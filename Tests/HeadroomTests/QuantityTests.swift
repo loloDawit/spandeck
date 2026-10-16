@@ -87,6 +87,57 @@ struct QuantityTests {
         #expect(await refreshLedger(Self.ledger(box)).claude.month.tokens == 1024 * Self.big)
     }
 
+    // MARK: P9 costs and conflicts
+
+    /// Known costs, P9 minimums and unknown costs stay apart: a minimum makes the cost partial, never complete, and
+    /// is never called known; disputed tokens are unpriced and claim no bound.
+    @Test func minimumsAndDisputesStayApart() {
+        let known = CostEstimate(known: 4.25, knownTokens: 10)
+        #expect(known.coverage == .complete && known.value == 4.25 && known.lowerBound == 4.25)
+
+        let minimum = CostEstimate(known: 1, knownTokens: 10, minimum: 0.5, minimumTokens: 300)
+        #expect(minimum.coverage == .partial && minimum.value == nil && minimum.lowerBound == 1.5)
+        #expect(Fmt.cost(minimum) == "≥$1.50")
+        #expect(Fmt.costDetail(minimum) == "Partial estimate: $1.00 known; at least $0.50 for 300 cache-write tokens of unknown tier")
+
+        let disputed = CostEstimate(known: 1, knownTokens: 10, disputedTokens: 200)
+        #expect(disputed.coverage == .partial && disputed.lowerBound == 1)
+        #expect(Fmt.costDetail(disputed) == "Partial estimate: $1.00 known; cost unknown for 200 provisional cache-write tokens")
+
+        let onlyMinimum = CostEstimate(minimum: 0.5, minimumTokens: 300)
+        #expect(onlyMinimum.coverage == .partial) // something is known: at least the minimum
+        #expect(CostEstimate(disputedTokens: 5).coverage == .unavailable)
+
+        let sum = minimum + disputed + CostEstimate(unknownTokens: 7)
+        #expect(sum.known == 2 && sum.minimum == 0.5 && sum.minimumTokens == 300 && sum.disputedTokens == 200
+                && sum.unknownTokens == 7 && sum.knownTokens == 20)
+        #expect(Fmt.costDetail(sum) == "Partial estimate: $2.00 known; at least $0.50 for 300 cache-write tokens of unknown tier; cost unknown for 7 tokens; cost unknown for 200 provisional cache-write tokens")
+    }
+
+    /// The cost note names a missing price and an uncertain cache-write tier as different causes.
+    @Test func coverageNoteNamesTierCause() throws {
+        var s = UsageSummary()
+        s.models = [ModelRow(model: "claude-haiku", tokens: 10, cost: CostEstimate(known: 1, knownTokens: 5, minimum: 0.1, minimumTokens: 5)),
+                    ModelRow(model: "claude-new", tokens: 3, cost: CostEstimate(unknownTokens: 3))]
+        s.month = Totals(tokens: 13, cost: s.models.map(\.cost).reduce(.zero, +))
+        #expect(s.uncostedModels == ["claude-new"] && s.uncertainCacheModels == ["claude-haiku"])
+        let note = try #require(PricingText.coverageNote(claude: s, grok: nil))
+        #expect(note.contains("no price for claude-new") && note.contains("cache writes of uncertain tier or amount for claude-haiku"))
+        s.models.removeLast()
+        #expect(try #require(PricingText.coverageNote(claude: s, grok: nil)).contains("no price") == false)
+    }
+
+    @Test func conflictNote() throws {
+        var s = UsageSummary()
+        s.month = Totals(tokens: 500, cost: CostEstimate(known: 1, knownTokens: 200, disputedTokens: 300),
+                         identity: IdentityCoverage(identified: 1), quantity: QuantityUncertainty(disputedTokens: 300))
+        let note = try #require(QuantityText.note(s))
+        #expect(note.text == QuantityText.provisional)
+        #expect(note.detail.contains("300 cache-write tokens are counted provisionally")
+                && note.detail.contains("may be lower or higher") && !note.detail.contains("larger than SpanDeck"))
+        #expect(CompletenessText.note(s) == nil && IdentityText.note(s) == nil) // its own dimension
+    }
+
     @Test func quantityNote() throws {
         var s = UsageSummary()
         s.month = Totals(tokens: 10, cost: CostEstimate(known: 1, knownTokens: 10), identity: IdentityCoverage(identified: 1))

@@ -56,13 +56,13 @@ struct DataCompletenessTests {
         }
         let all = try #require(CompletenessText.note(summary(DataCompleteness(flawed: 2, invalidUsage: 1, undated: 3,
                                                                                 malformed: 4))))
-        #expect(all.detail.contains("8 records couldn't be read: 4 aren't valid JSON, 3 have no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize."))
+        #expect(all.detail.contains("8 records couldn't be read, counting identical lines once: 4 aren't valid JSON, 3 have no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize."))
         #expect(all.detail.contains("2 messages had a token count that isn't a valid number"))
         #expect(all.detail.contains("7 of the unread records have no date, so they may belong to any period"))
         let one = try #require(CompletenessText.note(summary(DataCompleteness(invalidUsage: 1))))
-        #expect(one.detail.contains("1 record couldn't be read: 1 has usage in a form") && !one.detail.contains("any period"))
+        #expect(one.detail.contains("1 record couldn't be read, counting identical lines once: 1 has usage in a form") && !one.detail.contains("any period"))
         let flawed = try #require(CompletenessText.note(summary(DataCompleteness(flawed: 1))))
-        #expect(flawed.detail.contains("1 message had a token count") && !flawed.detail.contains("couldn't be read:"))
+        #expect(flawed.detail.contains("1 message had a token count") && !flawed.detail.contains("couldn't be read, counting"))
     }
 
     /// Completeness, identity and cost are three questions; no note stands in for another.

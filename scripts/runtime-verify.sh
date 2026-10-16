@@ -253,11 +253,13 @@ cmd_completeness() {
         printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_flaw","message":{"id":"msg_rvid%s_flaw",%s,"usage":{"input_tokens":10,"output_tokens":"x"}}}\n' "$ts" "$tok" "$tok" "$m"
         # Valid, written with a space after "usage": 30 tokens.
         printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_space","message":{"id":"msg_rvid%s_space",%s,"usage": {"input_tokens":10,"output_tokens":20}}}\n' "$ts" "$tok" "$tok" "$m"
+        # A cache-write total of 10 with a breakdown of 20 + 10 (P9): 10 tier-unresolved, 20 disputed; 32 tokens.
+        printf '{"type":"assistant","timestamp":"%s","requestId":"req_rvid%s_p9","message":{"id":"msg_rvid%s_p9",%s,"usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":10}}}}\n' "$ts" "$tok" "$tok" "$m"
         # A user record carrying usage: ignored, not unread.
         printf '{"type":"user","timestamp":"%s","toolUseResult":{"usage":{"input_tokens":999}},"message":{"role":"user","content":"x"}}\n' "$ts"
     } > "$f"
-    record "completeness: 6 lines (1 malformed, 1 undated, 1 invalid usage, 1 flawed, 1 spaced, 1 user record), 40 tokens"
-    record "expected: totals grow by 40 claude-sonnet-4-5 tokens and 2 identified groups; the Token usage card shows \"Some usage records couldn't be read. Totals may be incomplete.\" above any identity note; its help and VoiceOver label start \"In Claude Code's logs for the last 30 days, 3 records couldn't be read: 1 isn't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 2 of the unread records have no date, so they may belong to any period.\""
+    record "completeness: 7 lines (1 malformed, 1 undated, 1 invalid usage, 1 flawed, 1 spaced, 1 cache-write conflict, 1 user record), 72 tokens"
+    record "expected: totals grow by 72 claude-sonnet-4-5 tokens and 3 identified groups; the Token usage card shows \"Some usage records couldn't be read. Totals may be incomplete.\", then \"Some token counts are provisional. Totals may be over- or understated.\" (detail: \"20 cache-write tokens are counted provisionally\"), then any identity note; the cost note under the chart names \"cache writes of uncertain tier or amount for claude-sonnet-4-5\"; its help and VoiceOver label start \"In Claude Code's logs for the last 30 days, 3 records couldn't be read, counting identical lines once: 1 isn't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 2 of the unread records have no date, so they may belong to any period.\""
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -288,6 +290,11 @@ function run(argv) {
     out.push('unread: ' + unread.length + ' entries, all 32-hex ids: ' + unread.every(x => hex32.test(x)) + ', kinds: '
         + (Object.keys(byKind).sort().map(k => k + '=' + byKind[k]).join(' ') || 'none'));
     out.push('flawed groups: ' + Object.values(c.flawed || {}).reduce((a, n) => a + Number(n), 0));
+    let unresolved = 0, disputed = 0;
+    for (const h of Object.values(c.hours || {})) for (const a of Object.values(h)) {
+        unresolved += Number(a.cacheWriteUnresolved || 0); disputed += Number(a.cacheWriteDisputed || 0);
+    }
+    out.push('cache-write tokens: tier-unresolved=' + unresolved + ' disputed=' + disputed);
     out.push('keyCheck is 32-hex: ' + hex32.test(String(c.keyCheck)));
     out.push('contains "/": ' + text.includes('/'));
     for (const t of canaries) out.push('contains canary ' + t.split('=')[0] + ': ' + text.includes(t.split('=')[1]));

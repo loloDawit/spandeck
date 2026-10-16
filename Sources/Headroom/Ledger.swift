@@ -15,22 +15,39 @@ struct Agg: Codable {
     /// Grok only: tokens of merged turns that reported no cost (R7). Optional so ledger caches written before it still
     /// decode; never set for Claude, whose missing costs come from the price table at summary time.
     var uncostedTokens: Int?
+    /// P9 (#58), Claude only: cache-write tokens whose 5-minute/1-hour tier is unknown, because the breakdown doesn't
+    /// match the flat total or can't be read. The flat total is the quantity; the cost is a minimum at the cheaper
+    /// tier's rate. Optional (and saved only when set) so ordinary buckets stay small.
+    var cacheWriteUnresolved: Int?
+    /// P9 (#58), Claude only: cache-write tokens the breakdown reports beyond the flat total. Counted provisionally
+    /// (the larger source wins) with an unknown cost; neither a verified count nor a lower bound.
+    var cacheWriteDisputed: Int?
 
+    var unresolved: Int { cacheWriteUnresolved ?? 0 }
+    var disputed: Int { cacheWriteDisputed ?? 0 }
+    /// Tokens whose tier is known: what the price table prices exactly.
+    var resolved: Int { [output, cacheWrite5m, cacheWrite1h, cacheRead].reduce(input) { $0.saturatingAdd($1) } }
     /// Saturating, like `add`: counters are validated below 2^53 (#58), but enough of them must still not trap.
-    var total: Int { [output, cacheWrite5m, cacheWrite1h, cacheRead].reduce(input) { $0.saturatingAdd($1) } }
+    var total: Int { resolved.saturatingAdd(unresolved).saturatingAdd(disputed) }
     /// A counter or the total was held at `Int.max`, so the true value is unknown (#58).
-    var isSaturated: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, total].contains(.max) }
+    var isSaturated: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, unresolved, disputed, total].contains(.max) }
+
+    private static func optional(_ n: Int) -> Int? { n == 0 ? nil : n }
 
     /// Field-wise growth from `old` to self (never negative); used when a streamed message is logged again.
     func growth(from old: Agg) -> Agg {
         Agg(input: max(input - old.input, 0), output: max(output - old.output, 0),
             cacheWrite5m: max(cacheWrite5m - old.cacheWrite5m, 0), cacheWrite1h: max(cacheWrite1h - old.cacheWrite1h, 0),
-            cacheRead: max(cacheRead - old.cacheRead, 0), calls: 0)
+            cacheRead: max(cacheRead - old.cacheRead, 0), calls: 0,
+            cacheWriteUnresolved: Self.optional(max(unresolved - old.unresolved, 0)),
+            cacheWriteDisputed: Self.optional(max(disputed - old.disputed, 0)))
     }
 
     func maxed(with o: Agg) -> Agg {
         Agg(input: max(input, o.input), output: max(output, o.output), cacheWrite5m: max(cacheWrite5m, o.cacheWrite5m),
-            cacheWrite1h: max(cacheWrite1h, o.cacheWrite1h), cacheRead: max(cacheRead, o.cacheRead), calls: max(calls, o.calls))
+            cacheWrite1h: max(cacheWrite1h, o.cacheWrite1h), cacheRead: max(cacheRead, o.cacheRead), calls: max(calls, o.calls),
+            cacheWriteUnresolved: Self.optional(max(unresolved, o.unresolved)),
+            cacheWriteDisputed: Self.optional(max(disputed, o.disputed)))
     }
 
     mutating func add(_ o: Agg) {
@@ -38,6 +55,17 @@ struct Agg: Codable {
         cacheWrite5m = cacheWrite5m.saturatingAdd(o.cacheWrite5m); cacheWrite1h = cacheWrite1h.saturatingAdd(o.cacheWrite1h)
         cacheRead = cacheRead.saturatingAdd(o.cacheRead); calls += o.calls
         if let t = o.costTicks { costTicks = (costTicks ?? 0) + t }
+        if o.unresolved != 0 { cacheWriteUnresolved = unresolved.saturatingAdd(o.unresolved) }
+        if o.disputed != 0 { cacheWriteDisputed = disputed.saturatingAdd(o.disputed) }
+    }
+
+    /// Takes back `o`, which was added before. Only for sums that aren't held (`isSaturated`).
+    mutating func subtract(_ o: Agg) {
+        input -= o.input; output -= o.output
+        cacheWrite5m -= o.cacheWrite5m; cacheWrite1h -= o.cacheWrite1h
+        cacheRead -= o.cacheRead; calls -= o.calls
+        cacheWriteUnresolved = Self.optional(unresolved - o.unresolved)
+        cacheWriteDisputed = Self.optional(disputed - o.disputed)
     }
 }
 
@@ -64,21 +92,33 @@ struct CostEstimate: Equatable, Sendable {
 
     var known = 0.0
     var knownTokens = 0
+    /// Tokens without a price (Claude) or a reported cost (Grok).
     var unknownTokens = 0
+    /// P9 (#58): the least the tier-unresolved cache writes can cost, at the cheaper tier's list price. A lower bound,
+    /// kept apart from `known`, which is exact at list prices.
+    var minimum = 0.0
+    var minimumTokens = 0
+    /// P9 (#58): provisional cache-write tokens beyond the flat total. Their cost is unknown, and no bound is claimed.
+    var disputedTokens = 0
 
     static let zero = CostEstimate()
 
     var coverage: Coverage {
-        if unknownTokens == 0 { return .complete }
-        return knownTokens == 0 && known == 0 ? .unavailable : .partial
+        if unknownTokens == 0 && minimumTokens == 0 && disputedTokens == 0 { return .complete }
+        return knownTokens == 0 && known == 0 && minimumTokens == 0 ? .unavailable : .partial
     }
 
     /// The amount when complete; nil when any of it is unknown.
     var value: Double? { coverage == .complete ? known : nil }
+    /// What the cost is at least: the exact part plus the minimum for tier-unresolved writes. With disputed or unpriced
+    /// tokens the true cost may be higher; never lower, assuming the flat cache-write totals are right.
+    var lowerBound: Double { known + minimum }
 
     static func + (a: CostEstimate, b: CostEstimate) -> CostEstimate {
         CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens.saturatingAdd(b.knownTokens),
-                     unknownTokens: a.unknownTokens.saturatingAdd(b.unknownTokens))
+                     unknownTokens: a.unknownTokens.saturatingAdd(b.unknownTokens), minimum: a.minimum + b.minimum,
+                     minimumTokens: a.minimumTokens.saturatingAdd(b.minimumTokens),
+                     disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens))
     }
 
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
@@ -171,14 +211,31 @@ struct DataCompleteness: Decodable, Equatable, Sendable {
 }
 
 /// Whether token quantities are exact (#58), independent of identity, completeness and cost coverage. Claude only.
-struct QuantityUncertainty: Equatable, Sendable {
+struct QuantityUncertainty: Decodable, Equatable, Sendable {
+    /// P9: cache-write tokens counted provisionally because a breakdown exceeds its flat total. The true amount may be
+    /// lower or higher.
+    var disputedTokens = 0
     /// A sum exceeded `Int.max` and was held there: the total shown is less than the true one.
     var saturated = false
 
-    var isExact: Bool { !saturated }
+    var isExact: Bool { disputedTokens == 0 && !saturated }
+
+    init(disputedTokens: Int = 0, saturated: Bool = false) {
+        self.disputedTokens = disputedTokens; self.saturated = saturated
+    }
+
+    /// Fields left out are 0 or false, so a fixture names only what it expects.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(disputedTokens: try c.decodeIfPresent(Int.self, forKey: .disputedTokens) ?? 0,
+                  saturated: try c.decodeIfPresent(Bool.self, forKey: .saturated) ?? false)
+    }
+
+    private enum CodingKeys: String, CodingKey { case disputedTokens, saturated }
 
     static func + (a: QuantityUncertainty, b: QuantityUncertainty) -> QuantityUncertainty {
-        QuantityUncertainty(saturated: a.saturated || b.saturated)
+        QuantityUncertainty(disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens),
+                            saturated: a.saturated || b.saturated)
     }
 
     static func += (a: inout QuantityUncertainty, b: QuantityUncertainty) { a = a + b }
@@ -252,14 +309,19 @@ extension UsageSummary {
 
 extension UsageSummary {
     /// Models whose cost isn't fully known in the 30 days (R7), for the explanation under the totals.
-    var uncostedModels: [String] { models.filter { $0.cost.coverage != .complete }.map(\.model).sorted() }
+    var uncostedModels: [String] { models.filter { $0.cost.unknownTokens > 0 }.map(\.model).sorted() }
+
+    /// Priced models whose cache writes have an unknown tier or a disputed amount (P9, #58).
+    var uncertainCacheModels: [String] {
+        models.filter { $0.cost.minimumTokens > 0 || $0.cost.disputedTokens > 0 }.map(\.model).sorted()
+    }
 
     /// Days whose cost isn't fully known, with the known part, so the chart can mark them instead of drawing what
     /// looks like a complete (or zero) cost.
     var incompleteCostDays: [(day: Date, known: Double)] {
         var days: [Date: CostEstimate] = [:]
         for b in bars { days[b.day, default: .zero] += b.cost }
-        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value.known) }.sorted { $0.day < $1.day }
+        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value.lowerBound) }.sorted { $0.day < $1.day }
     }
 }
 
@@ -470,14 +532,17 @@ final class Pricing: @unchecked Sendable {
             return CostEstimate(known: Double(ticks) / 1e10, knownTokens: a.total - unknown, unknownTokens: unknown)
         }
         if a.uncostedTokens != nil { return CostEstimate(unknownTokens: a.total) } // Grok, no turn reported a cost
-        guard let c = listCost(model: model, a) else { return CostEstimate(unknownTokens: a.total) }
-        return CostEstimate(known: c, knownTokens: a.total)
+        guard let (c, p) = listCost(model: model, a) else { return CostEstimate(unknownTokens: a.total) }
+        // P9: unresolved writes cost at least the cheaper tier's rate; disputed ones aren't priced at all.
+        return CostEstimate(known: c, knownTokens: a.resolved, minimum: Double(a.unresolved) * min(p.cacheWrite, p.cacheWrite1h),
+                            minimumTokens: a.unresolved, disputedTokens: a.disputed)
     }
 
     /// The cost if fully known, else nil.
     func cost(model: String, _ a: Agg) -> Double? { estimate(model: model, a).value }
 
-    private func listCost(model: String, _ a: Agg) -> Double? {
+    /// The exact list cost of `a`'s resolved tokens, and the price used; nil without a price.
+    private func listCost(model: String, _ a: Agg) -> (Double, Price)? {
         let p: Price? = lock.withLock {
             if let hit = resolved[model] { return hit }
             var p = table[model]
@@ -487,8 +552,8 @@ final class Pricing: @unchecked Sendable {
             return p
         }
         guard let p else { return nil }
-        return Double(a.input) * p.input + Double(a.output) * p.output + Double(a.cacheWrite5m) * p.cacheWrite
-            + Double(a.cacheWrite1h) * p.cacheWrite1h + Double(a.cacheRead) * p.cacheRead
+        return (Double(a.input) * p.input + Double(a.output) * p.output + Double(a.cacheWrite5m) * p.cacheWrite
+            + Double(a.cacheWrite1h) * p.cacheWrite1h + Double(a.cacheRead) * p.cacheRead, p)
     }
 }
 
@@ -995,9 +1060,7 @@ final class Ledger {
                 state.hours[s.hour]![m] = b.calls == 0 && b.total == 0 ? nil : b
                 continue
             }
-            b.input -= a.input; b.output -= a.output
-            b.cacheWrite5m -= a.cacheWrite5m; b.cacheWrite1h -= a.cacheWrite1h
-            b.cacheRead -= a.cacheRead; b.calls -= a.calls
+            b.subtract(a)
             state.hours[s.hour]![m] = b.total == 0 && b.calls == 0 ? nil : b
         }
         if state.hours[s.hour]?.isEmpty == true { state.hours[s.hour] = nil }
@@ -1058,7 +1121,7 @@ final class Ledger {
             let cc = u.dict("cache_creation")
             return Self.fingerprintCounters.map { text(u[$0]) }
                 + ["cc:" + (cc == nil ? text(u["cache_creation"]) : "{}")]
-                + Self.fingerprintBreakdown.map { text(cc?[$0]) }
+                + Self.cacheTiers.map { text(cc?[$0]) }
         }
         // The instant as parsed (to the millisecond), not its spelling: "…:00Z", "…:00.000Z" and "…:00+00:00" are
         // one time.
@@ -1071,7 +1134,7 @@ final class Ledger {
 
     private static let fingerprintCounters = ["input_tokens", "output_tokens", "cache_creation_input_tokens",
                                               "cache_read_input_tokens"]
-    private static let fingerprintBreakdown = ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
+    private static let cacheTiers = ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
 
     /// A token counter as written (P8, #58).
     enum Counter: Equatable { case absent, value(Int), invalid }
@@ -1106,19 +1169,33 @@ final class Ledger {
     private static func agg(_ usage: [String: Any], _ r: inout CounterReader) -> Agg {
         var a = Agg(input: r.read(usage, "input_tokens") ?? 0, output: r.read(usage, "output_tokens") ?? 0,
                     cacheRead: r.read(usage, "cache_read_input_tokens") ?? 0, calls: 1)
-        let created = r.read(usage, "cache_creation_input_tokens")
+        let flat = r.read(usage, "cache_creation_input_tokens")
         switch usage["cache_creation"] {
-        case let cc as [String: Any]:
-            a.cacheWrite1h = r.read(cc, "ephemeral_1h_input_tokens") ?? 0
-            a.cacheWrite5m = r.read(cc, "ephemeral_5m_input_tokens") ?? 0
-            // P9 (unchanged by #58): fall back to the flat total when the breakdown doesn't add up to it. Without a
-            // valid flat total the breakdown is all there is.
-            if let created, a.cacheWrite1h + a.cacheWrite5m != created { a.cacheWrite5m = created; a.cacheWrite1h = 0 }
-        case nil, is NSNull:
-            a.cacheWrite5m = created ?? 0
+        case let cc as [String: Any] where Self.cacheTiers.contains(where: { Self.counter(cc[$0]) != .absent }):
+            let tierInvalid = Self.cacheTiers.contains { Self.counter(cc[$0]) == .invalid }
+            let t5 = r.read(cc, "ephemeral_5m_input_tokens") ?? 0, t1 = r.read(cc, "ephemeral_1h_input_tokens") ?? 0
+            let sum = t5 + t1
+            guard let flat else {
+                // P8: without a valid flat total the breakdown is all there is.
+                a.cacheWrite5m = t5; a.cacheWrite1h = t1
+                break
+            }
+            // P9 (decided on #58): matching sources give the tiers. Otherwise the flat total is the quantity and its
+            // tier is unknown (an invalid tier is never taken as matching), and what the breakdown reports beyond it
+            // is counted provisionally, unpriced.
+            if !tierInvalid && sum == flat {
+                a.cacheWrite5m = t5; a.cacheWrite1h = t1
+            } else {
+                a.cacheWriteUnresolved = flat == 0 ? nil : flat
+                if sum > flat { a.cacheWriteDisputed = sum - flat }
+            }
+        case nil, is NSNull, is [String: Any]:
+            // No breakdown (or one without tiers): the flat total is 5-minute writes, as before.
+            a.cacheWrite5m = flat ?? 0
         default:
+            // A breakdown that can't be read: the flat total's tier is unknown.
             r.flawed = true
-            a.cacheWrite5m = created ?? 0
+            if let flat, flat > 0 { a.cacheWriteUnresolved = flat }
         }
         return a
     }
@@ -1238,10 +1315,13 @@ final class Ledger {
                 let c = pricing.estimate(model: model, a)
                 let t = a.total
                 let held = a.isSaturated
-                s.month.addTokens(t, saturated: held); s.month.cost += c
-                if date >= weekStart { s.week.addTokens(t, saturated: held); s.week.cost += c }
-                if date >= today { s.today.addTokens(t, saturated: held); s.today.cost += c }
-                if let wh = windowHour, hour >= wh { s.window!.addTokens(t, saturated: held); s.window!.cost += c }
+                let q = QuantityUncertainty(disputedTokens: a.disputed)
+                s.month.addTokens(t, saturated: held); s.month.cost += c; s.month.quantity += q
+                if date >= weekStart { s.week.addTokens(t, saturated: held); s.week.cost += c; s.week.quantity += q }
+                if date >= today { s.today.addTokens(t, saturated: held); s.today.cost += c; s.today.quantity += q }
+                if let wh = windowHour, hour >= wh {
+                    s.window!.addTokens(t, saturated: held); s.window!.cost += c; s.window!.quantity += q
+                }
 
                 let family = modelFamily(model)
                 let key = "\(day.timeIntervalSince1970)-\(family)"
