@@ -1,0 +1,19 @@
+{
+  "title": "A transcript rewritten shorter (compaction), then appended",
+  "matrix": ["file truncation", "cache reload, reindexing"],
+  "classification": "pass",
+  "policy": "P12: usage already counted stays counted when a transcript is rewritten or deleted. A rebuild of the cache can only count what is still on disk, so it drops A and B: totals after a rebuild can be lower than before it.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 5, "duplicates": 1,
+  "derivation": "A [100, 50], B [200, 20], C [300, 30] = 700. The file is rewritten as C only: still 700. D [5, 5] appended: 710, 4 operations. A fresh index of the final file (C D): [305, 35] = 340, 2 operations.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "abc.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [600, 100, 0, 0, 0, 3]}}, "operations": 3, "month": 700}},
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "c.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [600, 100, 0, 0, 0, 3]}}, "operations": 3, "month": 700}},
+    {"ops": [{"op": "append", "path": "-synthetic-p1/s1.jsonl", "from": "d.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [605, 105, 0, 0, 0, 4]}}, "operations": 4, "month": 710}}
+  ],
+  "rebuild": {"expect": {"hours": {"2026-03-10T16": {"claude-test-1": [305, 35, 0, 0, 0, 2]}}, "operations": 2, "month": 340}}
+}

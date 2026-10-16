@@ -1,0 +1,16 @@
+{
+  "title": "Streaming updates that cross an hour and a local midnight",
+  "matrix": ["streaming: shifted timestamps", "hourly and daily totals"],
+  "classification": "pass",
+  "policy": "P3: an operation belongs to the hour of its first record; later growth is added there.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4, "duplicates": 2,
+  "derivation": "msg_03a: 15:59:58Z then 16:00:03Z, output 50 -> 90: [100, 90] in hour 15 UTC (Mar 10 08 PDT). msg_03b: 06:59:59Z (Mar 9 23:59:59 PDT) then 07:00:02Z (Mar 10 00:00:02 PDT), output 5 -> 25: [10, 25] in hour 06 UTC, which starts Mar 9 23:00 PDT, so Mar 9. Mar 9 = 35, Mar 10 = 190; today 190; week and month 225.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T15": {"claude-test-1": [100, 90, 0, 0, 0, 1]},
+                          "2026-03-10T06": {"claude-test-1": [10, 25, 0, 0, 0, 1]}},
+                "operations": 2, "days": {"2026-03-09": 35, "2026-03-10": 190}, "today": 190, "week": 225, "month": 225}}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "title": "A negative counter, a cache breakdown without its total, and a space after \"usage\":",
+  "matrix": ["invalid UTF-8 and malformed JSON", "input, output, cache-read and cache-write breakdowns"],
+  "classification": "defect",
+  "followUp": "#58",
+  "policy": "P8: a negative or non-numeric counter is invalid and never subtracts; a cache-write breakdown is used when the flat total is absent; valid JSON is read whatever its whitespace.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3, "duplicates": 0,
+  "derivation": "msg_10a [100, 50] with cache read -1000 -> [100, 50, 0, 0, 0]. msg_10c [10, 1] with 5m 200 and 1h 100 and no cache_creation_input_tokens -> 5m 200, 1h 100. msg_10d [30, 3] written as \"usage\": { -> counted. Expected [140, 54, 200, 100, 0, 3] = 494. Today: the -1000 is added, the breakdown is dropped (0 != 300) and msg_10d is skipped by the byte pre-filter: [110, 51, 0, 0, -1000, 2] = -839.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [140, 54, 200, 100, 0, 3]}}, "operations": 3, "month": 494},
+     "baseline": {"hours": {"2026-03-10T16": {"claude-test-1": [110, 51, 0, 0, -1000, 2]}}, "operations": 2, "month": -839}}
+  ]
+}

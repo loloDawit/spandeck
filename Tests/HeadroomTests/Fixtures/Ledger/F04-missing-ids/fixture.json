@@ -1,0 +1,16 @@
+{
+  "title": "Repeated records with a missing request id or message id",
+  "matrix": ["missing request ids", "streaming: increasing counters"],
+  "classification": "defect",
+  "followUp": "#55",
+  "policy": "P4: when one id is missing, the other alone identifies the operation (a request id is unique per API request, a message id per response). Records with neither can't be deduplicated and are counted every time, but they are ambiguous and should be reported as such.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 6, "duplicates": 3,
+  "derivation": "msg_04a without request id, output 50/80/120: one operation [100, 120]. req_04b without message id, output 10/20: one operation [5, 20]. One record with neither: [7, 3]. Expected [112, 143], 3 operations, 255 tokens. Today every repeat is counted in full: input 3x100 + 2x5 + 7 = 317, output 50+80+120 + 10+20 + 3 = 283, 6 calls, 600 tokens.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [112, 143, 0, 0, 0, 3]}}, "operations": 3, "month": 255},
+     "baseline": {"hours": {"2026-03-10T16": {"claude-test-1": [317, 283, 0, 0, 0, 6]}}, "operations": 6, "month": 600}}
+  ]
+}

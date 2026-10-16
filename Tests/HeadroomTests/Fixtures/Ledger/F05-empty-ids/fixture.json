@@ -1,0 +1,17 @@
+{
+  "title": "Two different operations whose ids are empty strings",
+  "matrix": ["inconsistent request ids"],
+  "classification": "defect",
+  "followUp": "#55",
+  "policy": "P4: an empty id is a missing id, not an identity shared by every record that has one.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 2, "duplicates": 0,
+  "derivation": "16:20Z [100, 50] and 17:20Z [100, 70] are separate operations: 320 tokens in two hours. Today both share the key of id \"\" + request \"\": the second only adds its output growth (+20) to the first's hour, giving [100, 70] in hour 16 and 170 tokens.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 50, 0, 0, 0, 1]},
+                          "2026-03-10T17": {"claude-test-1": [100, 70, 0, 0, 0, 1]}}, "operations": 2, "month": 320},
+     "baseline": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 70, 0, 0, 0, 1]}}, "operations": 1, "month": 170}}
+  ]
+}

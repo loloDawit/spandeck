@@ -1,0 +1,16 @@
+{
+  "title": "A partial last line completed later, then one that never completes",
+  "matrix": ["incomplete JSONL lines and later completion"],
+  "classification": "pass",
+  "policy": "P6: a line counts once its newline is written. A final line that never gets one (a writer that crashed) is never counted; whether to count a complete JSON object without a newline is a policy question.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3, "duplicates": 0,
+  "derivation": "Step 1: A [100, 50] and the first half of B: 150. Step 2: the rest of B [60, 6] and half of C: 216, 2 operations. C is never complete.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "step1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [100, 50, 0, 0, 0, 1]}}, "operations": 1, "month": 150}},
+    {"ops": [{"op": "append", "path": "-synthetic-p1/s1.jsonl", "from": "step2.jsonl"}],
+     "expect": {"hours": {"2026-03-10T16": {"claude-test-1": [160, 56, 0, 0, 0, 2]}}, "operations": 2, "month": 216}}
+  ]
+}

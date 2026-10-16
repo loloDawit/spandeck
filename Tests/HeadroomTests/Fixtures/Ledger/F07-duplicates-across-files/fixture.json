@@ -1,0 +1,21 @@
+{
+  "title": "The same records in a resumed session, a fork in another project and a subagent file",
+  "matrix": ["duplicates across files, resumed sessions and forks"],
+  "classification": "pass",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 9, "duplicates": 5,
+  "derivation": "Unique: A [100, 50] 14:00Z, B [200, 20] 14:30Z, C [300, 30] 15:10Z, D (claude-test-2) [40, 4] 14:40Z. s1 = A B (370); the resumed s2 = A B C adds C (700); the fork = A C and the subagent file = D A add only D (744). 4 operations.",
+  "steps": [
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s1.jsonl", "from": "s1.jsonl"}],
+     "expect": {"hours": {"2026-03-10T14": {"claude-test-1": [300, 70, 0, 0, 0, 2]}}, "operations": 2, "month": 370}},
+    {"ops": [{"op": "write", "path": "-synthetic-p1/s2.jsonl", "from": "s2.jsonl"}],
+     "expect": {"hours": {"2026-03-10T14": {"claude-test-1": [300, 70, 0, 0, 0, 2]},
+                          "2026-03-10T15": {"claude-test-1": [300, 30, 0, 0, 0, 1]}}, "operations": 3, "month": 700}},
+    {"ops": [{"op": "write", "path": "-synthetic-p2/fork.jsonl", "from": "fork.jsonl"},
+             {"op": "write", "path": "-synthetic-p1/s1/subagents/agent-1.jsonl", "from": "agent.jsonl"}],
+     "expect": {"hours": {"2026-03-10T14": {"claude-test-1": [300, 70, 0, 0, 0, 2], "claude-test-2": [40, 4, 0, 0, 0, 1]},
+                          "2026-03-10T15": {"claude-test-1": [300, 30, 0, 0, 0, 1]}}, "operations": 4,
+                "days": {"2026-03-10": 744}, "month": 744}}
+  ]
+}

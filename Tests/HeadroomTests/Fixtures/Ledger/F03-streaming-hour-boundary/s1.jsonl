@@ -1,0 +1,4 @@
+{"type":"assistant","timestamp":"2026-03-10T15:59:58Z","requestId":"req_03a","message":{"id":"msg_03a","model":"claude-test-1","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-03-10T16:00:03Z","requestId":"req_03a","message":{"id":"msg_03a","model":"claude-test-1","usage":{"input_tokens":100,"output_tokens":90,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-03-10T06:59:59Z","requestId":"req_03b","message":{"id":"msg_03b","model":"claude-test-1","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-03-10T07:00:02Z","requestId":"req_03b","message":{"id":"msg_03b","model":"claude-test-1","usage":{"input_tokens":10,"output_tokens":25,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
