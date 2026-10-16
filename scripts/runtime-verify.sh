@@ -9,6 +9,7 @@
 #   In the dedicated test account, in this order:
 #     scripts/runtime-verify.sh preflight        safety gate; refuses to continue in an unsafe account
 #     scripts/runtime-verify.sh fixtures [N]     synthetic transcripts with canaries (+ N extra files for timing)
+#     scripts/runtime-verify.sh identity         after fixtures: add records with one id or none (#55 identity note)
 #     scripts/runtime-verify.sh capture LABEL    record files, modes, preferences, assertions, canary hits
 #     scripts/runtime-verify.sh launch SECONDS [LABEL]  launch the app normally; watch processes, sockets, logs
 #     scripts/runtime-verify.sh quit             wait for you to quit the app from its menu
@@ -206,6 +207,29 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------------------------
+# #55: one more synthetic session whose records lack ids, so the "Usage may be approximate" note has to appear.
+cmd_identity() {
+    gate
+    local run; run=$(run_dir)
+    [ -f "$run/canaries.txt" ] || die "run fixtures first"
+    local tok; tok=$(sed -n 's/^id=rvid//p' "$run/canaries.txt")
+    local dir="$HOME/.claude/projects/-Users-$RV_USER-rvpath$tok"
+    [ -d "$dir" ] && [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ] || die "fixture folder missing"
+    local f="$dir/rvid$tok-identity.jsonl" ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    local u='"usage":{"input_tokens":10,"output_tokens":%d,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}'
+    {
+        # Message id only, streamed twice: one group, incomplete.
+        for out in 5 20; do printf '{"type":"assistant","message":{"id":"msg_rvid%s_only","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" "$out" "$ts"; done
+        # Request id only, with an empty message id: one group, incomplete.
+        printf '{"type":"assistant","requestId":"req_rvid%s_only","message":{"id":"","model":"claude-sonnet-4-5",'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"
+        # Neither id, written twice identically: one group, fingerprinted.
+        for k in 1 2; do printf '{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"; done
+    } > "$f"
+    record "identity: 5 records without both ids (3 groups: 2 by one id, 1 fingerprinted), 90 tokens"
+    record "expected: totals grow by 90 claude-sonnet-4-5 tokens; the Token usage card shows \"Usage may be approximate: some records lack identifiers.\"; its help and VoiceOver label start \"Of 24 logged messages from Claude in the last 30 days, 3 were told apart without both a message id and a request id: 2 by one id, 1 with no id\" (21 identified groups from fixtures without timing sessions; add 1001 per timing session)"
+}
+
+# ---------------------------------------------------------------------------------------------------------------
 # Summarizes the usage cache without printing any id, path or value other than counts and the schema version.
 inspect_cache() {
     osascript -l JavaScript - "$1" "$2" <<'JS'
@@ -218,10 +242,15 @@ function run(argv) {
     out.push('top-level keys: ' + Object.keys(c).sort().join(','));
     out.push('version: ' + c.version);
     const hex32 = /^[0-9a-f]{32}$/;
-    for (const k of ['files', 'seen']) {
+    for (const k of ['files', 'seen', 'links']) {
         const keys = Object.keys(c[k] || {});
         out.push(k + ': ' + keys.length + ' entries, all 32-hex ids: ' + keys.every(x => hex32.test(x)));
     }
+    const targets = Object.values(c.links || {}).map(l => String(l.target));
+    out.push('links: all targets 32-hex or "ambiguous": ' + targets.every(t => hex32.test(t) || t === 'ambiguous'));
+    const kinds = { identified: 0, incomplete: 0, fingerprinted: 0, ambiguous: 0 };
+    for (const h of Object.values(c.identity || {})) for (const k in kinds) kinds[k] += Number(h[k] || 0);
+    out.push('identity groups: ' + Object.keys(kinds).map(k => k + '=' + kinds[k]).join(' '));
     out.push('keyCheck is 32-hex: ' + hex32.test(String(c.keyCheck)));
     out.push('contains "/": ' + text.includes('/'));
     for (const t of canaries) out.push('contains canary ' + t.split('=')[0] + ': ' + text.includes(t.split('=')[1]));
@@ -411,6 +440,6 @@ cmd_clean() {
 }
 
 case "${1:-}" in
-stage|preflight|fixtures|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
+stage|preflight|fixtures|identity|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
 *) sed -n '2,20p' "$0"; exit 64 ;;
 esac
