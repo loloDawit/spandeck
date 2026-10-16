@@ -221,7 +221,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 | V3 Grok credential and CLI | **Not verified** (the CLI can't run) | No `grok` binary exists in the account, so `grok models` couldn't run. Grok consent stayed off ("Set up Grok credits…" in Settings). An `auth.json` read isn't observable (§9). |
 | V4 Network | **Pass, with limits** [runtime] | `lsof -i` at 1 Hz showed 0 sockets in 4 launches (570 s in total). `nettop` showed no rows. 0 network log events. Consistent with the code even after consent: with no credential, no request is sent. Short connections between samples can't be excluded (§9). |
 | V5 Pricing | **Pass** [runtime] | No `pricing-source.json` in any capture. Settings shows "LiteLLM 4d52918 · built in". No network (V4). |
-| V6 Login item at launch | **Owner to confirm** | Absent before launch (preflight). Listed at 05:23:46, after the owner turned it on (V15). No observation was recorded between the first launch and the toggle (§8.3). |
+| V6 Login item at launch | **Pass** [runtime, owner observation] | Absent before launch (preflight). The owner confirmed it was still absent after the earlier launches, before they turned it on (V15). The app log recorded no ServiceManagement event, but that's not evidence either way (§8.2). |
 | V7 Preferences | **Pass for default launch** [runtime]; consent change pending confirmation | Domain absent before launch. The 05:11:56 screenshot, about 70 s after launch, shows "Plan limits are off". By 05:15:38 Settings shows "Turn off Claude plan limits", and `claude.limits.enabled = 1` from 05:16:46 on (§8.2). Also `usage.metric` (the Cost/Tokens switch). |
 | V8 Files written | **Pass** [runtime] | The app wrote:<br>• `~/Library/Application Support/Headroom/` (`drwx------`) with `claude-ledger.json` and `claude-ledger.key` (`-rw-------`);<br>• `~/Library/Preferences/dev.headroom.Headroom.plist`;<br>• the per-user Metal shader cache `…/C/dev.headroom.Headroom/com.apple.metal/…`, written by system graphics frameworks for the process.<br>The other changed files belong to macOS services, Chrome, Warp and Docker in the test account. |
 | V9 Background work | **Pass for power assertions** [runtime]; subprocesses **not verified** | No Headroom power assertion in any capture. Subprocess absence can't be shown (V2). |
@@ -230,7 +230,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 | V12 Temporary files | **Pass** [runtime] | No `.claude-ledger.*.tmp-*` after quit. |
 | V13 Clear cached usage | **Partly verified** [runtime] | The confirmation text names only the cache and key, and says transcripts, credentials, prices and consent are kept. After confirming: "Cached usage data cleared. Totals are being rebuilt". The rebuild took about 6 s at 55–97 % CPU, and totals were unchanged. A new key and byte-identical transcripts depend on the owner's `shasum` comparison (§8.3). |
 | V14 "Off" persists | **Not verified** | Consent was on before the relaunch, so this tested the reverse: **consent on persisted** across the relaunch (`claude.limits.enabled = 1` at 05:22:35). Needs a rerun with consent never enabled. |
-| V15 Login item opt-in | **On: pass** [runtime]; **off: owner to confirm** | After Settings ▸ Launch at login, "Headroom — Application" is listed under Open at Login (05:23:46). No notification was reported. The app log recorded no ServiceManagement event. Removal wasn't captured (§8.3). |
+| V15 Login item opt-in | **Pass** [runtime, owner observation] | After Settings ▸ Launch at login, macOS showed a notification and listed "Headroom — Application" under Open at Login (screenshot 05:23:46). Turning the toggle off removed it. |
 | V16 Consent-enabled paths | **Not verified** (by design) | — |
 | V17 `--snapshot`, release | **Pass** [runtime] | Exit 64; 0 files; no process left running; Application Support still absent. |
 | V18 `--snapshot`, debug | **Pass, except the visual check** [runtime] | Exit 0; `popover.png`, `strip-dark.png`, `strip-light.png`; no process left running; Application Support still absent. The owner's visual check of `popover.png` for fixture data is pending (§8.3). |
@@ -241,8 +241,9 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 1. **Claude consent turned on during the main launch, between 05:11:56 and 05:15:38.**
    - The default launch left it off: the 05:11:56 screenshot shows "Plan limits are off" with the "Enable Claude plan limits" button, about 70 s after launch.
-   - The value can only be set through `setClaudeLimitsEnabled`, which the consent card and Settings call. Treated as an owner action, pending confirmation (§8.3).
-   - **This is not a defect unless the owner didn't turn it on.** If they didn't, it would be a P0 consent defect and must be filed and reproduced first.
+   - **The owner isn't sure whether they clicked "Enable Claude plan limits".** The cause is therefore **unresolved**.
+   - [code] The only place that stores `true` is `ProviderServices.setClaudeLimitsEnabled(true)`. It's reached only from the consent card's "Enable Claude plan limits" button (`PopoverView.swift:541`, no keyboard shortcut). Settings can only turn consent off, and nothing at launch or on a timer writes it.
+   - **An accidental click is the likely explanation, but that comes from the code, not from the run.** No defect is filed. The rerun (§10) leaves the popover's consent card untouched and captures the value at fixed times, which settles it. A `true` value without a click would be a P0 consent defect.
 2. **The monitor's zero counts aren't evidence of absence.** With consent on and no Keychain item, the code [code: `ProviderServices.refreshClaude`, `ClaudeLimitsClient.credentials`, `KeychainCredentialStore`] runs `/usr/bin/security` when consent is given and every 60 s after. The UI's "No Claude Code or Grok account found" appears only after that read returned nothing. Yet:
    - `children.txt` (sampled every 0.1 s) recorded 0 processes in the main launch and 0 in the 120 s relaunch, where at least two runs were expected;
    - the `security` / `grok` log stream recorded nothing;
@@ -254,12 +255,8 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 ### 8.3 Owner input needed
 
-1. **Did you click "Enable Claude plan limits"** (or the Settings item) between about 10:12 and 10:15 PM? If not, stop and report it: that would be consent turning on without user action.
-2. **Login items:**
-   - Before you turned on Launch at login, was Headroom absent from Login Items (V6)?
-   - After you turned it off, did it disappear (V15)?
-
-   If it's still listed, remove it in System Settings.
+1. **Consent change:** the owner is unsure. Left unresolved until the rerun (§8.2).
+2. ~~**Login items** (V6, V15)~~: answered. It was absent before the toggle, a notification appeared on enabling, and it was removed on disabling.
 3. **V13 hashes:** do `key-before.txt` and `key-after.txt` in `~/spandeck-rv-evidence/` differ, and do `fixtures-before.txt` and `fixtures-after.txt` match? Just "same" or "different" for each; don't send the hashes.
 4. **V18 visual check:** does the debug `popover.png` (in the run's `snapshot-debug/` folder) show only built-in synthetic models, and not `claude-rvmodel…`?
 
@@ -276,7 +273,8 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 ## 10. What #3 still needs
 
 - [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
-- [ ] Owner input in §8.3, especially confirming the Claude consent change.
+- [ ] Owner input in §8.3: the V13 hash comparison and the V18 image check.
+- [ ] The consent change resolved by the rerun: no interaction with the consent card; `claude.limits.enabled` captured at fixed times and staying absent.
 - [ ] A monitor that sees every child process (and login-item registration), checked against a known positive. Then rerun V2, V3, V6, V9 and V14, without enabling consent.
 - [ ] Each confirmed defect filed as its own issue; none silently fixed.
 - [ ] Inventory §9 item "Default launch confirmed with reproducible runtime observations" updated from §8.
