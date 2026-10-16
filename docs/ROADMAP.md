@@ -13,7 +13,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 | Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
 | Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
 | Done | R11: SHA-pin actions, least `permissions`, signing / notarization plan, #37 | M0 | Done — PR #41 (`eca47fe`) | Workflow and doc change. Hardening check passes in hosted CI; nothing signed or notarized. |
-| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Open | Last unmet acceptance item of #3. Needs a supported Mac and a dedicated account. |
+| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | Procedure ready; **not run** | Last unmet acceptance item of #3. Matrix and procedure: [0003-runtime-verification.md](audits/0003-runtime-verification.md). Waiting on the owner to run it in the `spandecktest` account. |
 | Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
 | Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
 | Later | #4 capability matrix and integration lifecycle spec, #10 supported Claude surfaces | M0 | Open | Feed M1 integrations and M2 adapters. |
