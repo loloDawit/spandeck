@@ -277,7 +277,7 @@ Lookups are dictionary operations per record, with no scan of past identities.
   - F41 subtracts its negatives;
   - F36 traps.
 
-  Thirteen mutations of the fix (exact needle, negatives valid, no breakdown fallback, unread not deduplicated, flaws not sticky, flaws lost in an uncount or a join, pending never cleared, unread not pruned, timestamps checked before ignoring, no saturation, strict iterations) each fail at least one test.
+  Twelve mutations of the fix (exact needle, negatives valid, no breakdown fallback, unread not deduplicated, flaws not sticky, flaws lost in an uncount or a join, pending never cleared, unread not pruned, timestamps checked before ignoring, no saturation, strict iterations) each fail at least one test.
 
 ### 9.2 Limits that remain
 - **P9** is unchanged: a mismatched breakdown is still priced as 5-minute writes, and nothing says so.
