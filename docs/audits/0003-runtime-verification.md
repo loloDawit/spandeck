@@ -67,7 +67,7 @@ These expectations were read from `main` at `83a9af8`. A run tests whatever comm
 | No Claude Code Keychain item | `security find-generic-password -s "Claude Code-credentials"`: attribute lookup only, never `-w` |
 | No `~/.claude/.credentials.json`, `~/.grok/auth.json`, `~/.grok/bin/grok`, `~/.config/claude/projects` | file tests |
 | `~/.claude/projects` absent, or containing only this procedure's fixtures | marker file `.spandeck-rv-fixtures` |
-| No Headroom running or installed; no Application Support folder; no preferences for `dev.headroom.Headroom` | `pgrep`, file tests |
+| No Headroom running or installed; no Application Support folder; no preferences stored for `dev.headroom.Headroom` | `pgrep`, file tests, `defaults read` (an empty leftover plist is allowed) |
 | Headroom not in Login Items | owner looks at System Settings ▸ General ▸ Login Items & Extensions |
 | The build under test matches its manifest hash and carries no quarantine flag (no Gatekeeper bypass) | `shasum`, `xattr` |
 | No employer code, private transcripts or production tokens in the account | owner confirms; never sign in to Claude Code, Grok or work accounts there |

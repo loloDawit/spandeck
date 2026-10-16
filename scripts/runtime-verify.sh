@@ -129,6 +129,9 @@ cmd_preflight() {
         local want; want=$(awk '/^release sha256:/{print $3}' "$SHARED/$sha/manifest.txt")
         [ "$want" = "$(shasum -a 256 "$SHARED/$sha/Headroom.app/Contents/MacOS/Headroom" | cut -d' ' -f1)" ]
     }
+    # Whether any preference is stored, not whether the file exists: after `defaults delete`, cfprefsd can leave an
+    # empty plist behind.
+    no_prefs() { ! defaults read "$BUNDLE_ID" >/dev/null 2>&1; }
     not_quarantined() { ! xattr -r "$SHARED/$sha/Headroom.app" 2>/dev/null | grep -q com.apple.quarantine; }
 
     record "account $(id -un) uid $(id -u), home $HOME, groups: $(id -Gn)"
@@ -146,7 +149,7 @@ cmd_preflight() {
     check "no /Applications/Headroom.app" absent /Applications/Headroom.app
     check "no ~/Applications/Headroom.app" absent "$HOME/Applications/Headroom.app"
     check "fresh: no ~/Library/Application Support/Headroom" absent "$APP_SUPPORT"
-    check "fresh: no preferences for $BUNDLE_ID" absent "$HOME/Library/Preferences/$BUNDLE_ID.plist"
+    check "fresh: no preferences stored for $BUNDLE_ID" no_prefs
     check "staged app matches its manifest hash" manifest_ok
     check "staged app has no quarantine attribute (no Gatekeeper bypass needed)" not_quarantined
     echo
@@ -400,6 +403,8 @@ cmd_clean() {
     read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled"
     rm -rf "$APP_SUPPORT"
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+    # cfprefsd may keep an empty file; with the domain deleted, removing it is safe.
+    defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
     if [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ]; then rm -rf "$HOME/.claude/projects"; rmdir "$HOME/.claude" 2>/dev/null || true; fi
     record "clean: app state and fixtures removed; evidence kept in $EVIDENCE_ROOT"
