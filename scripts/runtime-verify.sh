@@ -13,7 +13,7 @@
 #     scripts/runtime-verify.sh launch SECONDS [LABEL]  launch the app normally; watch processes, sockets, logs
 #     scripts/runtime-verify.sh quit             wait for you to quit the app from its menu
 #     scripts/runtime-verify.sh snapshot         --snapshot in the release app (must refuse) and the debug binary
-#     scripts/runtime-verify.sh summary          write a sanitized summary to the shared stage folder
+#     scripts/runtime-verify.sh summary          write a sanitized summary to /Users/Shared/spandeck-rv-results
 #     scripts/runtime-verify.sh clean            remove the app's state and the fixtures (keeps evidence)
 #
 # Evidence goes to ~/spandeck-rv-evidence/<run>/. It holds file names, modes, counts and pass/fail lines only:
@@ -22,6 +22,8 @@ set -euo pipefail
 
 RV_USER=${RV_USER:-spandecktest}
 SHARED=${RV_SHARED:-/Users/Shared/spandeck-rv}
+# Written by the test account (the stage folder belongs to the build account); readable by the build account.
+RESULTS=${RV_RESULTS:-/Users/Shared/spandeck-rv-results}
 BUNDLE_ID=dev.headroom.Headroom
 APP_SUPPORT="$HOME/Library/Application Support/Headroom"
 EVIDENCE_ROOT="$HOME/spandeck-rv-evidence"
@@ -360,7 +362,8 @@ cmd_snapshot() {
 cmd_summary() {
     local run; run=$(run_dir)
     local sha; sha=$(staged)
-    local out; out="$SHARED/$sha/results-$(basename "$run").md"
+    mkdir -p "$RESULTS"; chmod 755 "$RESULTS"
+    local out; out="$RESULTS/results-$sha-$(basename "$run").md"
     {
         echo "# Runtime verification results: $(basename "$run")"
         echo; echo "Build: $sha. Account: $(id -un). Sanitized: names, modes, counts, pass/fail only."
