@@ -8,6 +8,11 @@ Issue: [#3](https://github.com/loloDawit/spandeck/issues/3) · Parent: [#2](http
 > - **Owner input needed:** the Claude consent change during the run, plus three confirmations (§8.3).
 > - **No app defect is confirmed.** #3 stays open.
 
+**Terms used below:**
+- **Menu-bar item:** the app's gauges near the clock, top right (for example `10% ▁▂ 85%` for CPU and memory). It has no icon or name.
+- **Popover:** the panel that opens when you click the menu-bar item, with the CPU, GPU, Memory, Battery, Claude Code and Token Usage cards. Click the item again, or anywhere else, to close it.
+- **Settings:** the menu at the popover's bottom left.
+
 ## Evidence labels
 
 | Label | Meaning |
@@ -144,7 +149,7 @@ Build with `scripts/runtime-verify.sh stage` in your normal account, after this 
 2. **Gate:** `$RV preflight`. Any FAIL → stop.
 3. **Fixtures:** `$RV fixtures 50`, then `$RV capture 0-before`.
 4. **Main launch:** `$RV launch 330 main`.
-   - You may open the popover and look at it.
+   - You may open the popover (click the menu-bar gauges) and look at it.
    - **Don't click "Enable Claude plan limits" or "Set up Grok credits…".** Don't change Settings.
    - Expect `forks: 0` and `consent ... absent` throughout.
 5. **While running:** `$RV capture 1-running`.
@@ -173,9 +178,9 @@ Build with `scripts/runtime-verify.sh stage` in your normal account, after this 
 6. Check that no Headroom process is left running: `pgrep -x Headroom` should print nothing.
 7. `$RV launch 330 main`. This launches the staged app normally with `open`, watches for 330 s, and records process, socket, log and CPU/RSS samples. During the run, watch for any Keychain or permission prompt or notification. **If one appears, deny or close it, take a screenshot, and stop (§6).**
 8. While the app is still running:
-   - Open the popover and screenshot it (V1, V11, V20; synthetic data only).
+   - Click the app's menu-bar gauges to open the popover, and screenshot it (V1, V11, V20; synthetic data only).
    - Check Login Items and Notification Center (V6).
-   - Note whether the popover opens promptly while indexing.
+   - Close it (click elsewhere), open it again while indexing is still running, and note whether it opens promptly.
 9. `$RV capture 2-running` (V5, V7–V10).
 10. `$RV quit`, then quit from the app's menu (Quit).
 11. `$RV capture 3-after-quit` (V12).
