@@ -160,24 +160,46 @@ struct LaunchPathTests {
     }
 
     // The harness itself: a timeout closes the transport, so a request that starts late, or a task that never
-    // sends one, ends promptly instead of hanging the run.
+    // sends one, ends promptly instead of hanging the run. The tasks are polled, not awaited, so a regression fails
+    // here instead of hanging. (A 1 s wall-clock bound on the whole test was flaky: 1.58 s on a hosted runner.)
     @Test func deferredTransportTimeoutTerminates() async throws {
-        let clock = Date()
         let url = URL(string: "https://example.invalid")!
 
         let idle = DeferredTransport()
         let quiet = Task<Void, Never> {}
+        let waited = Date()
         #expect(await idle.awaitRequests(1, from: quiet, timeout: 0.05) == false)
+        // Below the 2 s default, so the 0.05 s timeout was used.
+        #expect(Date().timeIntervalSince(waited) < 2)
 
         let transport = DeferredTransport()
-        let late = Task { () -> Bool in (try? await transport.data(for: URLRequest(url: url))) == nil }
+        let lateFailed = Flag(), lateDone = Flag()
+        Task {
+            if (try? await transport.data(for: URLRequest(url: url))) == nil { lateFailed.set() }
+            lateDone.set()
+        }
         #expect(await transport.waitForRequests(1))
         transport.close()
-        #expect(await late.value, "pending request should fail on close")
-        #expect(await Task { (try? await transport.data(for: URLRequest(url: url))) == nil }.value,
-                "requests after close should fail immediately")
+        #expect(await Self.poll(lateDone, timeout: 10), "pending request still waiting after close")
+        #expect(lateFailed.isSet, "pending request should fail on close")
 
-        #expect(Date().timeIntervalSince(clock) < 1)
+        let afterFailed = Flag(), afterDone = Flag()
+        Task {
+            if (try? await transport.data(for: URLRequest(url: url))) == nil { afterFailed.set() }
+            afterDone.set()
+        }
+        #expect(await Self.poll(afterDone, timeout: 10), "request after close still waiting")
+        #expect(afterFailed.isSet, "requests after close should fail immediately")
+    }
+
+    /// Whether `flag` is set within `timeout`. Unlike awaiting a task, this returns even if the task never ends.
+    private static func poll(_ flag: Flag, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !flag.isSet {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return true
     }
 
     // Agreeing to Claude's consent refreshes Claude only: no Grok credential read, request or subprocess.
