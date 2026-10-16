@@ -233,7 +233,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 | V15 Login item opt-in | **Pass** [runtime, owner observation] | After Settings ▸ Launch at login, macOS showed a notification and listed "Headroom — Application" under Open at Login (screenshot 05:23:46). Turning the toggle off removed it. |
 | V16 Consent-enabled paths | **Not verified** (by design) | — |
 | V17 `--snapshot`, release | **Pass** [runtime] | Exit 64; 0 files; no process left running; Application Support still absent. |
-| V18 `--snapshot`, debug | **Pass, except the visual check** [runtime] | Exit 0; `popover.png`, `strip-dark.png`, `strip-light.png`; no process left running; Application Support still absent. The owner's visual check of `popover.png` for fixture data is pending (§8.3). |
+| V18 `--snapshot`, debug | **Pass** [runtime] | Exit 0; `popover.png`, `strip-dark.png`, `strip-light.png`; no process left running; Application Support still absent.<br>`popover.png` (shared by the owner and checked) shows only `SnapshotFixture` data: `claude-example-opus`, `claude-example-sonnet`, `grok-example`, "Example plan". There's no fixture model, and the system figures don't match the test Mac (32 GB memory and a discharging battery, against 16 GB and fully charged).<br>Cosmetic, not security: the Cost/Tokens switch, Settings, Keep awake, refresh and Quit controls render as yellow 🚫 placeholders. Likely SwiftUI `ImageRenderer` not drawing those controls; not investigated. |
 | V19 Performance (#8) | Recorded [runtime] | Time to process: 99–182 ms. First index of about 50 MB: 5 one-second samples above 60 % CPU (1–5 s after launch).<br>CPU in the main launch, by 20 s window:<br>• 20–60 s: 3.3–3.4 %, popover presumably closed;<br>• 60–200 s: 7–14 % (median 9.9 %, p90 16 %), while the owner had the popover and Settings open and enabled consent. These causes can't be separated.<br>CPU after relaunch with the cache present: 2.0 % mean (peak 32.6 %).<br>RSS: 71–87 MB.<br>Only one machine and one run. Samples include the app's own 1 s system sampling (the default interval). The summary keeps the first 200 samples of each launch. |
 | V20 Responsiveness (#46) | No symptom reported | The popover opened during and after indexing (screenshots). Latency wasn't measured. |
 
@@ -258,7 +258,7 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 1. **Consent change:** the owner is unsure. Left unresolved until the rerun (§8.2).
 2. ~~**Login items** (V6, V15)~~: answered. It was absent before the toggle, a notification appeared on enabling, and it was removed on disabling.
 3. ~~**V13 hashes**~~: answered. Key: different; fixtures: same.
-4. **V18 visual check:** does the debug `popover.png` (in the run's `snapshot-debug/` folder) show only built-in synthetic models, and not `claude-rvmodel…`?
+4. ~~**V18 visual check**~~: answered. The owner shared the image, and it is synthetic only (V18).
 
 ## 9. Observation limits
 
@@ -273,7 +273,6 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 ## 10. What #3 still needs
 
 - [x] §5 run in `spandecktest` (run 1, 2026-10-16), with results in §8.
-- [ ] Owner input in §8.3: the V18 image check.
 - [ ] The consent change resolved by the rerun: no interaction with the consent card; `claude.limits.enabled` captured at fixed times and staying absent.
 - [ ] A monitor that sees every child process (and login-item registration), checked against a known positive. Then rerun V2, V3, V6, V9 and V14, without enabling consent.
 - [ ] Each confirmed defect filed as its own issue; none silently fixed.
