@@ -61,6 +61,20 @@ rm -rf "$tmp/Applications/$APP_NAME.app"; make_app "$tmp/Applications" "$APP_NAM
 refused "an installed $APP_NAME.app that isn't $BUNDLE_ID" "$tmp/build/$APP_NAME.app"
 rm -rf "$tmp/Applications/$APP_NAME.app"; ln -s "$tmp/Applications/Headroom.app" "$tmp/Applications/$APP_NAME.app"
 refused "an installed $APP_NAME.app that is a link (to Headroom.app)" "$tmp/build/$APP_NAME.app"
+# 7-10. Source and target overlapping (review of e39f9c5): refused before anything is quit or removed.
+reinstalled() { rm -rf "$tmp/Applications/$APP_NAME.app"; make_app "$tmp/Applications" "$APP_NAME" "$BUNDLE_ID" "installed spandeck"; }
+reinstalled
+refused "the installed app as its own source" "$tmp/Applications/$APP_NAME.app"
+reinstalled; ln -s "$tmp/Applications" "$tmp/apps-link"
+refused "the installed app through a linked folder" "$tmp/apps-link/$APP_NAME.app"
+reinstalled; make_app "$tmp/Applications/$APP_NAME.app/Contents/Resources" "$APP_NAME" "$BUNDLE_ID" "nested spandeck"
+refused "a source inside the installed app" "$tmp/Applications/$APP_NAME.app/Contents/Resources/$APP_NAME.app"
+reinstalled
+before=$(tree "$tmp/build"); : > "$tmp/calls.txt"
+if PATH="$tmp/bin:$PATH" INSTALL_DIR="$tmp/build/$APP_NAME.app/Contents" NO_LAUNCH=1 QUIT_WAIT=0 \
+    "$repo/scripts/install-app.sh" "$tmp/build/$APP_NAME.app" > "$tmp/out.txt" 2>&1; then ko "a target inside the source: not refused"
+elif [ "$(tree "$tmp/build")" = "$before" ] && [ ! -s "$tmp/calls.txt" ]; then ok "a target inside the source: refused, nothing changed or quit"
+else ko "a target inside the source: refused but something changed"; fi
 [ "$(tree "$tmp/Applications/Headroom.app")" = "$headroom" ] && ok "Headroom.app still unchanged at the end" || ko "Headroom.app changed"
 
 echo "$pass passed, $fail failed"

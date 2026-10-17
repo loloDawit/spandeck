@@ -80,4 +80,20 @@ struct IdentityTests {
         let rv = try Self.text("scripts/runtime-verify.sh")
         #expect(rv.contains("identity.env"))
     }
+
+    /// Checks run before anything destructive (review of e39f9c5): build.sh validates the identity (Info.plist and
+    /// every AppIdentity constant) before compiling or packaging, and install-app.sh refuses an overlapping source and
+    /// target before quitting or removing anything. scripts/test-identity-check.sh and scripts/test-install.sh exercise
+    /// the failure paths.
+    @Test func checksComeBeforeDestructiveSteps() throws {
+        let build = try Self.text("build.sh")
+        let check = try #require(build.range(of: "scripts/check-identity.sh"))
+        let compile = try #require(build.range(of: "swift build"))
+        #expect(check.lowerBound < compile.lowerBound)
+        let install = try Self.text("scripts/install-app.sh")
+        let overlap = try #require(install.range(of: "overlap"))
+        let kill = try #require(install.range(of: "pkill"))
+        let remove = try #require(install.range(of: "rm -rf"))
+        #expect(overlap.lowerBound < kill.lowerBound && kill.lowerBound < remove.lowerBound)
+    }
 }
