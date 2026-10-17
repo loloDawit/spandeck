@@ -36,17 +36,14 @@ final class HoverController: NSResponder {
 
     deinit { monitors.forEach(NSEvent.removeMonitor) }
 
-    private static let debug = UserDefaults.standard.bool(forKey: "debugHover")
-    private var lastLog = Date.distantPast
-
-    private func log(_ msg: @autoclosure () -> String) {
-        guard Self.debug else { return }
-        lastLog = Date()
-        let line = "\(Date()) \(msg())\n"
-        let url = AppIdentity.hoverLogURL(home: homeDir)
-        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
-        else { try? line.write(to: url, atomically: true, encoding: .utf8) }
-    }
+    // Audit 0007, P2: release builds compile neither the preference lookup nor the file writer, and their `log` never
+    // builds its message.
+    #if DEBUG
+    private static let debugLog = HoverDebugLog(preferences: UserDefaults.standard, home: homeDir)
+    private func log(_ msg: @autoclosure () -> String) { Self.debugLog.write(msg()) }
+    #else
+    private func log(_ msg: @autoclosure () -> String) {}
+    #endif
 
     private func update() {
         guard let button, let window = button.window, let image = button.image else { log("no button/window/image"); return }
@@ -288,3 +285,30 @@ extension View {
         modifier(TopConsumersOnHover(kind: kind, title: title))
     }
 }
+
+#if DEBUG
+/// Hover diagnostics for development (audit 0007, P2), compiled into debug builds only. Off unless the hidden
+/// `debugHover` preference is set, read once at launch. Lines are timestamps, mouse coordinates, panel frames and the
+/// hovered segment, appended to SpanDeck's own log (`AppIdentity.hoverLogURL`, #11). The file is created `0600`, never
+/// through a symlink, and only if `~/Library/Logs` exists. Nothing here truncates or removes a log.
+struct HoverDebugLog {
+    static let preference = "debugHover"
+    /// nil when logging is off.
+    let url: URL?
+
+    init(preferences: PreferenceStore, home: URL) {
+        url = preferences.bool(forKey: Self.preference) ? AppIdentity.hoverLogURL(home: home) : nil
+    }
+
+    var isEnabled: Bool { url != nil }
+
+    func write(_ msg: @autoclosure () -> String, at date: Date = Date()) {
+        guard let url else { return }
+        let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        let line = Data("\(date) \(msg())\n".utf8)
+        _ = line.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+    }
+}
+#endif

@@ -365,7 +365,7 @@ struct SeamBoundaryTests {
         (needle("(\".grok/", "auth.json\")"), ["Dependencies.swift"]),
         (needle("run", "Process("), ["Dependencies.swift", "Util.swift"]),
         (needle("app", "SupportDir"), ["Dependencies.swift", "Util.swift"]),
-        // Hover.swift: debug-only log behind the `debugHover` default; out of scope for #12.
+        // Hover.swift: the hover log, behind the `debugHover` default and compiled into debug builds only (#68).
         (needle("home", "Dir"), ["Dependencies.swift", "Util.swift", "Hover.swift"]),
     ])
     func sideEffectsOnlyInLiveEnvironment(_ needle: String, _ allowed: [String]) throws {
