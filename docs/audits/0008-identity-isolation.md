@@ -27,7 +27,7 @@ Evidence labels follow [audit 0003](0003-security-inventory.md): `[code]`, `[tes
 ## 2. What changed
 - **[code] `Identity.swift`:** new; `AppIdentity` with the four values and two path helpers.
 - **[code] `Util.swift`:** `appSupportDir` comes from `AppIdentity.applicationSupport(in:)`.
-- **[code] `Hover.swift`:** the log path comes from `AppIdentity.hoverLogURL(home:)`. Compiling the log out of release builds is P2, a separate change.
+- **[code] `Hover.swift`:** the log path comes from `AppIdentity.hoverLogURL(home:)`. Compiling the log out of release builds is P2, a separate change: done in #68, so only debug builds have it ([audit 0007 §1.6](0007-privacy-verification.md#16-other-write-paths)).
 - **[code] `PopoverView.swift`:** the login-item error log is prefixed with the app's name.
 - **[code] `Info.plist`, `Package.swift`:** the new identity, plus the `SpanDeck` executable product.
 - **[code] `build.sh`:** names from `identity.env`, plus the plist check. `install` now calls `scripts/install-app.sh`; the old inline `pkill -x Headroom` and `rm -rf /Applications/Headroom.app` are gone.
@@ -190,7 +190,7 @@ Handle it like this, before step 1:
 - **Existing Headroom state** on any account isn't inspected, migrated or cleaned up. Whose it is stays unknown, and that's deliberate.
 - **The unbundled debug binary's preferences domain** is the process name (§1).
 - **Out of scope** (separate approved work):
-  - P2: compiling the hover log out of release builds;
+  - P2: compiling the hover log out of release builds (since done in #68);
   - P1: model-id validation;
   - P4: backup exclusion;
   - the Swift module rename;
