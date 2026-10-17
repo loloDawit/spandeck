@@ -279,6 +279,9 @@ function run(argv) {
         const keys = Object.keys(c[k] || {});
         out.push(k + ': ' + keys.length + ' entries, all 32-hex ids: ' + keys.every(x => hex32.test(x)));
     }
+    const marks = Object.values(c.files || {});
+    out.push('files: marks with a 32-hex stamp and anchor (#56): ' + marks.filter(m => hex32.test(String(m.stamp)) && hex32.test(String(m.anchor))).length + ' of ' + marks.length
+        + ', other fields: ' + ([...new Set(marks.flatMap(m => Object.keys(m)))].filter(k => !['offset', 'stamp', 'anchor'].includes(k)).join(',') || 'none'));
     const targets = Object.values(c.links || {}).map(l => String(l.target));
     out.push('links: all targets 32-hex or "ambiguous": ' + targets.every(t => hex32.test(t) || t === 'ambiguous'));
     const kinds = { identified: 0, incomplete: 0, fingerprinted: 0, ambiguous: 0 };

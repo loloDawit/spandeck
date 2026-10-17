@@ -432,3 +432,59 @@ The re-review of `5f48f65` found that a model without a price returned all of it
   - Grok turns in +05:30.
 - **[test] `LedgerCacheTests.olderCacheReplaced(6)`:** a v6 cache is replaced and nothing from it survives. The other cache tests expect version 7.
 - **[test] Unchanged:** F19, F20, F23 and F24. Each test above failed before the fix; each fixture failed on its days, today and window.
+
+## 11. #56: transcripts rewritten in place
+**Branch:** `fix/56-in-place-rewrites`, from `main` at `72b5be8` (cache v7). Reproduction and design posted on [#56](https://github.com/loloDawit/spandeck/issues/56#issuecomment-6230674132) before any code.
+
+### 11.1 Cause
+- **[code]** A `FileMark` was only a byte offset. A file was read again from 0 only when it got shorter, and was skipped when its size equalled the offset.
+  - **Larger rewrite:** reading resumed at the old offset, inside a line, so the content before it, and the line straddling it, were lost.
+  - **Same-size rewrite:** the file was never read.
+- **[test]** F16 on `main`, identical in tail, full-scan and relaunch modes: 480 instead of 700 after the longer rewrite, 480 instead of 714 after the same-size one.
+
+### 11.2 Options
+| | Detects a same-inode, same-size rewrite | Cost |
+|---|---|---|
+| Inode / file identity | No: in-place writes keep the inode | stat |
+| Modification time | No: restores and sync tools can keep it. The fixture rig sets every file's mtime to the same value at every step. It can't tell an append from a larger rewrite. | stat |
+| Hash of the whole prefix | Yes | a full read on every change |
+| **Change time as trigger + keyed anchors (chosen)** | Yes, when the first 4 KiB or the last 4 KiB before the offset changed | stat; two 4 KiB hashes when a file changed |
+
+### 11.3 Fix
+- **[code] What is stored:** `FileMark` gains `stamp`, a keyed id of the change time (ctime: it moves on every write and can't be set back), and `anchor`, a keyed id of the first and last 4 KiB before the offset.
+- **[code] When a file is checked:** when it is new, its size differs from the offset, or its stamp changed. `readClaudeFile` maps the file once:
+  - shorter than the offset: read from 0;
+  - anchor at the saved offset matches: resume there;
+  - anchor differs: read from 0.
+
+  Identity dedupe (#55) and P12 make the restart safe. The full scan and the hot-file tail share this one path. The tail now reads `resourceValues`, because `attributesOfItem` has no change time.
+- **[code] Cost for unchanged and appended files:** an unchanged transcript (same size, same stamp) costs one stat. A metadata-only change costs the anchor check, with no line read. An append reads only its bytes plus the anchor windows.
+- **[code] Saving:** a new stamp alone (a metadata change) doesn't mark the cache for saving. Unsaved, it only costs one more check after a relaunch. A new offset or anchor does mark it. A crash before a save resumes from the older mark: its anchor still matches an unchanged prefix, and the lines after it are counted once (`unsavedProgressIsNotCountedTwice`).
+- **[code] No cache migration:** both fields are optional. A v7 mark without an anchor resumes as before and is adopted on its first check. Older builds ignore the fields.
+- **[code] Limit, option (a):** a same-size edit confined to the middle of a file larger than 8 KiB, with both windows intact, isn't detected. Re-reading on every stamp change, option (b), would close it at the price of a full parse after any metadata change. That choice is open on #56.
+- **[code] Test seam:** `claudeReadStats` reports bytes scanned and restarts, for tests and audits only.
+
+### 11.4 Tests
+- **[test] F16:** passes without baselines; its classification is now `pass`.
+- **[test] F48 (new):** runs in every mode and a rebuild. It covers:
+  - a larger rewrite with the same start, which resumes;
+  - a larger rewrite with a different start;
+  - a shorter rewrite, then a longer one;
+  - an unchanged file.
+
+  Before the fix it got 6559 instead of 6655 at step 2.
+- **[test] `RewriteTests`:**
+  - a relaunch, and a metadata-only change, over an unchanged 25 KiB file read 0 bytes;
+  - an append reads exactly its bytes;
+  - same-size (same inode) and larger rewrites restart once;
+  - a same-start rewrite resumes;
+  - a cache without anchors is adopted, then detects rewrites;
+  - the middle-edit limit is recorded.
+- **[test] `relaunchKeepsIdsAndOffsets`:** probes with the read statistics instead of a same-size rewrite.
+- **[test] Unchanged:** F14, F15, F17 and the crash-before-save test.
+- **[test] Mutations,** each caught:
+  - no anchor check;
+  - stamp ignored;
+  - no adoption;
+  - option (b);
+  - no head window.
