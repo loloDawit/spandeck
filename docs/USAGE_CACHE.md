@@ -210,6 +210,7 @@ The clear runs on the ledger's serial queue, so it can't interleave with a refre
 - **Only future backups.** Backups, APFS snapshots and local Time Machine snapshots made before the upgrade keep their copies; this change doesn't erase them.
 - **Only tools that honour the attribute.** Time Machine does. A copy made with `cp`, `rsync`, cloud sync or another backup tool may ignore it, depending on the tool and its options.
 - **Not covered:** the price files, the folder itself and the hover debug log aren't marked.
+- **Marking is by path** (Foundation's API), after a check that the file is a regular file of yours. Only a process already running as you could swap the file in the `0700` folder between the check and the mark.
 - **Trade-off:** after restoring a backup, the cache is rebuilt from the transcripts that are still there, so usage from transcripts deleted since is gone.
 
 Other backups of `~/Library/Application Support` include SpanDeck's other files. Deleting a file (by clearing, migrating or replacing it) removes it from the folder, but it is not secure erasure:
