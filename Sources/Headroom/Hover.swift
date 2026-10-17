@@ -290,7 +290,8 @@ extension View {
 /// Hover diagnostics for development (audit 0007, P2), compiled into debug builds only. Off unless the hidden
 /// `debugHover` preference is set, read once at launch. Lines are timestamps, mouse coordinates, panel frames and the
 /// hovered segment, appended to SpanDeck's own log (`AppIdentity.hoverLogURL`, #11). The file is created `0600`, never
-/// through a symlink, and only if `~/Library/Logs` exists. Nothing here truncates or removes a log.
+/// through a symlink, and only if `~/Library/Logs` exists. An existing log is appended to only if it is a regular file
+/// of ours that nobody else can read or write. Nothing here truncates, re-modes or removes a log.
 struct HoverDebugLog {
     static let preference = "debugHover"
     /// nil when logging is off.
@@ -304,9 +305,15 @@ struct HoverDebugLog {
 
     func write(_ msg: @autoclosure () -> String, at date: Date = Date()) {
         guard let url else { return }
-        let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        // O_NONBLOCK: a FIFO with no reader fails at once instead of blocking the hover handler.
+        let fd = Darwin.open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
         guard fd >= 0 else { return }
         defer { close(fd) }
+        // 0o600 only applies when the file is created. Append only to a regular file of ours that nobody else can
+        // read or write; anything else (such as a 0644 log from before #68) is left exactly as it is.
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_uid == geteuid(), st.st_mode & 0o077 == 0
+        else { return }
         let line = Data("\(date) \(msg())\n".utf8)
         _ = line.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
