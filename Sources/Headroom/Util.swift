@@ -18,24 +18,40 @@ enum Fmt {
         return String(format: "$%.2f", v)
     }
 
-    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part is a lower
-    /// bound), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
+    /// A cost with its coverage (R7): "$4.25" when complete, "≥$4.25" when only part is known (the known part, plus
+    /// any P9 minimum, is a lower bound), "~$4.25" when it's provisional because cache-write quantities disagree (P9,
+    /// #58: no bound is claimed), "n/a" when none of it is known. No usage, or a cost that really is zero, is "$0.00".
     static func cost(_ c: CostEstimate) -> String {
         switch c.coverage {
         case .complete: return usd(c.known)
-        case .partial: return "≥" + lowerBound(c.known)
+        case .partial: return c.isProvisional ? "~" + approximate(c.amount) : "≥" + lowerBound(c.amount)
         case .unavailable: return "n/a"
+        }
+    }
+
+    /// `cost` in words, for VoiceOver: symbols like ≥ and ~ don't read well aloud.
+    static func spokenCost(_ c: CostEstimate) -> String {
+        switch c.coverage {
+        case .complete: return usd(c.known)
+        case .partial: return c.isProvisional ? "about \(approximate(c.amount)), provisional" : "at least \(lowerBound(c.amount))"
+        case .unavailable: return "cost not available"
         }
     }
 
     /// The known part of a partial cost, rounded down so it stays a lower bound. Below a cent it keeps its first
     /// significant digit ("$0.003") instead of reading as $0.00.
-    static func lowerBound(_ v: Double) -> String {
-        // Truncates the value's decimal form in Decimal arithmetic: scaling the Double (v * 1000) can land on either
+    static func lowerBound(_ v: Double) -> String { significant(v, .down) }
+
+    /// A provisional amount (P9, #58), rounded rather than rounded down since it isn't a bound, and kept to its first
+    /// significant digit below a cent ("$0.0008") so the cache-write costs P9 deals in don't read as "<$0.01".
+    static func approximate(_ v: Double) -> String { significant(v, .plain) }
+
+    private static func significant(_ v: Double, _ mode: NSDecimalNumber.RoundingMode) -> String {
+        // Rounds the value's decimal form in Decimal arithmetic: scaling the Double (v * 1000) can land on either
         // side of a decimal boundary, and nudging it up to compensate can show more than is known.
         func down(_ digits: Int, per unit: Decimal = 1) -> Double {
             var d = (Decimal(string: v.description, locale: Locale(identifier: "en_US_POSIX")) ?? 0) / unit, r = Decimal()
-            NSDecimalRound(&r, &d, digits, .down)
+            NSDecimalRound(&r, &d, digits, mode)
             return NSDecimalNumber(decimal: r).doubleValue
         }
         if v >= 1000 { return String(format: "$%.1fk", down(1, per: 1000)) }
@@ -52,8 +68,22 @@ enum Fmt {
         switch c.coverage {
         case .complete: return "\(usd(c.known)) estimated"
         case .partial:
-            return "Partial estimate: \(lowerBound(c.known)) known; cost unknown for \(tokens(c.unknownTokens)) tokens"
-        case .unavailable: return "Cost unavailable: cost unknown for \(tokens(c.unknownTokens)) tokens"
+            // Known, minimum and unknown parts are named apart (P9, #58); a minimum is never called known, and isn't
+            // a minimum when quantities disagree.
+            var parts = ["\(lowerBound(c.known)) known"]
+            if c.minimumTokens > 0 {
+                parts.append(c.isProvisional
+                    ? "\(approximate(c.minimum)) more for \(tokens(c.minimumTokens)) cache-write tokens of unknown tier, if the "
+                        + "logged cache-write totals are right"
+                    : "at least \(lowerBound(c.minimum)) for \(tokens(c.minimumTokens)) cache-write tokens of unknown tier")
+            }
+            if c.unknownTokens > 0 { parts.append("cost unknown for \(tokens(c.unknownTokens)) tokens") }
+            if c.disputedTokens > 0 {
+                parts.append("cost unknown for \(tokens(c.disputedTokens)) provisional cache-write tokens")
+            }
+            return (c.isProvisional ? "Provisional estimate, not a lower bound: " : "Partial estimate: ")
+                + parts.joined(separator: "; ")
+        case .unavailable: return "Cost unavailable: cost unknown for \(tokens(c.unknownTokens.saturatingAdd(c.disputedTokens))) tokens"
         }
     }
 

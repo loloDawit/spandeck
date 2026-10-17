@@ -1,0 +1,42 @@
+{
+  "title": "Cache writes from the flat total, the breakdown, or both, with absent, null, zero and invalid values",
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P8: the breakdown is used when the flat total is absent, null or invalid; an absent tier is 0. A flat total with no breakdown (absent, null or {}) is 5-minute writes. With a valid flat total, P9 (decided on #58) applies: the breakdown if every tier is valid and they add up to the flat total; otherwise the flat total with its tier unresolved, so an invalid tier is never taken as matching. Invalid values flag the message. P9 mismatches of valid values are F11's and F42's.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 13,
+  "duplicates": 0,
+  "derivation": "Each record [1, 1]. a flat 40 -> 5m 40. b breakdown only -> 5m 200, 1h 100. c 1h only -> 1h 50. d 30 = 10 + 20 -> 5m 10, 1h 20. e flat null -> 5m 7, 1h 3. f flat \"300\" invalid -> 5m 60, 1h 40, flawed. g flat -5 invalid -> 5m 4, flawed. h 5m \"x\" is invalid, so although 1h 25 = 25 the tier is unresolved: 25 unresolved, flawed. i 5m -1 is invalid: 25 unresolved, flawed. j breakdown null -> 5m 9. k breakdown {} adds to 0 != 12 -> 5m 12. l explicit 0 -> nothing. m all zeros -> nothing. 5m 40+200+10+7+60+4+9+12 = 342; 1h 100+50+20+3+40 = 213; unresolved 25+25 = 50. 13+13+342+213+50 = 631. Flawed: f g h i = 4. Today b, c and e lose their breakdown (flat absent or null reads as 0, which they don't add up to), g subtracts 5 and f's \"300\" reads as 0.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [13, 13, 342, 213, 0, 13]
+          }
+        },
+        "operations": 13,
+        "month": 631,
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-test-1": [50, 0]
+          }
+        },
+        "completeness": {
+          "flawed": 4
+        }
+      }
+    }
+  ]
+}

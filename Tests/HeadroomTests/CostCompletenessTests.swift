@@ -205,7 +205,7 @@ struct CostCompletenessTests {
         // Only today is incomplete on the chart, with its known part; the older day is complete.
         let days = s.incompleteCostDays
         #expect(days.count == 1 && days.first?.day == Calendar.current.startOfDay(for: now))
-        #expect(abs((days.first?.known ?? -1) - Self.line) < 1e-12)
+        #expect(abs((days.first?.cost.amount ?? -1) - Self.line) < 1e-12 && days.first?.cost.isProvisional == false)
         let todayBars = s.bars.filter { $0.day == Calendar.current.startOfDay(for: now) }
         #expect(todayBars.reduce(CostEstimate.zero) { $0 + $1.cost }.coverage == .partial)
     }

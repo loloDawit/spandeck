@@ -1,0 +1,58 @@
+{
+  "title": "A deferred last line, then a malformed and a flawed record appended",
+  "matrix": [
+    "partial lines",
+    "invalid UTF-8 and malformed JSON"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P6: a last line without its newline is pending, not unread. P7 and P8 as in F36 and F39. Used by unsavedProgressIsNotCountedTwice for unread records counted but not yet saved.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 0,
+  "derivation": "Step 1: A [10, 1] = 11, and B's first half is pending (1 file). Step 2: B completes [20, 2]; a malformed line; C [30, 3] with cache read \"lots\" left out (flawed). [60, 6, 0, 0, 0, 3] = 66, 1 malformed, 1 flawed, nothing pending.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "step1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [10, 1, 0, 0, 0, 1]
+          }
+        },
+        "month": 11,
+        "completeness": {
+          "pending": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "step2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [60, 6, 0, 0, 0, 3]
+          }
+        },
+        "month": 66,
+        "completeness": {
+          "malformed": 1,
+          "flawed": 1
+        }
+      }
+    }
+  ]
+}

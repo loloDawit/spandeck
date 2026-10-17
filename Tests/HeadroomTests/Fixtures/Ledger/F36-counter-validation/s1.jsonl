@@ -1,0 +1,12 @@
+{"type":"assistant","timestamp":"2026-03-10T16:00:00Z","requestId":"req_36a","message":{"id":"msg_36a","model":"claude-test-1","usage":{"input_tokens":"100","output_tokens":50}}}
+{"type":"assistant","timestamp":"2026-03-10T16:01:00Z","requestId":"req_36b","message":{"id":"msg_36b","model":"claude-test-1","usage":{"input_tokens":true,"output_tokens":5}}}
+{"type":"assistant","timestamp":"2026-03-10T16:02:00Z","requestId":"req_36c","message":{"id":"msg_36c","model":"claude-test-1","usage":{"input_tokens":1.5,"output_tokens":2}}}
+{"type":"assistant","timestamp":"2026-03-10T16:03:00Z","requestId":"req_36d","message":{"id":"msg_36d","model":"claude-test-1","usage":{"input_tokens":null,"output_tokens":3}}}
+{"type":"assistant","timestamp":"2026-03-10T16:04:00Z","requestId":"req_36e","message":{"id":"msg_36e","model":"claude-test-1","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-03-10T16:05:00Z","requestId":"req_36f","message":{"id":"msg_36f","model":"claude-test-1","usage":{"input_tokens":100.0,"output_tokens":5e1,"cache_read_input_tokens":1e2}}}
+{"type":"assistant","timestamp":"2026-03-10T16:06:00Z","requestId":"req_36g","message":{"id":"msg_36g","model":"claude-test-1","usage":{"input_tokens":1e30,"output_tokens":7}}}
+{"type":"assistant","timestamp":"2026-03-10T16:07:00Z","requestId":"req_36h","message":{"id":"msg_36h","model":"claude-test-1","usage":{"input_tokens":9007199254740992,"output_tokens":1}}}
+{"type":"assistant","timestamp":"2026-03-10T16:08:00Z","requestId":"req_36i","message":{"id":"msg_36i","model":"claude-test-1","usage":{"input_tokens":10,"output_tokens":1,"iterations":[42,{"type":"advisor","model":"claude-test-2","input_tokens":20,"output_tokens":-4}]}}}
+{"type":"assistant","timestamp":"2026-03-10T16:09:00Z","requestId":"req_36j","message":{"id":"msg_36j","model":"claude-test-1","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":30,"cache_creation":"x"}}}
+{"type":"assistant","timestamp":"2026-03-10T16:10:00Z","requestId":"req_36k","message":{"id":"msg_36k","model":"claude-test-1","usage":{"input_tokens":{"n":1},"output_tokens":[2]}}}
+{"type":"assistant","timestamp":"2026-03-10T16:11:00Z","requestId":"req_36l","message":{"id":"msg_36l","model":"claude-test-1","usage":{"input_tokens":40,"output_tokens":-5}}}

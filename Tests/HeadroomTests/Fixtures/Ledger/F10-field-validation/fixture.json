@@ -4,14 +4,14 @@
     "invalid UTF-8 and malformed JSON",
     "input, output, cache-read and cache-write breakdowns"
   ],
-  "classification": "defect",
+  "classification": "pass",
   "followUp": "#58",
   "policy": "P8: a negative or non-numeric counter is invalid and never subtracts; a cache-write breakdown is used when the flat total is absent; valid JSON is read whatever its whitespace.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 3,
   "duplicates": 0,
-  "derivation": "msg_10a [100, 50] with cache read -1000 -> [100, 50, 0, 0, 0]. msg_10c [10, 1] with 5m 200 and 1h 100 and no cache_creation_input_tokens -> 5m 200, 1h 100. msg_10d [30, 3] written as \"usage\": { -> counted. Expected [140, 54, 200, 100, 0, 3] = 494. Today: the -1000 is added, the breakdown is dropped (0 != 300) and msg_10d is skipped by the byte pre-filter: [110, 51, 0, 0, -1000, 2] = -839.",
+  "derivation": "msg_10a [100, 50] with cache read -1000 -> the -1000 is left out: [100, 50, 0, 0, 0], counted with an invalid counter (flawed). msg_10c [10, 1] with 5m 200 and 1h 100 and no cache_creation_input_tokens -> 5m 200, 1h 100. msg_10d [30, 3] written as \"usage\": { -> counted. Expected [140, 54, 200, 100, 0, 3] = 494, 1 flawed. Before #58: the -1000 was added, the breakdown dropped (0 != 300) and msg_10d skipped by the byte pre-filter: [110, 51, 0, 0, -1000, 2] = -839.",
   "steps": [
     {
       "ops": [
@@ -34,22 +34,10 @@
         },
         "today": 494,
         "week": 494,
-        "coverage": "unavailable"
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [110, 51, 0, 0, -1000, 2]
-          }
-        },
-        "operations": 2,
-        "month": -839,
-        "days": {
-          "2026-03-10": -839
-        },
-        "today": -839,
-        "week": -839,
-        "coverage": "unavailable"
+        "coverage": "unavailable",
+        "completeness": {
+          "flawed": 1
+        }
       }
     }
   ]

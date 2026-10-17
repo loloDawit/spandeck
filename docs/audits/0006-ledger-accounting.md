@@ -3,7 +3,7 @@
 **Issue:** #6 (M0, research). **Parent:** #2. **Code base:** `main` at `98c3ac3`, plus the test seam described in §6.
 **Fixtures:** [`Tests/HeadroomTests/Fixtures/Ledger`](../../Tests/HeadroomTests/Fixtures/Ledger/README.md). **Tests:** `Tests/HeadroomTests/LedgerFixtureTests.swift`.
 **Follow-ups:** #55, #56, #57, #58. Open policy questions are posted on #7, #9, #10 and #58.
-**Update:** #55 is fixed on branch `fix/55-missing-id-dedupe` (§8). Sections 1–7 describe the ledger before that fix, as audited.
+**Update:** #55 was fixed in #60 (§8). #58 is fixed on branch `fix/58-ledger-input-validation` (§9), including P9 as [decided on #58](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6226520316). Sections 1–7 describe the ledger before those fixes, as audited.
 
 This report covers Claude transcript accounting in `Ledger.swift`: identity, deduplication, incremental reading, the cache and time buckets. Grok usage files are covered only where R7 already tested them. Pricing values and pricing integrity are out of scope (#7, #11).
 
@@ -136,7 +136,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 | L1 | #55 | Records without a message id or request id are added every time they're read. Empty-string ids merge different operations | F04 (600 vs 255), F05 (170 vs 320), F15 (590 or 810 vs 370) | Inflation, and an undercount in the empty-id case; depends on refresh timing. **Fixed by #55 (§8)** |
 | L2 | #56 | An in-place overwrite of the same or larger size is taken for an append | F16 (480 vs 714) | Undercount; probably rare with Claude Code |
 | L3 | #57 | Usage is assigned to local days by whole UTC hours | F21 (today 4 vs 6) | Wrong day, every day, for half-hour zones |
-| L4 | #58 | Negative counters are subtracted; a breakdown without a flat total is dropped; `"usage": {` is skipped; unreadable records leave no trace | F10 (−839 vs 494), F09 | Wrong totals on unusual input; incomplete totals look complete |
+| L4 | #58 | Negative counters are subtracted; a breakdown without a flat total is dropped; `"usage": {` is skipped; unreadable records leave no trace | F10 (−839 vs 494), F09 | Wrong totals on unusual input; incomplete totals look complete. **Fixed by #58 (§9)** |
 
 ### Ambiguous, needs a policy decision
 
@@ -145,7 +145,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 | P2 | Field-wise maximum of repeated records, or the last record? | F02 | #9 |
 | P5 | Is the same message id under two request ids one operation or two? | F06 | #9 |
 | P6 | Count a complete JSON object that has no final newline? | F08 | #9 |
-| P9 | Which side wins when a cache breakdown and its total disagree? | F11 | #58 (comment) |
+| P9 | Which side wins when a cache breakdown and its total disagree? | F11, F42 | **Decided on #58**, implemented in #61 (§9) |
 | P10 | A re-log under another model: double count (today) or one operation? | F12 | #9 |
 | P11 | Do top-level usage counts exclude `iterations` sub-calls? | F13 | #10 (needs a real Claude Code sample) |
 | P12 | After a rebuild, history only on disk is lost (F14: 710 → 340). Acceptable, or should the cache be the record? | F14, F15, F16 | #9 |
@@ -154,7 +154,7 @@ The rows are those of #6. "All modes" means tail, full scan, relaunch and rebuil
 ### Missing test coverage (not added here)
 - **Real Claude Code record shapes.** The fixtures use the fields the ledger reads, as believed. A redacted, consented sample would confirm the identity, `iterations` and streaming assumptions (#10).
 - **Large files and many files.** These are left to #8. The fixtures prove correctness, not speed.
-- **Booleans and strings as counters.** Read as 1 or 0; this is in #58's scope and not tested.
+- **Booleans and strings as counters.** Read as 1 or 0 before #58; now covered by F36 (§9).
 - **Grok `usage.json`.** Only the R7 cost tests cover it. Its content-based dedupe key is noted on #7.
 - **Claude + Grok overlap.** By design they are summed as separate providers. No source overlap test exists.
 - **Concurrent writers.** A file appended to while it is being read was not simulated.
@@ -197,7 +197,7 @@ On Apple Silicon, macOS 26.5, Xcode 26.6, all local:
 A known issue that stops failing makes its test fail. That signals the fixture should be updated when a fix lands.
 
 ## 8. Update: the #55 fix
-**Branch:** `fix/55-missing-id-dedupe`, implementing the [P4 decision on #9](https://github.com/loloDawit/spandeck/issues/9#issuecomment-6220268374). **Status:** in review, not merged.
+**Branch:** `fix/55-missing-id-dedupe`, implementing the [P4 decision on #9](https://github.com/loloDawit/spandeck/issues/9#issuecomment-6220268374). **Status:** merged in #60.
 
 ### 8.1 What changed
 - **[code]** An id that is missing, empty, blank or not a string is absent. Record identity, in order:
@@ -240,3 +240,148 @@ The measurements used a debug build on an Apple M2 Pro, with three cases running
 
 Lookups are dictionary operations per record, with no scan of past identities.
 
+## 9. Update: the #58 fix
+**Branch:** `fix/58-ledger-input-validation`, implementing the contract proposed on [#58](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6225591077). **Status:** in review, not merged. A follow-up on the same PR implements the [P9 decision](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6226520316) and makes overflow recoverable (§9.4).
+
+### 9.1 What changed
+- **[code]** Counters (P8): a counter is valid when it is a non-negative integral number below 2^53. Absent and `null` report nothing. Anything else is left out, never read as 0 or another number:
+  - a negative, a fraction, a string, a boolean, an object or an array;
+  - a number too large, or not finite.
+
+  The record's valid counters still count, and its identity group is marked *flawed* for good, through streamed growth and #55 joins. Iterations follow the same rules; a non-object element no longer drops every iteration.
+- **[code]** Overflow: sums saturate, and a held sum is flagged and rebuilt rather than subtracted from (§9.4). Before, a counter of `1e30` made the test process trap (SIGTRAP), so a crafted transcript could crash the app.
+- **[code]** Cache-write breakdown: used when the flat total is absent, `null` or invalid. Mismatches follow P9 (§9.4).
+- **[code]** Pre-filter: the quoted key `"usage"`, then optional spaces, tabs or CR, then `:`. Before, it needed the exact bytes `"usage":{`. It can't match `\"usage\"` inside text or `"usage"` as a value.
+- **[code]** Data completeness (P7), a new `DataCompleteness` on every total, separate from identity, cost coverage and cache issues:
+  - **unread records, by kind:** `malformed` (not a JSON object, or invalid UTF-8) and `undated` (no usable timestamp) have no period and are reported with every period; `invalidUsage` (usage isn't an object) is dated;
+  - **flawed groups,** in their hour;
+  - **pending files,** whose last line is still being written; not a warning.
+
+  Unread lines are kept as `HMAC(key, "unread" | line bytes)` with a kind and an hour, never their text. So a rescan, a truncating rewrite, a rename or a copy reports them once, and they stay reported after deletion, like counted usage (P12).
+- **[code]** The Token usage card shows *"Some usage records couldn't be read. Totals may be incomplete."* with a detail, as a tooltip and for VoiceOver. The identity note (#55) sits under it, in one small list of one-line notes.
+- **[code]** The cache is now version 6. A version 5 cache is deleted and re-indexed (`docs/USAGE_CACHE.md`).
+- **[test]** F10 now passes in every mode and on rebuild, with no baseline: 494 tokens, 1 flawed. F09 now asserts 2 malformed and 2 undated, F08 1 pending, and F23 2 undated. The other fixtures are unchanged, and every fixture now also asserts completeness: nothing unread unless stated.
+- **[test]** New fixtures:
+  - F36: invalid counters;
+  - F37: cache-write sources;
+  - F38: JSON whitespace, key order and ignored records;
+  - F39: unread records through rewrite, rename, copy and deletion;
+  - F40: appended unread records, also used for the crash-before-save test;
+  - F41: flaws through streaming and #55 joins.
+
+  Unit tests cover counter values, the pre-filter, periods, retention, saturation, the note copy, and the cache's contents and migration.
+- **[test]** Against `main`'s ledger:
+  - F10 gives −839, not 494;
+  - F37 gives 162, not 631;
+  - F38 gives 44, not 165;
+  - F41 subtracts its negatives;
+  - F36 traps.
+
+  Twelve mutations of the fix (exact needle, negatives valid, no breakdown fallback, unread not deduplicated, flaws not sticky, flaws lost in an uncount or a join, pending never cleared, unread not pruned, timestamps checked before ignoring, no saturation, strict iterations) each fail at least one test.
+
+### 9.2 Limits that remain
+- **Field-wise growth across tiers (P2):** a streamed message whose cache writes move between fields, for example from disputed to resolved tiers, keeps each field's maximum, so its cache writes can be overcounted. The same was already true between the 5-minute and 1-hour fields.
+- **Unread counts are distinct lines:** identical broken lines, in one file or several, count once. The note says so.
+- **Grok** usage files aren't validated: their counters are read as before and could still overflow. Grok is out of #58's scope.
+- **A line cut off before its `"usage"` key** looks like any other line and isn't reported.
+- **A broken line rewritten with different bytes** is reported again, until the old entry ages out (the F33 analogue).
+- **A file that can't be read at all** (permissions, I/O) is still not reported. That is file-level, not record-level, and may belong to #7.
+- **Partial counts:** an undated record whose message also has a valid copy is reported as unread although the message counted. A flawed group stays flawed even if a later copy has every counter valid. Both err towards saying less is known.
+- **Absent counters** report nothing and aren't flaws. Claude Code omits cache counters routinely, so "missing" here means "not reported", not "unknown".
+- **Pending files** aren't shown. A transcript whose writer crashed mid-line stays pending forever, which is P6.
+
+### 9.3 Cost (synthetic, see #8)
+Debug build, Apple M2 Pro, one run at a time. The data is 30,000 logged messages in 100 files: 120,000 lines and 151 MB. Each message has a ~1 KB user prompt, two streamed assistant snapshots, and a ~3 KB tool result quoting `\"usage\"` escaped. Every 50th message is written `"usage": {`.
+
+| | Before (`main`), 3 runs | After, 3 runs |
+|---|---|---|
+| First index | 6.26–8.11 s | 6.77–8.85 s |
+| Tail, 900 lines appended to a hot file | 0.037–0.043 s | 0.040 s |
+| Relaunch (load and first refresh) | 0.355–0.376 s | 0.334–0.362 s |
+| Cache size | 11.21 MB | 11.43 MB (+2.0%: the 600 spaced messages are now counted) |
+| Tokens | 21,256,200 | 21,629,700 (+373,500, exactly the spaced messages) |
+| Pre-filter alone over 147 MB, 3 rounds | 0.123–0.125 s | 0.133–0.134 s, the same 60,000 lines matched |
+
+The index time ranges overlap. The pre-filter adds about 0.01 s per 150 MB and parses no extra lines of this mix. Per-message cache size is unchanged, since a group without a flaw stores no flag.
+
+### 9.4 Follow-up: P9 and recoverable overflow
+- **[code] P9:**
+  - **Sources agree:** the breakdown's tiers are used.
+  - **Otherwise, with a valid flat total:** the flat total is the quantity and its tier is *unresolved*. Its cost is a *minimum* at the cheaper tier's rate. That is a lower bound, assuming the flat total is right, and is kept apart from known cost, so the model's cost is partial.
+  - **Breakdown above the flat total** (an explicit flat 0 included): the excess is counted *provisionally*, as `disputed`. It is unpriced and claims no bound.
+  - **Invalid or unreadable breakdown:** an invalid tier never counts as matching, and an unreadable breakdown leaves the tier unresolved.
+  - **Unchanged:** a flat total with no breakdown is still 5-minute writes.
+  - **Without a price,** everything is unknown, as before.
+
+  Both new quantities are optional fields of each hour's and each operation's counts. So they follow growth, #55 merges, relaunches and rebuilds by the same path as tokens.
+- **[code] Four independent dimensions on every total:**
+
+  | Dimension | Field | What it says |
+  |---|---|---|
+  | Identity | `identity` | How the records were told apart (#55) |
+  | Completeness | `completeness` | Records that couldn't be read (above) |
+  | Token quantity | `quantity` | Provisional (`disputedTokens`) or held (`saturated`) counts |
+  | Price coverage | `cost` | Exact `known`, `minimum` for unresolved tiers, and unknown tokens: `unknownTokens` without a price, `disputedTokens` in conflict |
+
+  - **Card:** one line per dimension that applies. *"Some token counts are provisional. Totals may be over- or understated."* sits between the completeness and identity notes.
+  - **Costs:** `≥` amounts add the minimum to the known part. The cost note names "cache writes of uncertain tier or amount" apart from "no price". §9.5 narrows `≥` to totals without disputed tokens.
+- **[code] Recoverable overflow:**
+  - `CostEstimate` sums saturate.
+  - A sum held at `Int.max` sets `quantity.saturated`. The flag is derived from the stored buckets, so it survives a relaunch.
+  - When a #55 merge takes back an operation from a held bucket, `uncount` rebuilds the bucket from the operations still in `seen`, which always sum to it, instead of subtracting from a value that lost its true amount.
+- **[test]**
+  - **F11:** still 1817 tokens. 300 tokens are tier-unresolved. The known cost is $0.000991, plus a $0.000375 minimum: together the former $0.001366, now a lower bound. Haiku is partial.
+  - **F42 (new):** both mismatch directions, an explicit flat 0, an absent flat total, an invalid tier and an unpriced model, through streamed growth and a #55 join.
+  - **F36, F37:** an invalid or unreadable breakdown now leaves its flat total tier-unresolved. Their token totals are unchanged.
+  - **Always checked:** every fixture checks `tiers` and `quantity`.
+  - **Unit tests:** held buckets over two models and two hours, a held sum followed by a #55 merge (exact again afterwards), and the cost and note semantics.
+- **[test] Against the old behaviour:**
+  - plain `CostEstimate` sums trap;
+  - the old `uncount` fails the merge test;
+  - the old P9 rule fails F11, F37 and F42.
+
+  Six more mutations each fail a test: the minimum taken as known, disputed tokens dropped, an invalid tier matching, `subtract` ignoring tiers, disputes not summarized, and a minimum at the 1-hour rate.
+
+### 9.5 Follow-up: streamed reclassification, invalid tiers and provisional costs
+The owner's re-review of `e48ab95` found three P9 gaps; the corrections follow the policy approved on #61.
+- **[code] One cache-write quantity per operation.** `Agg.growth`/`maxed` took the maximum of each cache-write field apart, so a record whose cache writes moved from tiered to tier-unresolved counted them twice (flat 100: 50+50 then 30+30 gave 200). `Agg.reconciled` replaces both:
+  - other counters keep their largest value (P2);
+  - the larger cache-write quantity wins with its classification, so a reclassification alone adds nothing;
+  - at equal quantity the less certain wins (disputed > tier-unresolved > tiered), and two tier splits that disagree leave the whole quantity tier-unresolved instead of pricing whichever arrived first;
+  - the rule is commutative and associative, so arrival order, rescans and #55 merges reach the same operation, cost coverage included.
+
+  `count` adds the signed difference to the bucket. It can't take a bucket below 0, because a bucket is the sum of its operations' parts and each part's counters are non-negative. A held (`Int.max`) bucket is rebuilt from `seen` instead of reduced, through the helper `uncount` now shares.
+- **[code] Invalid tier without a flat total.** The valid tiers still count but are tier-unresolved (a minimum), and the message is flagged. Before, `{5m: "x", 1h: 25}` priced 25 exact 1-hour writes, and the cost read as complete.
+- **[code] Provisional costs.** A total with disputed tokens has no defensible lower bound: the flat totals behind its minimum are themselves in conflict. It is shown as `~$x`, rounded rather than truncated and kept to one significant digit below a cent (F42 reads `~$0.0008`, not `<$0.01`). Its detail starts "Provisional estimate, not a lower bound", and calls the minimum "$y more … if the logged cache-write totals are right". The chart marks such days "~" instead of "?". VoiceOver reads "about $x, provisional" and "at least $x", not the symbols, for tiles, provider rows, the 5-hour window, models and chart marks. The cost legend and the pricing rule define `~`. `≥` stays for tier-unresolved minimums alone (F11).
+- **[test]**
+  - **F43, F44 (new):** the same streamed records in opposite orders. They cover:
+    - tiered ↔ tier-unresolved, tiered ↔ disputed and tier-unresolved ↔ disputed;
+    - two splits of one quantity;
+    - growth across a class change (disputed 300 → tiered 350 adds 50);
+    - an invalid tier priced with and without a flat total;
+    - a #55 join of partials with different classes.
+
+    Both end on identical expectations (tokens, tiers, known and minimum cost, coverage, quantity, flaws, identity) in tail, full-scan, relaunch and rebuild modes.
+  - **Unit tests:**
+    - every order and grouping of six records reconciles to one result;
+    - each transition both ways;
+    - a reclassification inside a bucket held at `Int.max` followed by a #55 join, which is exact again afterwards;
+    - the visible and spoken cost strings, the legend and the chart marks.
+  - **F11, F37, F42:** unchanged and passing.
+- **[test] Against the old behaviour:** six mutations, each caught:
+  - field-wise max of cache writes;
+  - an invalid tier priced without a flat total;
+  - `≥` while disputed;
+  - a held bucket reduced instead of rebuilt;
+  - the first tier split kept;
+  - the first record kept at equal quantity.
+
+### 9.6 Follow-up: disputed tokens of unpriced models
+The re-review of `5f48f65` found that a model without a price returned all of its tokens as unknown. Its disputed tokens were lost to cost coverage, so a priced model without a conflict next to an unpriced one with a conflict showed `≥`. The quantity note said the counts were provisional at the same time.
+- **[code]** Without a price, `Pricing.estimate` returns `unknownTokens = total − disputed` and `disputedTokens = disputed`. Each token is counted once, including when all of them are disputed. A subset field, `unpricedDisputedTokens`, keeps such a model listed under "no price".
+  - The combined cost is provisional (`~`), with matching chart marks and VoiceOver wording.
+  - The model's own cost stays `n/a`, read aloud as "cost not available".
+- **[test]**
+  - **F45 (new):** a priced Haiku record without a conflict, an unpriced model with flat 100 against a 300 breakdown, then an unpriced model whose tokens are all disputed. It runs in every indexing mode.
+  - **`QuantityTests.unpricedConflictStaysProvisional`:** through a real ledger, it checks each model's unknown + disputed total, `~` against `≥`, the detail, the chart day, the spoken costs, the "no price" listing and the conflict-only `n/a`.
+- **[test] Against the old behaviour:** three mutations are each caught: the old return, disputed tokens also counted as unknown, and the old "no price" filter.

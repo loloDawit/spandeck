@@ -202,6 +202,7 @@ struct StatTile: View {
             Text(totals.map { Fmt.cost($0.cost) } ?? " ")
                 .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(.secondary)
                 .help(totals.map { Fmt.costDetail($0.cost) } ?? "")
+                .accessibilityLabel(totals.map { Fmt.spokenCost($0.cost) } ?? "")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
@@ -229,14 +230,21 @@ struct DailyChart: View {
                 BarMark(x: .value("Day", b.day, unit: .day), y: .value(metric.rawValue, value(b)))
                     .foregroundStyle(by: .value("Model", b.family))
                     .cornerRadius(1.5)
+                    .accessibilityLabel("\(b.family), \(b.day.formatted(date: .abbreviated, time: .omitted))")
+                    .accessibilityValue(metric == .cost ? Fmt.spokenCost(b.cost) : "\(Fmt.tokens(b.tokens)) tokens")
             }
-            // R7: a day whose cost isn't fully known shows only its priced part, marked "?" so it doesn't read as a
-            // complete (or zero) cost. Token bars are unaffected.
+            // R7: a day whose cost isn't fully known shows only its priced part (with P9 minimums), marked "?" so it
+            // doesn't read as a complete (or zero) cost, or "~" when it's provisional (P9, #58: cache-write quantities
+            // disagree, so it isn't a lower bound either). Token bars are unaffected.
             if metric == .cost {
                 ForEach(summary.incompleteCostDays, id: \.day) { d in
-                    PointMark(x: .value("Day", d.day, unit: .day), y: .value(metric.rawValue, d.known))
+                    PointMark(x: .value("Day", d.day, unit: .day), y: .value(metric.rawValue, d.cost.amount))
                         .symbolSize(0)
-                        .annotation(position: .top, spacing: 1) { Text("?").font(.system(size: 9, weight: .bold)) }
+                        .annotation(position: .top, spacing: 1) {
+                            Text(d.cost.isProvisional ? "~" : "?").font(.system(size: 9, weight: .bold))
+                        }
+                        .accessibilityLabel(d.day.formatted(date: .abbreviated, time: .omitted))
+                        .accessibilityValue(Fmt.spokenCost(d.cost))
                 }
             }
         }
@@ -261,7 +269,7 @@ struct DailyChart: View {
         .frame(height: height)
     }
 
-    private func value(_ b: DayBar) -> Double { metric == .cost ? b.cost.known : Double(b.tokens) / 1e6 }
+    private func value(_ b: DayBar) -> Double { metric == .cost ? b.cost.amount : Double(b.tokens) / 1e6 }
 }
 
 // MARK: - System
@@ -627,13 +635,8 @@ struct UsageCard: View {
                 StatTile(title: "7 days", totals: combined?.week)
                 StatTile(title: "30 days", totals: combined?.month)
             }
-            if let note = IdentityText.note(store.claudeUsage) {
-                Text(note.text).font(.system(size: 10)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(note.detail)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(note.text + " " + note.detail)
-            }
+            let notes = UsageNotes.notes(store.claudeUsage)
+            if !notes.isEmpty { UsageNotes(notes: notes) }
             VStack(spacing: 4) {
                 ProviderRow(name: "Claude", color: .claude, summary: store.claudeUsage)
                 if grok != nil { ProviderRow(name: "Grok", color: .grok, summary: grok) }
@@ -644,6 +647,7 @@ struct UsageCard: View {
                     Spacer()
                     Text("\(Fmt.tokens(w.tokens)) tokens  \(Fmt.cost(w.cost))").monospacedDigit()
                         .help(Fmt.costDetail(w.cost))
+                        .accessibilityLabel("\(Fmt.tokens(w.tokens)) tokens, \(Fmt.spokenCost(w.cost))")
                 }
                 .font(.system(size: 11))
             }
@@ -690,6 +694,7 @@ struct ProviderRow: View {
                     .lineLimit(1).minimumScaleFactor(0.75)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .help(t.map { Fmt.costDetail($0.cost) } ?? "")
+                    .accessibilityLabel(t.map { "\(Fmt.tokens($0.tokens)) tokens, \(Fmt.spokenCost($0.cost))" } ?? "--")
             }
         }
         .font(.system(size: 10))
@@ -710,6 +715,7 @@ struct ModelList: View {
                     Text(Fmt.tokens(m.tokens)).monospacedDigit().foregroundStyle(.secondary)
                     Text(Fmt.cost(m.cost)).monospacedDigit().frame(width: 52, alignment: .trailing)
                         .help(Fmt.costDetail(m.cost))
+                        .accessibilityLabel(Fmt.spokenCost(m.cost))
                 }
                 .font(.system(size: 10))
             }
@@ -761,7 +767,8 @@ enum PricingText {
 
     /// R7: what happens to usage without a known cost, and where Grok amounts come from.
     static let unpricedRule = "Models missing from that list (often newer ones) aren't priced, and some Grok turns have "
-        + "no reported cost: totals that include either show ≥ (known part only) or n/a, never $0. Grok amounts are as "
+        + "no reported cost: totals that include either show ≥ (known part only) or n/a, never $0. Where Claude Code's "
+        + "logs disagree on a cache-write amount, costs show ~ (provisional, not a lower bound). Grok amounts are as "
         + "reported by the Grok CLI."
 
     /// Why the 30-day estimate is incomplete, naming the models; nil when every cost is known. An unpriced Claude model
@@ -772,12 +779,19 @@ enum PricingText {
             m.prefix(3).joined(separator: ", ") + (m.count > 3 ? " and \(m.count - 3) more" : "")
         }
         let priced = claude?.uncostedModels ?? [], reported = grok?.uncostedModels ?? []
-        guard !priced.isEmpty || !reported.isEmpty, let total = UsageSummary.combine(claude, grok) else { return nil }
+        let tiers = claude?.uncertainCacheModels ?? []
+        guard !priced.isEmpty || !reported.isEmpty || !tiers.isEmpty, let total = UsageSummary.combine(claude, grok)
+        else { return nil }
         var causes: [String] = []
         if !priced.isEmpty { causes.append("no price for \(list(priced))") }
+        // P9 (#58): the logs' cache-write totals and their 5-minute/1-hour breakdown disagree or can't be read.
+        if !tiers.isEmpty { causes.append("cache writes of uncertain tier or amount for \(list(tiers))") }
         if !reported.isEmpty { causes.append("the Grok CLI reported no cost for some \(list(reported)) turns") }
-        return "≥ partial estimate, n/a no estimate: " + causes.joined(separator: "; ") + ". "
-            + "\(Fmt.costDetail(total.month.cost)) over 30 days. On the chart, \"?\" marks days whose cost isn't fully known."
+        let provisional = total.month.cost.isProvisional
+        return (provisional ? "≥ partial estimate, ~ provisional estimate, n/a no estimate: " : "≥ partial estimate, n/a no estimate: ")
+            + causes.joined(separator: "; ") + ". \(Fmt.costDetail(total.month.cost)) over 30 days. On the chart, \"?\" "
+            + (provisional ? "marks days whose cost isn't fully known and \"~\" days whose cost is provisional."
+                           : "marks days whose cost isn't fully known.")
     }
 
     static var downloadDisclosure: String {
@@ -822,6 +836,94 @@ enum IdentityText {
                     + "without both a message id and a request id: " + kinds.joined(separator: ", ") + ". These may be "
                     + "counted twice or merged, so token totals and cost estimates may be off. Costs are still estimates, "
                     + "not your bill.")
+    }
+}
+
+/// Copy for data completeness (#58), kept apart from the views so tests can check it. Independent of identity (#55)
+/// and cost coverage (R7): it says what the ledger couldn't read, not how records were told apart or priced.
+/// Provisional wording until #7 settles the metric terms.
+enum CompletenessText {
+    static let incomplete = "Some usage records couldn't be read. Totals may be incomplete."
+
+    /// The note and its detail when any Claude usage record in the 30 days couldn't be read, or was counted with an
+    /// invalid counter left out; nil otherwise. A line still being written isn't a gap. Counts only, never content.
+    static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
+        guard let c = claude?.month.completeness, !c.isComplete else { return nil }
+        func n(_ k: Int, _ one: String, _ many: String) -> String { "\(k) " + (k == 1 ? one : many) }
+        var parts: [String] = []
+        if c.unread > 0 {
+            var kinds: [String] = []
+            if c.malformed > 0 { kinds.append(n(c.malformed, "isn't valid JSON", "aren't valid JSON")) }
+            if c.undated > 0 { kinds.append(n(c.undated, "has no usable timestamp", "have no usable timestamp")) }
+            if c.invalidUsage > 0 {
+                kinds.append(n(c.invalidUsage, "has usage in a form SpanDeck doesn't recognize",
+                               "have usage in a form SpanDeck doesn't recognize"))
+            }
+            // Counted per distinct line: identical copies of a broken line are one (#58).
+            parts.append(n(c.unread, "record", "records") + " couldn't be read, counting identical lines once: "
+                         + kinds.joined(separator: ", ") + ".")
+        }
+        if c.flawed > 0 {
+            parts.append(n(c.flawed, "message", "messages") + " had a token count that isn't a valid number; it was "
+                         + "left out and the rest counted.")
+        }
+        let undated = c.undated + c.malformed
+        if undated > 0 {
+            parts.append(undated == c.unread
+                ? (undated == 1 ? "It has no date, so it may belong to any period."
+                                : "None of them has a date, so they may belong to any period.")
+                : n(undated, "of the unread records has no date, so it", "of the unread records have no date, so they")
+                    + " may belong to any period.")
+        }
+        return (incomplete, "In Claude Code's logs for the last 30 days, " + parts.joined(separator: " ") + " What "
+                    + "couldn't be read isn't in the token totals or cost estimates, so both may be low. Costs are "
+                    + "still estimates, not your bill.")
+    }
+}
+
+/// Copy for token-quantity uncertainty (#58), kept apart from the views so tests can check it. Independent of
+/// identity, completeness and cost coverage: it says the counts themselves aren't exact.
+enum QuantityText {
+    static let provisional = "Some token counts are provisional. Totals may be over- or understated."
+
+    /// The note and its detail when any Claude token quantity in the 30 days isn't exact; nil otherwise.
+    static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
+        guard let q = claude?.month.quantity, !q.isExact else { return nil }
+        var causes: [String] = []
+        if q.saturated {
+            causes.append("some totals are larger than SpanDeck can count, so they are shown at the largest value it "
+                          + "can hold, below the true amount.")
+        }
+        if q.disputedTokens > 0 {
+            causes.append("\(Fmt.tokens(q.disputedTokens)) cache-write tokens are counted provisionally, because a "
+                          + "cache-write total and its 5-minute/1-hour breakdown disagree and the larger was used. The "
+                          + "true amount may be lower or higher, and their cost isn't estimated.")
+        }
+        return (provisional, "In Claude Code's logs for the last 30 days, " + causes.joined(separator: " Also, ")
+                    + " Costs are still estimates, not your bill.")
+    }
+}
+
+/// The notes under the usage tiles (#55, #58): one short line each, with the detail as a tooltip and for VoiceOver.
+/// What couldn't be read comes first, then uncertain quantities, then how records were told apart. Cost coverage
+/// stays with the costs.
+struct UsageNotes: View {
+    let notes: [(text: String, detail: String)]
+
+    nonisolated static func notes(_ claude: UsageSummary?) -> [(text: String, detail: String)] {
+        [CompletenessText.note(claude), QuantityText.note(claude), IdentityText.note(claude)].compactMap { $0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(notes, id: \.text) { note in
+                Text(note.text).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(note.detail)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(note.text + " " + note.detail)
+            }
+        }
     }
 }
 

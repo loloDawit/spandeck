@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: - Aggregates
 
-struct Agg: Codable {
+struct Agg: Codable, Equatable {
     var input = 0
     var output = 0
     var cacheWrite5m = 0
@@ -15,26 +15,93 @@ struct Agg: Codable {
     /// Grok only: tokens of merged turns that reported no cost (R7). Optional so ledger caches written before it still
     /// decode; never set for Claude, whose missing costs come from the price table at summary time.
     var uncostedTokens: Int?
+    /// P9 (#58), Claude only: cache-write tokens whose 5-minute/1-hour tier is unknown, because the breakdown doesn't
+    /// match the flat total or can't be read. The flat total is the quantity; the cost is a minimum at the cheaper
+    /// tier's rate. Optional (and saved only when set) so ordinary buckets stay small.
+    var cacheWriteUnresolved: Int?
+    /// P9 (#58), Claude only: cache-write tokens the breakdown reports beyond the flat total. Counted provisionally
+    /// (the larger source wins) with an unknown cost; neither a verified count nor a lower bound.
+    var cacheWriteDisputed: Int?
 
-    var total: Int { input + output + cacheWrite5m + cacheWrite1h + cacheRead }
+    var unresolved: Int { cacheWriteUnresolved ?? 0 }
+    var disputed: Int { cacheWriteDisputed ?? 0 }
+    /// Tokens whose tier is known: what the price table prices exactly.
+    var resolved: Int { [output, cacheWrite5m, cacheWrite1h, cacheRead].reduce(input) { $0.saturatingAdd($1) } }
+    /// Saturating, like `add`: counters are validated below 2^53 (#58), but enough of them must still not trap.
+    var total: Int { resolved.saturatingAdd(unresolved).saturatingAdd(disputed) }
+    /// A counter or the total was held at `Int.max`, so the true value is unknown (#58).
+    var isSaturated: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, unresolved, disputed, total].contains(.max) }
 
-    /// Field-wise growth from `old` to self (never negative); used when a streamed message is logged again.
-    func growth(from old: Agg) -> Agg {
-        Agg(input: max(input - old.input, 0), output: max(output - old.output, 0),
-            cacheWrite5m: max(cacheWrite5m - old.cacheWrite5m, 0), cacheWrite1h: max(cacheWrite1h - old.cacheWrite1h, 0),
-            cacheRead: max(cacheRead - old.cacheRead, 0), calls: 0)
+    private static func optional(_ n: Int) -> Int? { n == 0 ? nil : n }
+
+    /// The cache writes' quantity, however they are classified: tiered, tier-unresolved and disputed together.
+    var cacheWrites: Int {
+        cacheWrite5m.saturatingAdd(cacheWrite1h).saturatingAdd(unresolved).saturatingAdd(disputed)
     }
 
-    func maxed(with o: Agg) -> Agg {
-        Agg(input: max(input, o.input), output: max(output, o.output), cacheWrite5m: max(cacheWrite5m, o.cacheWrite5m),
-            cacheWrite1h: max(cacheWrite1h, o.cacheWrite1h), cacheRead: max(cacheRead, o.cacheRead), calls: max(calls, o.calls))
+    /// What one operation reported, from two of its records (#58): streaming logs a message several times with growing
+    /// counts. Other counters keep their largest value. Cache writes are one quantity whose classification can change
+    /// between records, so their fields are never maxed one by one (a reclassification would count twice): the larger
+    /// quantity wins with its classification. At equal quantity the less certain wins (disputed, then tier-unresolved,
+    /// then tiered), and two tier splits that disagree make the tier unknown rather than picking one. The result
+    /// doesn't depend on which record came first, nor on how records are grouped (it's commutative and associative),
+    /// so arrival order, rescans and #55 merges all reach the same operation.
+    func reconciled(with o: Agg) -> Agg {
+        var r = Agg(input: max(input, o.input), output: max(output, o.output), cacheRead: max(cacheRead, o.cacheRead),
+                    calls: max(calls, o.calls))
+        let q = cacheWrites, oq = o.cacheWrites
+        if q != oq {
+            let w = q > oq ? self : o
+            r.cacheWrite5m = w.cacheWrite5m; r.cacheWrite1h = w.cacheWrite1h
+            r.cacheWriteUnresolved = w.cacheWriteUnresolved; r.cacheWriteDisputed = w.cacheWriteDisputed
+            return r
+        }
+        let d = max(disputed, o.disputed)
+        if cacheWrite5m == o.cacheWrite5m && cacheWrite1h == o.cacheWrite1h {
+            r.cacheWrite5m = cacheWrite5m; r.cacheWrite1h = cacheWrite1h
+        }
+        r.cacheWriteDisputed = Self.optional(d)
+        // Never negative: when the splits agree, the record with the larger disputed part leaves exactly its own rest.
+        r.cacheWriteUnresolved = Self.optional(max(q - d - r.cacheWrite5m - r.cacheWrite1h, 0))
+        return r
     }
+
+    /// `self - o` field by field, and possibly negative: what to add to a bucket that holds `o` so it holds `self`
+    /// instead. Adds no calls.
+    func difference(from o: Agg) -> Agg {
+        Agg(input: input - o.input, output: output - o.output, cacheWrite5m: cacheWrite5m - o.cacheWrite5m,
+            cacheWrite1h: cacheWrite1h - o.cacheWrite1h, cacheRead: cacheRead - o.cacheRead, calls: 0,
+            cacheWriteUnresolved: Self.optional(unresolved - o.unresolved),
+            cacheWriteDisputed: Self.optional(disputed - o.disputed))
+    }
+
+    /// Some counter goes down, as in a reclassification's difference.
+    var hasDecrease: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, unresolved, disputed].contains { $0 < 0 } }
 
     mutating func add(_ o: Agg) {
-        input += o.input; output += o.output
-        cacheWrite5m += o.cacheWrite5m; cacheWrite1h += o.cacheWrite1h
-        cacheRead += o.cacheRead; calls += o.calls
+        input = input.saturatingAdd(o.input); output = output.saturatingAdd(o.output)
+        cacheWrite5m = cacheWrite5m.saturatingAdd(o.cacheWrite5m); cacheWrite1h = cacheWrite1h.saturatingAdd(o.cacheWrite1h)
+        cacheRead = cacheRead.saturatingAdd(o.cacheRead); calls += o.calls
         if let t = o.costTicks { costTicks = (costTicks ?? 0) + t }
+        if o.unresolved != 0 { cacheWriteUnresolved = Self.optional(unresolved.saturatingAdd(o.unresolved)) }
+        if o.disputed != 0 { cacheWriteDisputed = Self.optional(disputed.saturatingAdd(o.disputed)) }
+    }
+
+    /// Takes back `o`, which was added before. Only for sums that aren't held (`isSaturated`).
+    mutating func subtract(_ o: Agg) {
+        input -= o.input; output -= o.output
+        cacheWrite5m -= o.cacheWrite5m; cacheWrite1h -= o.cacheWrite1h
+        cacheRead -= o.cacheRead; calls -= o.calls
+        cacheWriteUnresolved = Self.optional(unresolved - o.unresolved)
+        cacheWriteDisputed = Self.optional(disputed - o.disputed)
+    }
+}
+
+extension Int {
+    /// `self + o`, held at `Int.max` or `Int.min` instead of trapping (#58: a crafted transcript mustn't crash the app).
+    func saturatingAdd(_ o: Int) -> Int {
+        let (r, overflow) = addingReportingOverflow(o)
+        return overflow ? (o > 0 ? .max : .min) : r
     }
 }
 
@@ -53,21 +120,40 @@ struct CostEstimate: Equatable, Sendable {
 
     var known = 0.0
     var knownTokens = 0
+    /// Tokens without a price (Claude) or a reported cost (Grok).
     var unknownTokens = 0
+    /// P9 (#58): the least the tier-unresolved cache writes can cost, at the cheaper tier's list price. A lower bound,
+    /// kept apart from `known`, which is exact at list prices.
+    var minimum = 0.0
+    var minimumTokens = 0
+    /// P9 (#58): provisional cache-write tokens beyond the flat total. Their cost is unknown, and no bound is claimed.
+    var disputedTokens = 0
+    /// The part of `disputedTokens` whose model has no price (#58): already counted there, never again in
+    /// `unknownTokens`, and kept so the model is still named as unpriced when all its tokens are disputed.
+    var unpricedDisputedTokens = 0
 
     static let zero = CostEstimate()
 
     var coverage: Coverage {
-        if unknownTokens == 0 { return .complete }
-        return knownTokens == 0 && known == 0 ? .unavailable : .partial
+        if unknownTokens == 0 && minimumTokens == 0 && disputedTokens == 0 { return .complete }
+        return knownTokens == 0 && known == 0 && minimumTokens == 0 ? .unavailable : .partial
     }
 
     /// The amount when complete; nil when any of it is unknown.
     var value: Double? { coverage == .complete ? known : nil }
+    /// P9 (#58): some cache-write quantities disagree between the logs' sources, so even the flat totals behind
+    /// `minimum` aren't verified, and no lower bound is claimed: the cost is a provisional estimate.
+    var isProvisional: Bool { disputedTokens > 0 }
+    /// The amount shown for a partial cost: the exact part plus the minimum for tier-unresolved writes. A lower bound
+    /// unless `isProvisional`; with unpriced tokens the true cost may be higher, never lower.
+    var amount: Double { known + minimum }
 
     static func + (a: CostEstimate, b: CostEstimate) -> CostEstimate {
-        CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens + b.knownTokens,
-                     unknownTokens: a.unknownTokens + b.unknownTokens)
+        CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens.saturatingAdd(b.knownTokens),
+                     unknownTokens: a.unknownTokens.saturatingAdd(b.unknownTokens), minimum: a.minimum + b.minimum,
+                     minimumTokens: a.minimumTokens.saturatingAdd(b.minimumTokens),
+                     disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens),
+                     unpricedDisputedTokens: a.unpricedDisputedTokens.saturatingAdd(b.unpricedDisputedTokens))
     }
 
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
@@ -113,11 +199,100 @@ struct IdentityCoverage: Codable, Equatable, Sendable {
     static func += (a: inout IdentityCoverage, b: IdentityCoverage) { a = a + b }
 }
 
+/// What the ledger couldn't read (#58, P7/P8), independent of identity (#55), cost coverage (R7) and cache issues (R8).
+/// Claude only. Records that can't be read aren't in any total, so a total with any of them may be low; a message
+/// counted with an invalid counter left out is a lower bound too. Records that aren't usage (user records,
+/// `<synthetic>`, other types, an assistant record without usage) are ignored and never counted here.
+struct DataCompleteness: Decodable, Equatable, Sendable {
+    /// Logged messages (identity groups) counted with at least one invalid counter left out: negative, fractional,
+    /// not a number, or too large. Their valid counters count. In the hour of the message, like its tokens.
+    var flawed = 0
+    /// Records with a timestamp whose usage isn't an object. Not counted; in their own hour.
+    var invalidUsage = 0
+    /// Usage records whose timestamp is missing or can't be parsed. Not counted, and with no period: reported with
+    /// every period, since they could belong to any.
+    var undated = 0
+    /// Lines with a `"usage"` key that aren't a JSON object: malformed JSON or invalid UTF-8. Not counted; no period.
+    var malformed = 0
+    /// Transcripts whose last line has no newline yet (P6). Read once it is finished, so not a gap in itself; it is
+    /// normal while Claude Code is writing. Reported with every period.
+    var pending = 0
+
+    var unread: Int { invalidUsage + undated + malformed }
+    /// Every record that looked like usage was read with valid counters. Pending lines don't count against it.
+    var isComplete: Bool { flawed == 0 && unread == 0 }
+
+    init(flawed: Int = 0, invalidUsage: Int = 0, undated: Int = 0, malformed: Int = 0, pending: Int = 0) {
+        self.flawed = flawed; self.invalidUsage = invalidUsage; self.undated = undated
+        self.malformed = malformed; self.pending = pending
+    }
+
+    /// Fields left out are 0, so a fixture names only what it expects.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func n(_ k: CodingKeys) throws -> Int { try c.decodeIfPresent(Int.self, forKey: k) ?? 0 }
+        self.init(flawed: try n(.flawed), invalidUsage: try n(.invalidUsage), undated: try n(.undated),
+                  malformed: try n(.malformed), pending: try n(.pending))
+    }
+
+    private enum CodingKeys: String, CodingKey { case flawed, invalidUsage, undated, malformed, pending }
+
+    static func + (a: DataCompleteness, b: DataCompleteness) -> DataCompleteness {
+        DataCompleteness(flawed: a.flawed + b.flawed, invalidUsage: a.invalidUsage + b.invalidUsage,
+                         undated: a.undated + b.undated, malformed: a.malformed + b.malformed, pending: a.pending + b.pending)
+    }
+
+    static func += (a: inout DataCompleteness, b: DataCompleteness) { a = a + b }
+}
+
+/// Whether token quantities are exact (#58), independent of identity, completeness and cost coverage. Claude only.
+struct QuantityUncertainty: Decodable, Equatable, Sendable {
+    /// P9: cache-write tokens counted provisionally because a breakdown exceeds its flat total. The true amount may be
+    /// lower or higher.
+    var disputedTokens = 0
+    /// A sum exceeded `Int.max` and was held there: the total shown is less than the true one.
+    var saturated = false
+
+    var isExact: Bool { disputedTokens == 0 && !saturated }
+
+    init(disputedTokens: Int = 0, saturated: Bool = false) {
+        self.disputedTokens = disputedTokens; self.saturated = saturated
+    }
+
+    /// Fields left out are 0 or false, so a fixture names only what it expects.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(disputedTokens: try c.decodeIfPresent(Int.self, forKey: .disputedTokens) ?? 0,
+                  saturated: try c.decodeIfPresent(Bool.self, forKey: .saturated) ?? false)
+    }
+
+    private enum CodingKeys: String, CodingKey { case disputedTokens, saturated }
+
+    static func + (a: QuantityUncertainty, b: QuantityUncertainty) -> QuantityUncertainty {
+        QuantityUncertainty(disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens),
+                            saturated: a.saturated || b.saturated)
+    }
+
+    static func += (a: inout QuantityUncertainty, b: QuantityUncertainty) { a = a + b }
+}
+
 struct Totals {
     var tokens = 0
     var cost = CostEstimate.zero
     /// Claude only; Grok turns are deduplicated by their own rule and aren't counted here.
     var identity = IdentityCoverage()
+    /// Claude only (#58): an unread Claude record says nothing about Grok.
+    var completeness = DataCompleteness()
+    /// Claude only (#58).
+    var quantity = QuantityUncertainty()
+
+    /// Adds `t` tokens, holding the sum at `Int.max` and saying so instead of trapping (#58). A sum that lands on
+    /// `Int.max` can't be told from a held one, so it counts as held too.
+    mutating func addTokens(_ t: Int, saturated: Bool = false) {
+        let (r, overflow) = tokens.addingReportingOverflow(t)
+        tokens = overflow ? .max : r
+        if saturated || tokens == .max { quantity.saturated = true }
+    }
 }
 
 struct DayBar: Identifiable {
@@ -152,7 +327,11 @@ extension UsageSummary {
         guard let a, let b else { return r }
         // Estimates add field by field, so one provider's incomplete cost keeps the combined total incomplete (R7).
         func add(_ x: Totals, _ y: Totals) -> Totals {
-            Totals(tokens: x.tokens + y.tokens, cost: x.cost + y.cost, identity: x.identity + y.identity)
+            var t = Totals(cost: x.cost + y.cost, identity: x.identity + y.identity,
+                           completeness: x.completeness + y.completeness, quantity: x.quantity + y.quantity)
+            t.addTokens(x.tokens)
+            t.addTokens(y.tokens)
+            return t
         }
         r.today = add(a.today, b.today)
         r.week = add(a.week, b.week)
@@ -165,14 +344,21 @@ extension UsageSummary {
 
 extension UsageSummary {
     /// Models whose cost isn't fully known in the 30 days (R7), for the explanation under the totals.
-    var uncostedModels: [String] { models.filter { $0.cost.coverage != .complete }.map(\.model).sorted() }
+    var uncostedModels: [String] {
+        models.filter { $0.cost.unknownTokens > 0 || $0.cost.unpricedDisputedTokens > 0 }.map(\.model).sorted()
+    }
+
+    /// Priced models whose cache writes have an unknown tier or a disputed amount (P9, #58).
+    var uncertainCacheModels: [String] {
+        models.filter { $0.cost.minimumTokens > 0 || $0.cost.disputedTokens > 0 }.map(\.model).sorted()
+    }
 
     /// Days whose cost isn't fully known, with the known part, so the chart can mark them instead of drawing what
     /// looks like a complete (or zero) cost.
-    var incompleteCostDays: [(day: Date, known: Double)] {
+    var incompleteCostDays: [(day: Date, cost: CostEstimate)] {
         var days: [Date: CostEstimate] = [:]
         for b in bars { days[b.day, default: .zero] += b.cost }
-        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value.known) }.sorted { $0.day < $1.day }
+        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value) }.sorted { $0.day < $1.day }
     }
 }
 
@@ -383,14 +569,22 @@ final class Pricing: @unchecked Sendable {
             return CostEstimate(known: Double(ticks) / 1e10, knownTokens: a.total - unknown, unknownTokens: unknown)
         }
         if a.uncostedTokens != nil { return CostEstimate(unknownTokens: a.total) } // Grok, no turn reported a cost
-        guard let c = listCost(model: model, a) else { return CostEstimate(unknownTokens: a.total) }
-        return CostEstimate(known: c, knownTokens: a.total)
+        guard let (c, p) = listCost(model: model, a) else {
+            // No price: everything is unknown, but disputed tokens stay disputed (counted once), so a total that holds
+            // them is still provisional (P9, #58).
+            return CostEstimate(unknownTokens: a.total - a.disputed, disputedTokens: a.disputed,
+                                unpricedDisputedTokens: a.disputed)
+        }
+        // P9: unresolved writes cost at least the cheaper tier's rate; disputed ones aren't priced at all.
+        return CostEstimate(known: c, knownTokens: a.resolved, minimum: Double(a.unresolved) * min(p.cacheWrite, p.cacheWrite1h),
+                            minimumTokens: a.unresolved, disputedTokens: a.disputed)
     }
 
     /// The cost if fully known, else nil.
     func cost(model: String, _ a: Agg) -> Double? { estimate(model: model, a).value }
 
-    private func listCost(model: String, _ a: Agg) -> Double? {
+    /// The exact list cost of `a`'s resolved tokens, and the price used; nil without a price.
+    private func listCost(model: String, _ a: Agg) -> (Double, Price)? {
         let p: Price? = lock.withLock {
             if let hit = resolved[model] { return hit }
             var p = table[model]
@@ -400,8 +594,8 @@ final class Pricing: @unchecked Sendable {
             return p
         }
         guard let p else { return nil }
-        return Double(a.input) * p.input + Double(a.output) * p.output + Double(a.cacheWrite5m) * p.cacheWrite
-            + Double(a.cacheWrite1h) * p.cacheWrite1h + Double(a.cacheRead) * p.cacheRead
+        return (Double(a.input) * p.input + Double(a.output) * p.output + Double(a.cacheWrite5m) * p.cacheWrite
+            + Double(a.cacheWrite1h) * p.cacheWrite1h + Double(a.cacheRead) * p.cacheRead, p)
     }
 }
 
@@ -445,17 +639,30 @@ enum LedgerClearFailure: Error, Equatable {
 /// Paths are only held in memory to read the files.
 final class Ledger {
     private struct FileMark: Codable { var offset: UInt64 }
-    /// What has been counted for one operation, per model, and how the operation was identified (#55).
-    private struct Seen: Codable { var hour: Int; var parts: [String: Agg]; var identity: IdentityCoverage.Kind }
+    /// What has been counted for one operation, per model, and how the operation was identified (#55). `flawed` is
+    /// set (never cleared) once any of its records had an invalid counter (#58); left out of the cache when not.
+    private struct Seen: Codable {
+        var hour: Int; var parts: [String: Agg]; var identity: IdentityCoverage.Kind; var flawed: Bool?
+    }
+    /// A record that couldn't be read (#58), keyed by an opaque id of its line so that reading the same bytes again
+    /// (a rescan, a rewrite, a rename or a copy) reports it once. `hour` is the record's own for `invalidUsage`; the
+    /// other kinds have no period, and theirs is the hour they were found, used only to prune them.
+    private struct Unread: Codable {
+        enum Kind: String, Codable { case invalidUsage, undated, malformed }
+        var kind: Kind; var hour: Int
+    }
     /// Which operation carries a single message id or request id (#55): the one pair with it, or `ambiguous` once a
     /// second pair has it too. `hour` is the newest of their hours, for pruning.
     private struct Link: Codable { var target: String; var hour: Int }
-    /// Version 5 (#55): `seen` also holds operations known by one id or by a fingerprint, `links` maps single ids to
-    /// pairs, and `identity` counts operations per hour by how they were identified. Version 4 counted records
-    /// without ids on every read and treated empty ids as an id, so its totals can't be carried over. Version 4 (R8)
-    /// keyed `files` and `seen` by opaque ids; version 3 by raw paths and ids.
+    /// Version 6 (#58): `unread` holds records that couldn't be read, and `flawed` counts operations per hour that
+    /// were counted with an invalid counter. Version 5 subtracted negative counters, dropped cache-write breakdowns
+    /// without a flat total and skipped `"usage": {`, and its offsets are past those lines, so its totals can't be
+    /// carried over. Version 5 (#55): `seen` also holds operations known by one id or by a fingerprint, `links` maps
+    /// single ids to pairs, and `identity` counts operations per hour by how they were identified. Version 4 counted
+    /// records without ids on every read and treated empty ids as an id. Version 4 (R8) keyed `files` and `seen` by
+    /// opaque ids; version 3 by raw paths and ids.
     private struct State: Codable {
-        var version = 5
+        var version = 6
         /// An opaque id of a fixed input under the key the ids were made with, so a cache is only loaded with that key
         /// (a restored old cache next to a newer key would otherwise re-read and double count everything).
         var keyCheck = ""
@@ -464,6 +671,8 @@ final class Ledger {
         var links: [String: Link] = [:]
         var hours: [Int: [String: Agg]] = [:]
         var identity: [Int: IdentityCoverage] = [:]
+        var flawed: [Int: Int] = [:]
+        var unread: [String: Unread] = [:]
     }
     private static let ambiguous = "ambiguous"
     static let cacheName = "claude-ledger.json"
@@ -481,6 +690,9 @@ final class Ledger {
     private var grokFiles: [String: GrokFile] = [:]
     /// Transcripts modified in the last two hours; tailed on every refresh between full scans.
     private var hotFiles: Set<String> = []
+    /// Files (opaque ids) whose last line has no newline yet (#58). Not saved: every file with one is read again on the
+    /// first full scan after a launch, since its saved offset is short of its size.
+    private var pendingFiles: Set<String> = []
     private var lastFullScan = Date.distantPast
     /// Newest transcript write seen (Claude or Grok), used to tell when an agent is working.
     private var lastActivity = Date.distantPast
@@ -495,7 +707,7 @@ final class Ledger {
     private var issue: LedgerCacheIssue?
     private let home: URL
     private let pricing: Pricing
-    private let usageNeedle = Array(#""usage":{"#.utf8)
+    private static let usageNeedle = Array(#""usage""#.utf8)
 
     /// The current time and the calendar for day boundaries. Injectable so accounting fixtures (#6) can pin "now" and
     /// the time zone; by default the real clock and `Calendar.current`, read on every use as before.
@@ -521,10 +733,11 @@ final class Ledger {
     /// HMAC-SHA256 over a domain and length-prefixed parts, so different kinds and splits of input can't collide.
     private func opaqueID(_ domain: String, _ parts: String...) -> String { opaqueID(domain, parts) }
 
-    private func opaqueID(_ domain: String, _ parts: [String]) -> String {
+    private func opaqueID(_ domain: String, _ parts: [String]) -> String { opaqueID(domain, data: parts.map { Data($0.utf8) }) }
+
+    private func opaqueID(_ domain: String, data parts: [Data]) -> String {
         var mac = HMAC<SHA256>(key: key)
-        for part in [domain] + parts {
-            let bytes = Data(part.utf8)
+        for bytes in [Data(domain.utf8)] + parts {
             mac.update(data: withUnsafeBytes(of: UInt64(bytes.count).bigEndian) { Data($0) })
             mac.update(data: bytes)
         }
@@ -571,8 +784,10 @@ final class Ledger {
             // Summaries only change with new data, a new window, a new day or new prices.
             let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(calendar.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
-                cachedSummaries = (summarize(claudeHours(), identity: state.identity, windowStart: windowStart),
-                                   summarize(grokHours(), identity: [:], windowStart: nil))
+                cachedSummaries = (summarize(claudeHours(), identity: state.identity, completeness: claudeCompleteness(),
+                                             windowStart: windowStart),
+                                   summarize(grokHours(), identity: [:], completeness: ([:], DataCompleteness()),
+                                             windowStart: nil))
                 lastSummaryKey = key
             }
             completion(cachedSummaries!.0, cachedSummaries!.1, lastActivity)
@@ -607,6 +822,7 @@ final class Ledger {
         key = SymmetricKey(size: .bits256)
         keyPersisted = false
         hotFiles = []
+        pendingFiles = []
         grokFiles = [:]
         lastFullScan = .distantPast
         changeCounter += 1
@@ -654,20 +870,34 @@ final class Ledger {
             if size < offset { offset = 0 } // rewritten file; dedupe keys prevent double counting
             offset = ingestClaudeFile(path, from: offset)
             state.files[id] = FileMark(offset: offset)
+            setPending(id, offset < size)
             dirty = true
         }
 
         // Forget files that aged out or were removed, and prune old buckets and dedupe keys.
         let stale = state.files.keys.filter { !present.contains($0) }
         if !stale.isEmpty { stale.forEach { state.files.removeValue(forKey: $0) }; dirty = true }
+        // Every other file was read to its end before (offset == size), or is gone: neither is pending.
+        let read = Set(candidates.map(\.id))
+        for id in pendingFiles where !read.contains(id) { setPending(id, false) }
         let minHour = Int(cutoff.timeIntervalSince1970 / 3600)
-        if state.hours.keys.contains(where: { $0 < minHour }) {
+        if state.hours.keys.contains(where: { $0 < minHour }) || state.flawed.keys.contains(where: { $0 < minHour })
+            || state.unread.values.contains(where: { $0.hour < minHour }) {
             state.hours = state.hours.filter { $0.key >= minHour }
             state.seen = state.seen.filter { $0.value.hour >= minHour }
             state.links = state.links.filter { $0.value.hour >= minHour }
             state.identity = state.identity.filter { $0.key >= minHour }
+            state.flawed = state.flawed.filter { $0.key >= minHour }
+            state.unread = state.unread.filter { $0.value.hour >= minHour }
+            changeCounter += 1
             dirty = true
         }
+    }
+
+    private func setPending(_ id: String, _ pending: Bool) {
+        guard pending != pendingFiles.contains(id) else { return }
+        if pending { pendingFiles.insert(id) } else { pendingFiles.remove(id) }
+        changeCounter += 1
     }
 
     /// Cheap new-file check between full scans: only lists project folders touched in the last two hours.
@@ -696,14 +926,16 @@ final class Ledger {
 
     private func tailHotFiles() {
         for path in hotFiles {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                  let size = (attrs[.size] as? NSNumber)?.uint64Value else { continue }
-            if let m = attrs[.modificationDate] as? Date { lastActivity = max(lastActivity, m) }
             let id = fileID(path)
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = (attrs[.size] as? NSNumber)?.uint64Value else { setPending(id, false); continue }
+            if let m = attrs[.modificationDate] as? Date { lastActivity = max(lastActivity, m) }
             var offset = state.files[id]?.offset ?? 0
             if size == offset { continue }
             if size < offset { offset = 0 }
-            state.files[id] = FileMark(offset: ingestClaudeFile(path, from: offset))
+            offset = ingestClaudeFile(path, from: offset)
+            state.files[id] = FileMark(offset: offset)
+            setPending(id, offset < size)
             dirty = true
         }
     }
@@ -719,7 +951,7 @@ final class Ledger {
             var start = Int(offset)
             while start < n, let nl = memchr(base + start, 0x0A, n - start) {
                 let end = base.distance(to: UnsafeRawPointer(nl))
-                if end > start, memmem(base + start, end - start, usageNeedle, usageNeedle.count) != nil {
+                if end > start, Self.hasUsageKey(UnsafeRawBufferPointer(start: base + start, count: end - start)) {
                     autoreleasepool {
                         ingestClaudeLine(Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base + start),
                                               count: end - start, deallocator: .none))
@@ -732,22 +964,53 @@ final class Ledger {
         return UInt64(consumed)
     }
 
+    /// Whether a line has a `"usage"` key: the quoted name, then optional JSON whitespace and a colon, anywhere in the
+    /// line (#58). Lines without one carry no usage and aren't parsed. The quotes keep it from matching `\"usage\"`
+    /// inside text (there the byte after `e` is a backslash), and the colon from matching `"usage"` as a value.
+    static func hasUsageKey(_ line: UnsafeRawBufferPointer) -> Bool {
+        guard let base = line.baseAddress else { return false }
+        let n = line.count, k = usageNeedle.count
+        var from = 0
+        while from < n, let hit = memmem(base + from, n - from, usageNeedle, k) {
+            var i = base.distance(to: UnsafeRawPointer(hit)) + k
+            while i < n, line[i] == 0x20 || line[i] == 0x09 || line[i] == 0x0D { i += 1 } // space, tab, CR; no LF in a line
+            if i < n, line[i] == 0x3A { return true }
+            from = base.distance(to: UnsafeRawPointer(hit)) + 1
+        }
+        return false
+    }
+
+    /// Reads one line that has a usage key. What isn't usage is ignored; usage that can't be read is reported (#58)
+    /// instead of dropped, and counters that aren't valid are left out and flag the message.
     private func ingestClaudeLine(_ line: Data) {
-        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-              obj.string("type") == "assistant",
-              let msg = obj.dict("message"), let usage = msg.dict("usage"),
-              let date = ISO.parse(obj.string("timestamp")) else { return }
+        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+            return unread(line, .malformed, hour: nil)
+        }
+        // Not usage: another record type, no message, no usage (or null), or a <synthetic> record. Checked before the
+        // timestamp, so these are never reported as unread.
+        guard obj.string("type") == "assistant", let msg = obj.dict("message"), let raw = msg["usage"], !(raw is NSNull)
+        else { return }
         let model = msg.string("model") ?? "unknown"
         if model == "<synthetic>" { return }
+        guard let date = ISO.parse(obj.string("timestamp")) else { return unread(line, .undated, hour: nil) }
         let hour = Int(date.timeIntervalSince1970 / 3600)
+        guard let usage = raw as? [String: Any] else { return unread(line, .invalidUsage, hour: hour) }
 
-        var parts: [String: Agg] = [model: Self.agg(usage)]
+        var counters = CounterReader()
+        var parts: [String: Agg] = [model: Self.agg(usage, &counters)]
         // Sub-calls made inside a turn (e.g. the advisor) are listed as extra iterations with their own
         // model; the top-level usage only covers the main model's iterations.
-        for it in usage["iterations"] as? [[String: Any]] ?? [] {
-            guard let sub = it.string("model"), sub != model, it.string("type") != "message" else { continue }
-            parts[sub, default: Agg(calls: 0)].add(Self.agg(it))
+        switch usage["iterations"] {
+        case nil, is NSNull: break
+        case let list as [Any]:
+            for item in list {
+                guard let it = item as? [String: Any] else { counters.flawed = true; continue }
+                guard let sub = it.string("model"), sub != model, it.string("type") != "message" else { continue }
+                parts[sub, default: Agg(calls: 0)].add(Self.agg(it, &counters))
+            }
+        default: counters.flawed = true
         }
+        let flawed = counters.flawed
 
         let id = Self.usableID(msg["id"]), req = Self.usableID(obj["requestId"])
         switch (id, req) {
@@ -764,11 +1027,11 @@ final class Ledger {
                         state.seen[key] = partial
                     } else {
                         uncount(partial)
-                        count(partial.parts, hour: partial.hour, key: key, kind: .incomplete)
+                        count(partial.parts, hour: partial.hour, key: key, kind: .incomplete, flawed: partial.flawed == true)
                     }
                 }
             }
-            count(parts, hour: hour, key: key, kind: .identified)
+            count(parts, hour: hour, key: key, kind: .identified, flawed: flawed)
             let at = state.seen[key]!.hour
             for s in single {
                 if let l = state.links[s], l.target != key {
@@ -780,57 +1043,97 @@ final class Ledger {
         case (let id?, nil), (nil, let id?):
             let single = req == nil ? messageOnlyID(id) : requestOnlyID(id)
             switch state.links[single]?.target {
-            case nil: count(parts, hour: hour, key: single, kind: .incomplete)
+            case nil: count(parts, hour: hour, key: single, kind: .incomplete, flawed: flawed)
             case Self.ambiguous?:
                 // More than one pair carries this id: joining either could merge two operations, so it stays apart.
-                count(parts, hour: hour, key: single, kind: .ambiguous)
+                count(parts, hour: hour, key: single, kind: .ambiguous, flawed: flawed)
                 reclassify(single, .ambiguous)
             case let pair?:
-                count(parts, hour: hour, key: pair, kind: .identified)
+                count(parts, hour: hour, key: pair, kind: .identified, flawed: flawed)
                 reclassify(pair, .incomplete)
             }
         case (nil, nil):
-            count(parts, hour: hour, key: fingerprint(date, msg, usage), kind: .fingerprinted)
+            count(parts, hour: hour, key: fingerprint(date, msg, usage), kind: .fingerprinted, flawed: flawed)
         }
     }
 
     /// Adds a record to the operation `key`: all of it if the operation is new, else only its growth, since streaming
-    /// logs the same message several times with growing counts.
-    private func count(_ parts: [String: Agg], hour: Int, key: String, kind: IdentityCoverage.Kind) {
+    /// logs the same message several times with growing counts. A `flawed` record flags the operation for good.
+    private func count(_ parts: [String: Agg], hour: Int, key: String, kind: IdentityCoverage.Kind, flawed: Bool) {
         guard var old = state.seen[key] else {
             for (m, a) in parts { state.hours[hour, default: [:]][m, default: Agg()].add(a) }
-            state.seen[key] = Seen(hour: hour, parts: parts, identity: kind)
+            state.seen[key] = Seen(hour: hour, parts: parts, identity: kind, flawed: flawed ? true : nil)
             state.identity[hour, default: IdentityCoverage()].add(kind)
+            if flawed { state.flawed[hour, default: 0] += 1 }
             changeCounter += 1
             return
         }
+        if flawed, old.flawed != true {
+            old.flawed = true
+            state.flawed[old.hour, default: 0] += 1
+            changeCounter += 1
+        }
+        var held: [String] = []
         for (m, a) in parts {
             let prev = old.parts[m] ?? Agg(calls: 0)
-            let delta = a.growth(from: prev)
-            guard delta.total > 0 else { continue }
-            state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
-            // Growth adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
+            // A record adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
             // operation added to `hours` (needed to take it back when two operations turn out to be one).
-            var merged = a.maxed(with: prev)
+            var merged = a.reconciled(with: prev)
             merged.calls = prev.calls
+            guard merged != prev else { continue }
+            // The difference can be negative in some fields when cache writes are reclassified (#58); the bucket
+            // can't go below 0, since it is the sum of `parts` and each part's counters are. A held bucket has lost
+            // its true value, so it's rebuilt rather than reduced.
+            let delta = merged.difference(from: prev)
+            if delta.hasDecrease, state.hours[old.hour]?[m]?.isSaturated == true {
+                held.append(m)
+            } else {
+                state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
+            }
             old.parts[m] = merged
             changeCounter += 1
         }
         state.seen[key] = old
+        for m in held { rebuild(hour: old.hour, model: m) }
+    }
+
+    /// Sets a bucket to the sum of the operations' `parts` counted in it, which `count` and `uncount` keep it equal
+    /// to. For a held sum (#58): subtracting from one would show a wrong remainder as exact.
+    private func rebuild(hour: Int, model m: String) {
+        var b = Agg()
+        for o in state.seen.values where o.hour == hour { if let p = o.parts[m] { b.add(p) } }
+        state.hours[hour, default: [:]][m] = b.calls == 0 && b.total == 0 ? nil : b
     }
 
     /// Takes back everything an operation added to `hours` and `identity`.
+    /// `s` must already be gone from `seen`.
     private func uncount(_ s: Seen) {
         for (m, a) in s.parts {
             guard var b = state.hours[s.hour]?[m] else { continue }
-            b.input -= a.input; b.output -= a.output
-            b.cacheWrite5m -= a.cacheWrite5m; b.cacheWrite1h -= a.cacheWrite1h
-            b.cacheRead -= a.cacheRead; b.calls -= a.calls
+            if b.isSaturated || a.isSaturated {
+                // A held sum has lost its true value (#58): rebuilt from the operations still counted there.
+                rebuild(hour: s.hour, model: m)
+                continue
+            }
+            b.subtract(a)
             state.hours[s.hour]![m] = b.total == 0 && b.calls == 0 ? nil : b
         }
         if state.hours[s.hour]?.isEmpty == true { state.hours[s.hour] = nil }
         state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
         if state.identity[s.hour]?.groups == 0 { state.identity[s.hour] = nil }
+        if s.flawed == true {
+            state.flawed[s.hour, default: 0] -= 1
+            if state.flawed[s.hour] == 0 { state.flawed[s.hour] = nil }
+        }
+        changeCounter += 1
+    }
+
+    /// Reports a record that couldn't be read, once per distinct line (#58). Only an opaque id of the line is kept,
+    /// never its text. Without `hour` (no timestamp) it has no period; the hour it was found is kept only for pruning.
+    private func unread(_ line: Data, _ kind: Unread.Kind, hour: Int?) {
+        let key = opaqueID("unread", data: [line])
+        guard state.unread[key] == nil else { return }
+        state.unread[key] = Unread(kind: kind, hour: hour ?? Int(now().timeIntervalSince1970 / 3600))
         changeCounter += 1
     }
 
@@ -873,7 +1176,7 @@ final class Ledger {
             let cc = u.dict("cache_creation")
             return Self.fingerprintCounters.map { text(u[$0]) }
                 + ["cc:" + (cc == nil ? text(u["cache_creation"]) : "{}")]
-                + Self.fingerprintBreakdown.map { text(cc?[$0]) }
+                + Self.cacheTiers.map { text(cc?[$0]) }
         }
         // The instant as parsed (to the millisecond), not its spelling: "…:00Z", "…:00.000Z" and "…:00+00:00" are
         // one time.
@@ -886,24 +1189,88 @@ final class Ledger {
 
     private static let fingerprintCounters = ["input_tokens", "output_tokens", "cache_creation_input_tokens",
                                               "cache_read_input_tokens"]
-    private static let fingerprintBreakdown = ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
+    private static let cacheTiers = ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]
 
-    private static func agg(_ usage: [String: Any]) -> Agg {
-        var a = Agg(input: usage.int("input_tokens"), output: usage.int("output_tokens"),
-                    cacheRead: usage.int("cache_read_input_tokens"), calls: 1)
-        let created = usage.int("cache_creation_input_tokens")
-        if let cc = usage.dict("cache_creation") {
-            a.cacheWrite1h = cc.int("ephemeral_1h_input_tokens")
-            a.cacheWrite5m = cc.int("ephemeral_5m_input_tokens")
-            // Fall back to the flat total when the breakdown does not add up.
-            if a.cacheWrite1h + a.cacheWrite5m != created { a.cacheWrite5m = created; a.cacheWrite1h = 0 }
-        } else {
-            a.cacheWrite5m = created
+    /// A token counter as written (P8, #58).
+    enum Counter: Equatable { case absent, value(Int), invalid }
+
+    /// Absent and null report nothing. A valid counter is a non-negative integral number below 2^53, where every
+    /// integer is exact (so `100.0`, `5e1` and `1e2` are valid). Anything else (negative, fractional, too large, not
+    /// finite, a string, a boolean, an object or an array) is invalid: never read as 0 or as some other number.
+    static func counter(_ v: Any?) -> Counter {
+        switch v {
+        case nil, is NSNull: return .absent
+        case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID():
+            let d = n.doubleValue
+            guard d.isFinite, d >= 0, d.rounded() == d, d < 9_007_199_254_740_992 else { return .invalid }
+            return .value(Int(d))
+        default: return .invalid
+        }
+    }
+
+    /// Reads counters and remembers whether any was invalid.
+    private struct CounterReader {
+        var flawed = false
+        /// The value, or nil when absent or invalid (an invalid one sets `flawed`).
+        mutating func read(_ d: [String: Any], _ k: String) -> Int? {
+            switch Ledger.counter(d[k]) {
+            case .absent: return nil
+            case .invalid: flawed = true; return nil
+            case .value(let n): return n
+            }
+        }
+    }
+
+    private static func agg(_ usage: [String: Any], _ r: inout CounterReader) -> Agg {
+        var a = Agg(input: r.read(usage, "input_tokens") ?? 0, output: r.read(usage, "output_tokens") ?? 0,
+                    cacheRead: r.read(usage, "cache_read_input_tokens") ?? 0, calls: 1)
+        let flat = r.read(usage, "cache_creation_input_tokens")
+        switch usage["cache_creation"] {
+        case let cc as [String: Any] where Self.cacheTiers.contains(where: { Self.counter(cc[$0]) != .absent }):
+            let tierInvalid = Self.cacheTiers.contains { Self.counter(cc[$0]) == .invalid }
+            let t5 = r.read(cc, "ephemeral_5m_input_tokens") ?? 0, t1 = r.read(cc, "ephemeral_1h_input_tokens") ?? 0
+            let sum = t5 + t1
+            guard let flat else {
+                // P8: without a valid flat total the breakdown is all there is. With an invalid tier its valid tiers
+                // still count, but the split is unknown, so their tier is unresolved (P9).
+                if tierInvalid { a.cacheWriteUnresolved = sum == 0 ? nil : sum } else { a.cacheWrite5m = t5; a.cacheWrite1h = t1 }
+                break
+            }
+            // P9 (decided on #58): matching sources give the tiers. Otherwise the flat total is the quantity and its
+            // tier is unknown (an invalid tier is never taken as matching), and what the breakdown reports beyond it
+            // is counted provisionally, unpriced.
+            if !tierInvalid && sum == flat {
+                a.cacheWrite5m = t5; a.cacheWrite1h = t1
+            } else {
+                a.cacheWriteUnresolved = flat == 0 ? nil : flat
+                if sum > flat { a.cacheWriteDisputed = sum - flat }
+            }
+        case nil, is NSNull, is [String: Any]:
+            // No breakdown (or one without tiers): the flat total is 5-minute writes, as before.
+            a.cacheWrite5m = flat ?? 0
+        default:
+            // A breakdown that can't be read: the flat total's tier is unknown.
+            r.flawed = true
+            if let flat, flat > 0 { a.cacheWriteUnresolved = flat }
         }
         return a
     }
 
     private func claudeHours() -> [Int: [String: Agg]] { state.hours }
+
+    /// What couldn't be read, per hour where the hour is known, and what has no period (#58).
+    private func claudeCompleteness() -> (byHour: [Int: DataCompleteness], undated: DataCompleteness) {
+        var byHour = state.flawed.mapValues { DataCompleteness(flawed: $0) }
+        var undated = DataCompleteness(pending: pendingFiles.count)
+        for u in state.unread.values {
+            switch u.kind {
+            case .invalidUsage: byHour[u.hour, default: DataCompleteness()].invalidUsage += 1
+            case .undated: undated.undated += 1
+            case .malformed: undated.malformed += 1
+            }
+        }
+        return (byHour, undated)
+    }
 
     /// Claude's hour buckets (hours since 1970 UTC, then model), read on the ledger queue. For accounting fixtures and
     /// audits (#6); the app doesn't use it.
@@ -982,7 +1349,9 @@ final class Ledger {
     // MARK: Summaries
 
     /// Calendar-day windows like ccusage: today, the last 7 days and the last 30 days, all including today.
-    private func summarize(_ hours: [Int: [String: Agg]], identity: [Int: IdentityCoverage], windowStart: Date?) -> UsageSummary {
+    private func summarize(_ hours: [Int: [String: Agg]], identity: [Int: IdentityCoverage],
+                           completeness: (byHour: [Int: DataCompleteness], undated: DataCompleteness),
+                           windowStart: Date?) -> UsageSummary {
         let cal = calendar
         let today = cal.startOfDay(for: now())
         let weekStart = cal.date(byAdding: .day, value: -6, to: today)!
@@ -1001,19 +1370,23 @@ final class Ledger {
             for (model, a) in byModel {
                 let c = pricing.estimate(model: model, a)
                 let t = a.total
-                s.month.tokens += t; s.month.cost += c
-                if date >= weekStart { s.week.tokens += t; s.week.cost += c }
-                if date >= today { s.today.tokens += t; s.today.cost += c }
-                if let wh = windowHour, hour >= wh { s.window!.tokens += t; s.window!.cost += c }
+                let held = a.isSaturated
+                let q = QuantityUncertainty(disputedTokens: a.disputed)
+                s.month.addTokens(t, saturated: held); s.month.cost += c; s.month.quantity += q
+                if date >= weekStart { s.week.addTokens(t, saturated: held); s.week.cost += c; s.week.quantity += q }
+                if date >= today { s.today.addTokens(t, saturated: held); s.today.cost += c; s.today.quantity += q }
+                if let wh = windowHour, hour >= wh {
+                    s.window!.addTokens(t, saturated: held); s.window!.cost += c; s.window!.quantity += q
+                }
 
                 let family = modelFamily(model)
                 let key = "\(day.timeIntervalSince1970)-\(family)"
                 var bar = bars[key] ?? DayBar(day: day, family: family, tokens: 0, cost: .zero)
-                bar.tokens += t; bar.cost += c
+                bar.tokens = bar.tokens.saturatingAdd(t); bar.cost += c
                 bars[key] = bar
 
                 var m = models[model] ?? (0, .zero)
-                m.0 += t
+                m.0 = m.0.saturatingAdd(t)
                 m.1 += c
                 models[model] = m
             }
@@ -1027,6 +1400,19 @@ final class Ledger {
             if date >= today { s.today.identity += c }
             if let wh = windowHour, hour >= wh { s.window!.identity += c }
         }
+        // What couldn't be read (#58): in its own periods when its hour is known, else in every period.
+        for (hour, c) in completeness.byHour {
+            let date = Date(timeIntervalSince1970: Double(hour) * 3600)
+            guard date >= monthStart else { continue }
+            s.month.completeness += c
+            if date >= weekStart { s.week.completeness += c }
+            if date >= today { s.today.completeness += c }
+            if let wh = windowHour, hour >= wh { s.window!.completeness += c }
+        }
+        s.month.completeness += completeness.undated
+        s.week.completeness += completeness.undated
+        s.today.completeness += completeness.undated
+        s.window?.completeness += completeness.undated
         s.bars = bars.values.sorted { ($0.day, $0.family) < ($1.day, $1.family) }
         s.models = models.map { ModelRow(model: $0.key, tokens: $0.value.0, cost: $0.value.1) }
             .sorted { $0.tokens > $1.tokens }

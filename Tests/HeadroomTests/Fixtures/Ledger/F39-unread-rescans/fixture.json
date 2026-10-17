@@ -1,0 +1,143 @@
+{
+  "title": "Unreadable records through a truncating rewrite, a rename, a copy and deletion",
+  "matrix": [
+    "invalid UTF-8 and malformed JSON",
+    "rewrites, rotation and deletion"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P7 and P12: a record that can't be read is reported once, however often its bytes are read again (keyed by the line, like usage by its ids), and stays reported after its transcript is rewritten or deleted, since the totals still lack it. A rebuild reports what is still on disk.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 4,
+  "duplicates": 0,
+  "derivation": "A [100, 10] counts. X is cut off (malformed), Y's timestamp is \"yesterday\" (undated), Z's usage is an array (invalid usage, dated 16:02). Step 2 rewrites the file in place with only A and X (shorter, so it is read from the start); step 3 renames it into another project; step 4 writes a copy of the original four lines; step 5 deletes both. Every step: 110 tokens and 1 malformed, 1 undated, 1 invalid. The rebuild finds no files: nothing.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "full.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 110,
+        "completeness": {
+          "malformed": 1,
+          "undated": 1,
+          "invalidUsage": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "short.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 110,
+        "completeness": {
+          "malformed": 1,
+          "undated": 1,
+          "invalidUsage": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "rename",
+          "path": "-synthetic-p1/s1.jsonl",
+          "to": "-synthetic-p2/s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 110,
+        "completeness": {
+          "malformed": 1,
+          "undated": 1,
+          "invalidUsage": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/copy.jsonl",
+          "from": "full.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 110,
+        "completeness": {
+          "malformed": 1,
+          "undated": 1,
+          "invalidUsage": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "delete",
+          "path": "-synthetic-p1/copy.jsonl"
+        },
+        {
+          "op": "delete",
+          "path": "-synthetic-p2/s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 10, 0, 0, 0, 1]
+          }
+        },
+        "operations": 1,
+        "month": 110,
+        "completeness": {
+          "malformed": 1,
+          "undated": 1,
+          "invalidUsage": 1
+        }
+      }
+    }
+  ],
+  "rebuild": {
+    "expect": {
+      "hours": {},
+      "operations": 0,
+      "month": 0,
+      "completeness": {}
+    }
+  }
+}

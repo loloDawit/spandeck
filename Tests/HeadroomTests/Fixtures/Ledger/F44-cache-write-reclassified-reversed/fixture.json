@@ -1,0 +1,101 @@
+{
+  "title": "The same streamed operations as F43, logged in the opposite order",
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns",
+    "streaming growth",
+    "cost coverage",
+    "identity merges (#55)"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P9 streaming (decided on #58 re-review): an operation's cache writes are one quantity whose classification can change between its records. The larger quantity wins with its classification; a reclassification alone never adds tokens. At equal quantity the less certain wins (disputed > tier-unresolved > tiered), and two tier splits that disagree make the tier unresolved rather than picking one. The result, cost coverage included, doesn't depend on arrival order. Without a valid flat total, an invalid tier makes the valid tiers tier-unresolved (a minimum, not an exact price) and flags the message. F43 and F44 log the same records in opposite orders and must end equal.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 15,
+  "duplicates": 7,
+  "derivation": "Claude Haiku 4.5, each record [1, 1] (per million: input $1, output $5, 5m $1.25, 1h $2; a minimum uses $1.25). The five streamed operations end the same in either order: a 50+50 = 100 tiered and 30+30 != 100 are both 100, so the less certain wins: 100 unresolved (not 200). b 60+40 = 100 tiered vs flat 40 with 60+40: 40 unresolved, 60 disputed, both 100: the disputed one wins. c flat 100 vs 10+10: 100 unresolved; flat 20 vs 50+50: 20 unresolved, 80 disputed; both 100: the disputed one wins. d 50/50 and 30/70, both tiered 100: the splits disagree, so 100 unresolved (neither split is priced). e flat 100 vs 200+100: 100 unresolved, 200 disputed (300); 350 = 350+0: 5m 350; 350 > 300 wins, +50 over the larger record, not +350. f no flat, 5m \"x\", 1h 25: 25 unresolved, flawed. g flat 25, 5m \"x\", 1h 25: 25 unresolved, flawed. p: msg_p alone and req_p alone are two incomplete operations until the pair arrives (#55), which takes over the message-only one and merges the request-only one: tiered 50/50 and unresolved 100 are both 100, so 100 unresolved; the pair's own 50/50 changes nothing. Final: 8 operations [8, 8, 5m 350, 0, 0, 8], unresolved 100+40+20+100+25+25+100 = 410, disputed 60+80 = 140; 16+350+410+140 = 916. Known 8 + 40 + 437.5 = 485.5 micro-dollars, minimum 410 x 1.25 = 512.5 micro-dollars, 140 disputed (provisional). Identity: a b c d e f g identified, p incomplete. Flawed f g. Before this fix the fields were maxed one by one: a counted 200, e 650, and the order changed the result. Step 1 (F43's second records first, msg_p unresolved, req_p tiered): 5m d30 e350 p50 = 430, 1h d70 p50 = 120, unresolved a100 b40 c20 f25 g25 p100 = 310, disputed b60 c80 = 140; 9 operations, 18+430+120+310+140 = 1018. Known 9 + 45 + 537.5 + 240 = 831.5, minimum 310 x 1.25 = 387.5 micro-dollars. Step 2 ends exactly as F43.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [9, 9, 430, 120, 0, 9]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [310, 140]
+          }
+        },
+        "operations": 9,
+        "month": 1018,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 0.0008315,
+        "minimumCost": 0.0003875,
+        "quantity": {
+          "disputedTokens": 140
+        },
+        "completeness": {
+          "flawed": 2
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 2,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1b.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [8, 8, 350, 0, 0, 8]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [410, 140]
+          }
+        },
+        "operations": 8,
+        "month": 916,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 0.0004855,
+        "minimumCost": 0.0005125,
+        "quantity": {
+          "disputedTokens": 140
+        },
+        "completeness": {
+          "flawed": 2
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    }
+  ]
+}

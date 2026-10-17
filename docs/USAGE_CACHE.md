@@ -1,6 +1,6 @@
 # Local usage cache: what is stored, and why (R8, #33)
 
-SpanDeck counts Claude Code token usage by reading the transcripts in `~/.claude/projects` and `~/.config/claude/projects`. Re-reading every transcript on every launch would be slow, so it keeps an incremental index. This page describes that index as of R8, with schema version 5 (#55). Storing data locally does not by itself make it private: any process running as your user can read your user's files.
+SpanDeck counts Claude Code token usage by reading the transcripts in `~/.claude/projects` and `~/.config/claude/projects`. Re-reading every transcript on every launch would be slow, so it keeps an incremental index. This page describes that index as of R8, with schema version 6 (#55, #58). Storing data locally does not by itself make it private: any process running as your user can read your user's files.
 
 ## Files
 All in `~/Library/Application Support/Headroom/`. The folder and file names are inherited from Headroom and kept for compatibility.
@@ -8,7 +8,7 @@ All in `~/Library/Application Support/Headroom/`. The folder and file names are 
 | File | Contents | Mode |
 |---|---|---|
 | (folder) | — | `0700`, checked and tightened before every cache write. Parent folders are never changed. |
-| `claude-ledger.json` | Usage index, schema version 5 | `0600` |
+| `claude-ledger.json` | Usage index, schema version 6 | `0600` |
 | `claude-ledger.key` | 32 random bytes: the key for the opaque ids below | `0600` |
 | `.claude-ledger.*.tmp-*` | Only while a save is in progress | created `0600` |
 | `pricing-source.json`, `pricing.json` | Public price data (R6); not part of the usage cache | not changed by R8 |
@@ -22,25 +22,31 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 | Field | Persisted as | Why it's kept |
 |---|---|---|
 | `files` | opaque file id → byte offset | Read only what was appended to each transcript |
-| `seen` | opaque operation id → hour, token counts per model, and how it was identified | Count a streamed message once as it grows, and a message repeated in a resumed session once |
+| `seen` | opaque operation id → hour, token counts per model, how it was identified, and whether it was counted with an invalid counter (#58, only when it was) | Count a streamed message once as it grows, and a message repeated in a resumed session once |
 | `links` | opaque single id → opaque operation id (or `ambiguous`) + hour | Join a record that has only a message id or only a request id to the one pair that carries it (#55) |
-| `hours` | hour → model → token counts | Totals, windows and cost estimates |
+| `hours` | hour → model → token counts. Only where P9 applies (#58), also cache-write tokens whose tier is unresolved and tokens disputed between a flat total and its breakdown | Totals, windows and cost estimates. Each operation's counts in `seen` carry the same fields, so a #55 merge or a held (`Int.max`) sum can be rebuilt from them |
 | `identity` | hour → number of identity groups (logged messages with their streamed copies) identified by both ids, one id, a fingerprint, or an ambiguous id | The "Usage may be approximate" note (#55) |
-| `version` | `5` | A different version is never loaded |
+| `flawed` | hour → number of identity groups counted with an invalid counter left out | The "Some usage records couldn't be read" note (#58) |
+| `unread` | opaque line id → kind (`invalidUsage`, `undated` or `malformed`) + hour | Report a record that couldn't be read, once however often it is read again (#58). Identical broken lines, in one file or several, are one entry, so the count is of distinct lines, not of occurrences. The hour is the record's own for `invalidUsage`; for the others it is the hour the line was found, used only for pruning |
+| `version` | `6` | A different version is never loaded |
 | `keyCheck` | opaque id of a fixed input under the key | The cache is loaded only with the key it was written under. Otherwise, for example with an old cache restored from a backup after a clear made a new key, every id would miss and everything would be counted twice; such a cache is deleted and rebuilt |
 
 **Not stored:**
 - transcript paths, project folder names or your user name;
 - message ids or request ids;
-- prompts, responses, code, tool arguments or tool output.
+- prompts, responses, code, tool arguments or tool output;
+- any part of a line that couldn't be read (#58): only its opaque id and kind.
 
-The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are read every refresh and never cached. Model names and token counts are shown in the UI. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error.
+Which transcripts end in an unfinished line (#58) is kept in memory only. Every such file is read again on the first full scan after a launch, because its saved offset is short of its size.
+
+Only lines with a `"usage"` key (with any JSON whitespace before its colon) are parsed. The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are read every refresh and never cached. Model names and token counts are shown in the UI. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error.
 
 ## Opaque ids and their limits
 Each id is one of:
 - `HMAC-SHA256(key, "file" | path)`;
 - `HMAC-SHA256(key, "message" | message id | request id)` for a record with both ids;
 - `HMAC-SHA256(key, "message-only" | message id)` or `HMAC-SHA256(key, "request-only" | request id)` for a record with one (#55);
+- `HMAC-SHA256(key, "unread" | the line's bytes)` for a line that couldn't be read (#58). The same bytes give the same id in any file, so a rescan, rewrite, rename or copy reports it once;
 - `HMAC-SHA256(key, "fingerprint" | time | model | each usage counter …)` for a record with neither. The time is the instant as parsed, in milliseconds since 1970, so `Z`, `+00:00`, other offsets and trailing fractional zeros don't matter. Two records whose times differ by less than a millisecond get the same time. The model is used as written. Every counter the ledger reads (including the cache breakdown and iterations) follows in a fixed order, each as absent, its numeric value (`50`, `50.0` and `5e1` are the same) or something else. No path or offset is in it.
 
 In every case:
@@ -54,10 +60,12 @@ What it doesn't protect against:
 - The key sits next to the cache, so anyone who can read both (any process running as you, or a backup containing both) can test guesses. A path or id with little randomness can then be confirmed by trying candidates.
 - Hour buckets, models and token counts are stored in the clear. They show when and how much you used each model over the last 32 days.
 - A fingerprint covers only a timestamp, a model name and token counts. Someone with the key who can guess all of those for a record can confirm it.
+- An unread line's id covers the whole line. Someone with the key who can guess the exact bytes of a broken line can confirm it was in a transcript. They learn nothing about lines they can't guess.
 
 ## Retention
 - Transcripts last modified more than 32 days ago are skipped.
-- Hour buckets, operation ids, single-id links and identity counts older than 32 days are pruned at each full scan (every 5 minutes while running).
+- Hour buckets, operation ids, single-id links, identity counts, flaw counts and unread lines older than 32 days are pruned at each full scan (every 5 minutes while running). An unread line without a usable timestamp is pruned 32 days after it was found.
+- Unread lines stay counted when their transcript is deleted or rewritten without them, like usage already counted: the totals still lack them. A cleared cache only reports what is still on disk.
 - A transcript that disappears is dropped from `files`.
 - The cache is saved at most every 10 minutes, and again on quit.
 
@@ -80,8 +88,18 @@ What users will notice:
 
 Interruptions: if the app stops after deleting the old cache but before saving the new one, the next launch finds no cache and indexes again. If the cache folder can't be made owner-only, nothing is read or deleted, and the old cache waits for the next launch. No backup of the version 4 file is kept.
 
+## Upgrading from a version 5 cache (#58)
+Version 5 subtracted negative counters, dropped a cache-write breakdown that came without a flat total, and never parsed `"usage": {` written with a space. Its offsets are already past those lines, so they would never be read again, and it kept no record of lines it couldn't read. Its totals can't be corrected in place. A version 5 cache is deleted when found, exactly as a version 4 cache is (above), and the transcripts still on disk are re-indexed under the existing key.
+
+What users will notice:
+- **One-time re-index** on the first launch after the upgrade.
+- **Lost history:** as with version 4, usage whose transcripts are gone disappears from the totals, permanently. This is the second such re-index after #55.
+- **Different totals** only where transcripts held such records: higher where a breakdown or spaced JSON was missed, higher where a negative counter subtracted. A note appears when something couldn't be read.
+
+Interruptions behave as for version 4. No backup of the version 5 file is kept.
+
 ## Downgrading
-Older builds ignore a version 5 cache (version check), delete it and re-index with their own rules, including their miscounting of records without ids. They leave the key file in place and reuse it. A version 4 or older build can't show identity coverage.
+Older builds ignore a version 6 cache (version check), delete it and re-index with their own rules, including the miscounting each fixed. They leave the key file in place and reuse it. A version 5 or older build can't show what couldn't be read, and a version 4 or older build can't show identity coverage.
 
 ## Clear cached usage data
 Settings ▸ Cached usage data ▸ *Clear cached usage data…* asks for confirmation, then deletes `claude-ledger.json`, its key and any temporary files.

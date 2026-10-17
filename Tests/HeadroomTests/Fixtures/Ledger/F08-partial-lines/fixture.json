@@ -5,12 +5,12 @@
   ],
   "classification": "pass",
   "followUp": "#9",
-  "policy": "P6: a line counts once its newline is written. A final line that never gets one (a writer that crashed) is never counted; whether to count a complete JSON object without a newline is a policy question.",
+  "policy": "P6: a line counts once its newline is written. A final line that never gets one (a writer that crashed) is never counted; whether to count a complete JSON object without a newline is a policy question. A last line without its newline is reported as pending, not unread (#58).",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 3,
   "duplicates": 0,
-  "derivation": "Step 1: A [100, 50] and the first half of B: 150. Step 2: the rest of B [60, 6] and half of C: 216, 2 operations. C is never complete.",
+  "derivation": "Step 1: A [100, 50] and the first half of B: 150. Step 2: the rest of B [60, 6] and half of C: 216, 2 operations. C is never complete. Each step ends in an unfinished line: 1 file pending.",
   "steps": [
     {
       "ops": [
@@ -27,7 +27,10 @@
           }
         },
         "operations": 1,
-        "month": 150
+        "month": 150,
+        "completeness": {
+          "pending": 1
+        }
       }
     },
     {
@@ -51,7 +54,10 @@
         },
         "today": 216,
         "week": 216,
-        "coverage": "unavailable"
+        "coverage": "unavailable",
+        "completeness": {
+          "pending": 1
+        }
       }
     }
   ]
