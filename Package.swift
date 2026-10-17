@@ -4,6 +4,10 @@ import PackageDescription
 let package = Package(
     name: "Headroom",
     platforms: [.macOS(.v14)],
+    // The app and its executable are SpanDeck (#11, Resources/identity.env); the module stays Headroom internally.
+    products: [
+        .executable(name: "SpanDeck", targets: ["Headroom"]),
+    ],
     targets: [
         .executableTarget(
             name: "Headroom",

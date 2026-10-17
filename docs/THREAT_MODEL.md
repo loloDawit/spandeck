@@ -11,7 +11,7 @@ Boundaries:
 1. macOS process -> login Keychain, through `/usr/bin/security`.
 2. Process -> `~/.claude/projects`, `~/.config/claude/projects`, and Grok local files.
 3. Process -> external provider endpoints and, only on an explicit user download, the pinned GitHub-hosted LiteLLM price file (#27).
-4. Process -> `~/Library/Application Support/Headroom` cached usage records. Since R8 (#33): no paths or message/request ids (opaque keyed ids), owner-only modes, user-clearable; see [USAGE_CACHE.md](USAGE_CACHE.md).
+4. Process -> `~/Library/Application Support/SpanDeck` cached usage records (`Application Support/Headroom` before #11, which SpanDeck no longer touches). Since R8 (#33): no paths or message/request ids (opaque keyed ids), owner-only modes, user-clearable; see [USAGE_CACHE.md](USAGE_CACHE.md).
 5. Process -> ServiceManagement login-item registration.
 6. Proposed future telemetry -> local adapter/store/UI.
 

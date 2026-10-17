@@ -3,7 +3,7 @@
 SpanDeck counts Claude Code token usage by reading the transcripts in `~/.claude/projects` and `~/.config/claude/projects`. Re-reading every transcript on every launch would be slow, so it keeps an incremental index. This page describes that index as of R8, with schema version 7 (#55, #58, #57). Storing data locally does not by itself make it private: any process running as your user can read your user's files.
 
 ## Files
-All in `~/Library/Application Support/Headroom/`. The folder and file names are inherited from Headroom and kept for compatibility.
+All in `~/Library/Application Support/SpanDeck/` since #11 (SpanDeck's own identity, from `Resources/identity.env`). Builds before #11 used `~/Library/Application Support/Headroom/`, the folder upstream Headroom uses. SpanDeck never opens, reads, imports, renames or deletes anything there (see *Separate from Headroom* below).
 
 | File | Contents | Mode |
 |---|---|---|
@@ -109,6 +109,27 @@ What is detected (the policy recorded on #56):
 - **Change time unavailable:** a file whose change time can't be read is checked by size alone, as before #56.
 
 A version 7 cache saved before #56 has offsets but no `size`, `stamp` or `anchor`. It is still loaded. A transcript checked without an anchor resumes at its offset as before and takes the new fields: one read of at most 72 KiB, no line parsed. From then on, rewrites are detected as above. A rewrite that happened before the upgrade isn't. Older builds ignore the new fields.
+
+## Separate from Headroom (#11)
+SpanDeck is a fork of Headroom and, before #11, used Headroom's identity:
+- the bundle id `dev.headroom.Headroom`, and with it the same preferences domain and login-item record;
+- the `~/Library/Application Support/Headroom/` folder and `claude-ledger.json`;
+- `~/Library/Logs/Headroom-hover.log`.
+
+With both apps on one account they would replace each other's cache. Since #11, SpanDeck has its own identity:
+- **`SpanDeck.app`**, with the bundle id `io.github.lolodawit.SpanDeck`, its own preferences domain and its own login-item record;
+- **`~/Library/Application Support/SpanDeck/`** for its cache, key and price files;
+- **`~/Library/Logs/SpanDeck-hover.log`**, still only with the hidden `debugHover` preference.
+
+**No migration.** SpanDeck never looks inside Headroom's folder, preferences or log, and never imports, renames or deletes them, whichever app created them. That includes state left by a SpanDeck build from before #11. It also doesn't check whether they exist.
+
+What users of a build from before #11 will notice:
+- **One-time re-index** into the new folder.
+- **Lost history:** usage whose transcripts have since been deleted can't be rebuilt, as with every re-index (see the version 4–6 notes below).
+- **Settings start from defaults:** both consent switches are off, the display settings are reset, and *Launch at login* is off. The old preferences domain isn't read.
+- **The old state stays as it was:** `Application Support/Headroom/`, the `dev.headroom.Headroom` preferences and any old login item. Delete them yourself if they're yours and you no longer need them; SpanDeck can't tell whose they are.
+
+Going back to a build from before #11 uses the Headroom folder again and never sees SpanDeck's. `scripts/install-app.sh` (used by `./build.sh install`) only replaces an app whose bundle id is SpanDeck's, quits only processes named exactly `SpanDeck`, and never touches `Headroom.app` (`scripts/test-install.sh`).
 
 ## Upgrading from a version 6 cache (#57)
 Version 6 kept usage per whole UTC hour. In a time zone whose offset isn't a whole number of hours (+05:30, +05:45, −03:30 and others), local midnight falls inside an hour, and that hour's usage can't be split between the two days without the record times, which the cache doesn't hold. So version 6 hours are never reinterpreted as 15-minute slots: a version 6 cache is deleted when found, exactly as a version 4 or 5 cache is (above), and the transcripts still on disk are re-indexed under the existing key.

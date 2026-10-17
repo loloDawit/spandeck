@@ -1031,7 +1031,7 @@ struct Footer: View {
         do {
             if on { try actions.loginItem.register() } else { try actions.loginItem.unregister() }
         } catch {
-            NSLog("Headroom: login item change failed: \(error)")
+            NSLog("\(AppIdentity.name): login item change failed: \(error)")
         }
         launchAtLogin = actions.loginItem.isEnabled
     }

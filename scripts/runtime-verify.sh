@@ -1,11 +1,15 @@
 #!/bin/bash
-# Runtime verification helper for #3 (audit §7 Phase 2). See docs/audits/0003-runtime-verification.md.
+# Runtime verification helper for #3 (audit §7 Phase 2). See docs/audits/0003-runtime-verification.md, and
+# docs/audits/0008-identity-isolation.md for the #11 coexistence run.
 #
-# Observes a real SpanDeck (Headroom) process in a dedicated, credential-free macOS account. It never reads
-# credentials, never creates Keychain items or provider keys, never sends anything anywhere, and needs no admin rights.
+# Observes a real SpanDeck process in a dedicated, credential-free macOS account. It never reads credentials, never
+# creates Keychain items or provider keys, never sends anything anywhere, and needs no admin rights. SpanDeck's names
+# come from identity.env (#11). Upstream Headroom's names appear only as LEGACY_* below: observed, and launched only by
+# legacy-launch from a build staged with stage-legacy.
 #
 #   In your normal account (builds only, launches nothing):
 #     scripts/runtime-verify.sh stage            build release + debug from a clean checkout, copy to /Users/Shared
+#     scripts/runtime-verify.sh stage-legacy SHA build an older, Headroom-identity commit for the #11 coexistence run
 #   In the dedicated test account, in this order:
 #     scripts/runtime-verify.sh preflight        safety gate; refuses to continue in an unsafe account
 #     scripts/runtime-verify.sh fixtures [N]     synthetic transcripts with canaries (+ N extra files for timing)
@@ -17,7 +21,15 @@
 #     scripts/runtime-verify.sh quit             wait for you to quit the app from its menu
 #     scripts/runtime-verify.sh snapshot         --snapshot in the release app (must refuse) and the debug binary
 #     scripts/runtime-verify.sh summary          write a sanitized summary to /Users/Shared/spandeck-rv-results
-#     scripts/runtime-verify.sh clean            remove the app's state and the fixtures (keeps evidence)
+#     scripts/runtime-verify.sh clean            remove SpanDeck's state and the fixtures (keeps evidence and legacy state)
+#   #11 coexistence (docs/audits/0008-identity-isolation.md):
+#     scripts/runtime-verify.sh legacy-launch SECONDS [LABEL]  launch the staged legacy (Headroom-identity) build
+#     scripts/runtime-verify.sh quit-legacy      wait for you to quit the legacy app from its menu
+#     scripts/runtime-verify.sh fingerprint LABEL  names, modes, sizes, hashes of both apps' files and preferences
+#     scripts/runtime-verify.sh compare A B      which app's state changed between two fingerprints
+#     scripts/runtime-verify.sh seed-legacy-consent / unseed-legacy-consent  set or remove Headroom-domain consent
+#     scripts/runtime-verify.sh clean-legacy     remove the test account's legacy state (asks first)
+#     scripts/runtime-verify.sh clean-fixtures-legacy  remove Run 3's unregistered synthetic fixtures only (asks first)
 #
 # Evidence goes to ~/spandeck-rv-evidence/<run>/. It holds file names, modes, counts and pass/fail lines only:
 # no transcript content, no preference values other than booleans and numbers, no network payloads.
@@ -27,11 +39,19 @@ RV_USER=${RV_USER:-spandecktest}
 SHARED=${RV_SHARED:-/Users/Shared/spandeck-rv}
 # Written by the test account (the stage folder belongs to the build account); readable by the build account.
 RESULTS=${RV_RESULTS:-/Users/Shared/spandeck-rv-results}
-BUNDLE_ID=${RV_BUNDLE_ID:-dev.headroom.Headroom}
-APP_SUPPORT="$HOME/Library/Application Support/Headroom"
 EVIDENCE_ROOT="$HOME/spandeck-rv-evidence"
 FIXTURE_MARK=".spandeck-rv-fixtures"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+# SpanDeck's identity (#11): the staged copy next to this script, else the checkout's.
+if [ -f "$(dirname "$0")/identity.env" ]; then ID_FILE="$(dirname "$0")/identity.env"; else ID_FILE="$REPO/Resources/identity.env"; fi
+# shellcheck source=../Resources/identity.env
+. "$ID_FILE"
+APP_SUPPORT="$HOME/Library/Application Support/$APP_SUPPORT_DIR"
+# legacy: upstream Headroom's identity, which SpanDeck builds before #11 shared. Observed only.
+LEGACY_NAME=Headroom
+LEGACY_BUNDLE_ID=dev.headroom.Headroom
+LEGACY_SUPPORT="$HOME/Library/Application Support/Headroom"
+LEGACY_LOG="$HOME/Library/Logs/Headroom-hover.log"
 
 die() { echo "STOP: $*" >&2; exit 1; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -52,7 +72,29 @@ staged() {
 }
 record() { echo "$(now) $*" | tee -a "$(run_dir)/log.txt"; }
 
-app_pid() { pgrep -x Headroom 2>/dev/null | head -1 || true; }
+app_pid() { pgrep -x "$APP_NAME" 2>/dev/null | head -1 || true; }
+legacy_pid() { pgrep -x "$LEGACY_NAME" 2>/dev/null | head -1 || true; }
+legacy_staged() {
+    [ -f "$SHARED/legacy-current" ] || die "no legacy build staged; run 'stage-legacy SHA' in the build account first"
+    cat "$SHARED/legacy-current"
+}
+
+# Fixture registry (#11 review of Run 3): the marker records the run that created the fixtures and each file it wrote.
+# A new run refuses fixtures it didn't register; later steps of the same run may add theirs.
+fixture_run() { sed -n 's/^run=//p' "$HOME/.claude/projects/$FIXTURE_MARK" 2>/dev/null | head -1; }
+register_fixture() { # path relative to ~/.claude/projects
+    [ "$(fixture_run)" = "$(basename "$(run_dir)")" ] || die "the fixtures belong to run $(fixture_run), not this one"
+    echo "file=$1" >> "$HOME/.claude/projects/$FIXTURE_MARK"
+}
+# Transcript files under ~/.claude/projects the current run didn't register: names only.
+unregistered_fixtures() {
+    local projects="$HOME/.claude/projects"
+    [ -d "$projects" ] || return 0
+    local mine=""; [ "$(fixture_run)" = "$(basename "$(run_dir)")" ] && mine=yes
+    (cd "$projects" && find . -name '*.jsonl' -type f | sed 's|^\./||' | sort) | while read -r f; do
+        if [ -z "$mine" ] || ! grep -qxF "file=$f" "$projects/$FIXTURE_MARK"; then echo "$f"; fi
+    done
+}
 
 # Files in the home folder changed since preflight. Skips folders macOS protects with privacy prompts (TCC), the
 # evidence and the fixtures; those are never the app's to write.
@@ -76,14 +118,17 @@ cmd_stage() {
     [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes; stage builds a recorded commit only"
     local sha; sha=$(git rev-parse HEAD)
     ./build.sh
-    swift build
+    swift build --product "$APP_NAME"
     local dest="$SHARED/$sha"
     mkdir -p "$dest"
-    rm -rf "$dest/Headroom.app"
-    cp -R build/Headroom.app "$dest/"
-    cp .build/debug/Headroom "$dest/Headroom-debug"
+    rm -rf "$dest/$APP_NAME.app"
+    cp -R "build/$APP_NAME.app" "$dest/"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$dest/$APP_NAME.app/Contents/Info.plist")" = "$BUNDLE_ID" ] \
+        || die "the built app isn't $BUNDLE_ID"
+    cp ".build/debug/$APP_NAME" "$dest/$APP_NAME-debug"
     clang -Wall -Wextra -O2 -o "$dest/procwatch" scripts/runtime/procwatch.c
     cp scripts/runtime-verify.sh "$dest/runtime-verify.sh"
+    cp Resources/identity.env "$dest/identity.env"
     chmod -R a+rX "$SHARED"
     {
         echo "commit: $sha"
@@ -93,15 +138,43 @@ cmd_stage() {
         echo "swift: $(swift --version 2>&1 | head -1)"
         echo "xcode: $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
         echo "macos: $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(uname -m)"
-        echo "release archs: $(lipo -archs "$dest/Headroom.app/Contents/MacOS/Headroom")"
-        echo "release sha256: $(shasum -a 256 "$dest/Headroom.app/Contents/MacOS/Headroom" | cut -d' ' -f1)"
-        echo "debug sha256: $(shasum -a 256 "$dest/Headroom-debug" | cut -d' ' -f1)"
+        echo "identity: $APP_NAME, $BUNDLE_ID, Application Support/$APP_SUPPORT_DIR"
+        echo "release archs: $(lipo -archs "$dest/$APP_NAME.app/Contents/MacOS/$APP_NAME")"
+        echo "release sha256: $(shasum -a 256 "$dest/$APP_NAME.app/Contents/MacOS/$APP_NAME" | cut -d' ' -f1)"
+        echo "debug sha256: $(shasum -a 256 "$dest/$APP_NAME-debug" | cut -d' ' -f1)"
         echo "procwatch sha256: $(shasum -a 256 "$dest/procwatch" | cut -d' ' -f1) (scripts/runtime/procwatch.c)"
-        echo "signature: $(codesign -dv "$dest/Headroom.app" 2>&1 | grep -E '^(Signature|TeamIdentifier|CodeDirectory)' | tr '\n' ' ')"
+        echo "signature: $(codesign -dv "$dest/$APP_NAME.app" 2>&1 | grep -E '^(Identifier|Signature|TeamIdentifier|CodeDirectory)' | tr '\n' ' ')"
     } > "$dest/manifest.txt"
     echo "$sha" > "$SHARED/current"
     cat "$dest/manifest.txt"
     echo "Staged in $dest. Nothing was launched."
+}
+
+# #11: builds an older commit that still has upstream Headroom's identity (for example 226a7d6) in a temporary
+# worktree with that commit's own build.sh, for the coexistence run. Launches nothing.
+cmd_stage_legacy() {
+    cd "$REPO"
+    local want=${1:?stage-legacy SHA}
+    local sha; sha=$(git rev-parse --verify "$want^{commit}") || die "unknown commit $want"
+    local wt; wt=$(mktemp -d "${TMPDIR:-/tmp}/spandeck-legacy.XXXXXX")
+    git worktree add --detach "$wt" "$sha" >/dev/null
+    (cd "$wt" && ./build.sh) || { git worktree remove --force "$wt"; die "legacy build failed"; }
+    local app="$wt/build/$LEGACY_NAME.app"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist")" = "$LEGACY_BUNDLE_ID" ] \
+        || { git worktree remove --force "$wt"; die "$sha doesn't build $LEGACY_BUNDLE_ID"; }
+    local dest="$SHARED/legacy-$sha"
+    mkdir -p "$dest"; rm -rf "$dest/$LEGACY_NAME.app"; cp -R "$app" "$dest/"
+    git worktree remove --force "$wt"
+    chmod -R a+rX "$SHARED"
+    {
+        echo "legacy commit: $sha"
+        echo "staged: $(now)"
+        echo "identity: $LEGACY_NAME, $LEGACY_BUNDLE_ID, Application Support/Headroom"
+        echo "release sha256: $(shasum -a 256 "$dest/$LEGACY_NAME.app/Contents/MacOS/$LEGACY_NAME" | cut -d' ' -f1)"
+    } > "$dest/manifest.txt"
+    echo "$sha" > "$SHARED/legacy-current"
+    cat "$dest/manifest.txt"
+    echo "Staged the legacy build in $dest. Nothing was launched."
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -127,15 +200,18 @@ cmd_preflight() {
     absent() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
     no_claude_item() { ! security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; } # attributes only, never -w
     no_running() { [ -z "$(app_pid)" ]; }
-    only_fixtures() { absent "$HOME/.claude/projects" || [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ]; }
+    # A new run starts without transcripts: any left by an earlier run (registered to it or not) fails the
+    # preflight, listed by name and never deleted here (`clean` is the explicit way).
+    no_old_fixtures() { [ -z "$(unregistered_fixtures)" ]; }
     manifest_ok() {
         local want; want=$(awk '/^release sha256:/{print $3}' "$SHARED/$sha/manifest.txt")
-        [ "$want" = "$(shasum -a 256 "$SHARED/$sha/Headroom.app/Contents/MacOS/Headroom" | cut -d' ' -f1)" ]
+        [ "$want" = "$(shasum -a 256 "$SHARED/$sha/$APP_NAME.app/Contents/MacOS/$APP_NAME" | cut -d' ' -f1)" ]
     }
     # Whether any preference is stored, not whether the file exists: after `defaults delete`, cfprefsd can leave an
     # empty plist behind.
     no_prefs() { ! defaults read "$BUNDLE_ID" >/dev/null 2>&1; }
-    not_quarantined() { ! xattr -r "$SHARED/$sha/Headroom.app" 2>/dev/null | grep -q com.apple.quarantine; }
+    not_quarantined() { ! xattr -r "$SHARED/$sha/$APP_NAME.app" 2>/dev/null | grep -q com.apple.quarantine; }
+    staged_identity() { [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$SHARED/$sha/$APP_NAME.app/Contents/Info.plist")" = "$BUNDLE_ID" ]; }
 
     record "account $(id -un) uid $(id -u), home $HOME, groups: $(id -Gn)"
     record "machine: $(sysctl -n machdep.cpu.brand_string), $(sysctl -n hw.ncpu) cores, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(uname -m)"
@@ -147,19 +223,29 @@ cmd_preflight() {
     check "no ~/.grok/bin/grok" absent "$HOME/.grok/bin/grok"
     check "no ~/.config/claude/projects" absent "$HOME/.config/claude/projects"
     # shellcheck disable=SC2088 # a literal ~ in the message
-    check "~/.claude/projects absent or synthetic fixtures only" only_fixtures
-    check "no Headroom process running" no_running
-    check "no /Applications/Headroom.app" absent /Applications/Headroom.app
-    check "no ~/Applications/Headroom.app" absent "$HOME/Applications/Headroom.app"
-    check "fresh: no ~/Library/Application Support/Headroom" absent "$APP_SUPPORT"
+    check "~/.claude/projects holds no transcripts from an earlier run" no_old_fixtures
+    [ -z "$(unregistered_fixtures)" ] || record "leftover transcripts (names only, not deleted): $(unregistered_fixtures | tr '\n' ' ')(registered by run: $(fixture_run))"
+    check "no $APP_NAME process running" no_running
+    check "no /Applications/$APP_NAME.app" absent "/Applications/$APP_NAME.app"
+    check "no ~/Applications/$APP_NAME.app" absent "$HOME/Applications/$APP_NAME.app"
+    check "fresh: no ~/Library/Application Support/$APP_SUPPORT_DIR" absent "$APP_SUPPORT"
     check "fresh: no preferences stored for $BUNDLE_ID" no_prefs
+    check "staged app is $BUNDLE_ID" staged_identity
     check "staged app matches its manifest hash" manifest_ok
     check "staged app has no quarantine attribute (no Gatekeeper bypass needed)" not_quarantined
+    # Legacy (Headroom) state is recorded, not failed: the #11 coexistence run creates it on purpose.
+    check "no $LEGACY_NAME process running" eval '[ -z "$(legacy_pid)" ]'
+    local lp=absent; [ -e "$LEGACY_SUPPORT" ] && lp=present
+    local ld=absent; defaults read "$LEGACY_BUNDLE_ID" >/dev/null 2>&1 && ld=present
+    record "legacy state (recorded only): ~/Library/Application Support/Headroom $lp; $LEGACY_BUNDLE_ID preferences $ld; /Applications/Headroom.app $([ -e /Applications/Headroom.app ] && echo present || echo absent)"
     echo
-    echo "Manual check: System Settings > General > Login Items & Extensions. Is Headroom listed anywhere? [y/N]"
+    echo "Manual check: System Settings > General > Login Items & Extensions. Is $APP_NAME listed anywhere? [y/N]"
     read -r ans
-    if [ "${ans:-n}" = "y" ]; then record "FAIL preflight: Headroom already listed in Login Items"; fail=1
-    else record "PASS preflight: Headroom not listed in Login Items (owner observation)"; fi
+    if [ "${ans:-n}" = "y" ]; then record "FAIL preflight: $APP_NAME already listed in Login Items"; fail=1
+    else record "PASS preflight: $APP_NAME not listed in Login Items (owner observation)"; fi
+    echo "And is $LEGACY_NAME listed? (recorded only) [y/N]"
+    read -r ans
+    record "legacy: $LEGACY_NAME listed in Login Items: ${ans:-n} (owner observation)"
     [ $fail -eq 0 ] || die "preflight failed; fix the account (or use a fresh one) before launching anything"
     touch "$run/.preflight-ok"
     record "preflight passed; evidence in $run"
@@ -171,9 +257,11 @@ cmd_fixtures() {
     local run; run=$(run_dir)
     local extra=${1:-0}
     local projects="$HOME/.claude/projects"
-    [ -e "$projects" ] && [ ! -f "$projects/$FIXTURE_MARK" ] && die "$projects has non-fixture content"
+    [ -z "$(unregistered_fixtures)" ] || die "$projects holds transcripts this run didn't write: $(unregistered_fixtures | tr '\n' ' ')"
+    [ ! -f "$projects/$FIXTURE_MARK" ] || [ "$(fixture_run)" = "$(basename "$run")" ] || die "the fixture marker belongs to run $(fixture_run)"
     local tok; tok=$(uuidgen | tr -d '-' | tr 'A-F' 'a-f' | cut -c1-12)
-    mkdir -p "$projects"; touch "$projects/$FIXTURE_MARK"
+    mkdir -p "$projects"
+    [ -f "$projects/$FIXTURE_MARK" ] || echo "run=$(basename "$run")" > "$projects/$FIXTURE_MARK"
     # Distinct canaries. Only the model name may appear in the cache (model names are stored by design).
     cat > "$run/canaries.txt" <<EOF
 content=RVCANARY$tok
@@ -201,8 +289,12 @@ EOF
             "$tok" "$tag" "$tok" "$tag" "$tok" "$ts" >> "$f"
     }
     write_session "$dir/rvid$tok-main.jsonl" 20 main
+    register_fixture "-Users-$RV_USER-rvpath$tok/rvid$tok-main.jsonl"
     local k
-    for ((k = 1; k <= extra; k++)); do write_session "$dir/rvid$tok-perf$k.jsonl" 1000 "p$k"; done
+    for ((k = 1; k <= extra; k++)); do
+        write_session "$dir/rvid$tok-perf$k.jsonl" 1000 "p$k"
+        register_fixture "-Users-$RV_USER-rvpath$tok/rvid$tok-perf$k.jsonl"
+    done
     local msgs=$(( 20 + extra * 1000 ))
     record "fixtures: 1 privacy session (20 messages streamed twice, 1 unpriced) + $extra timing sessions of 1000 messages, ids unique per file"
     record "expected totals: claude-sonnet-4-5 $msgs messages = $(( msgs * 30 )) tokens ($(( msgs * 10 )) input + $(( msgs * 20 )) output); claude-rvmodel$tok $(( 1 + extra )) messages = $(( (1 + extra) * 10 )) tokens, unpriced"
@@ -230,6 +322,7 @@ cmd_identity() {
         # Neither id, written twice identically: one group, fingerprinted.
         for k in 1 2; do printf '{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"RVCANARY%s reply"}],'"$u"'},"timestamp":"%s"}\n' "$tok" 20 "$ts"; done
     } > "$f"
+    register_fixture "${f#"$HOME/.claude/projects/"}"
     record "identity: 8 records (6 groups: 2 identified pairs sharing a message id, 2 by one id, 1 fingerprinted, 1 ambiguous), 180 tokens"
     record "expected: totals grow by 180 claude-sonnet-4-5 tokens; the Token usage card shows \"Usage may be approximate: some records lack identifiers.\"; its help and VoiceOver label start \"Of 27 logged messages from Claude in the last 30 days, 4 were told apart without both a message id and a request id: 2 by one id, 1 with no id, by a fingerprint of timestamp, model and token counts, 1 by an id that more than one message shares\" (23 identified groups with fixtures but no timing sessions; add 1001 per timing session)"
 }
@@ -259,6 +352,7 @@ cmd_completeness() {
         # A user record carrying usage: ignored, not unread.
         printf '{"type":"user","timestamp":"%s","toolUseResult":{"usage":{"input_tokens":999}},"message":{"role":"user","content":"x"}}\n' "$ts"
     } > "$f"
+    register_fixture "${f#"$HOME/.claude/projects/"}"
     record "completeness: 7 lines (1 malformed, 1 undated, 1 invalid usage, 1 flawed, 1 spaced, 1 cache-write conflict, 1 user record), 72 tokens"
     record "expected: totals grow by 72 claude-sonnet-4-5 tokens and 3 identified groups; the Token usage card shows \"Some usage records couldn't be read. Totals may be incomplete.\", then \"Some token counts are provisional. Totals may be over- or understated.\" (detail: \"20 cache-write tokens are counted provisionally\"), then any identity note; the cost note under the chart names \"cache writes of uncertain tier or amount for claude-sonnet-4-5\"; its help and VoiceOver label start \"In Claude Code's logs for the last 30 days, 3 records couldn't be read, counting identical lines once: 1 isn't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 2 of the unread records have no date, so they may belong to any period.\""
 }
@@ -289,6 +383,7 @@ cmd_privacy() {
         printf '{"type":"assistant","timestamp":"%s","message":{"usage":{"input_tokens":1}},"text":"RVSECRET%s RVTOOL%s"\n' "$ts" "$tok" "$tok"
         printf '{"type":"assistant","timestamp":"%s","message":{"text":"RVSECRET%s","usage":{"inp' "$ts" "$tok"
     } > "$f"
+    register_fixture "${f#"$HOME/.claude/projects/"}"
     record "privacy: 1 session with secret, code, tool, thinking and branch canaries (5 records, 15 tokens), 1 malformed line and 1 cut-off last line carrying them"
     record "expected: totals grow by 15 claude-sonnet-4-5 tokens and 1 identified group; one more malformed record (a file still being written isn't reported); no secret, code, tool, thinking or branch canary in any file the app writes"
     record "expected with completeness also applied (72 + 15 = 87 tokens, 4 identified groups), the completeness detail reads: \"In Claude Code's logs for the last 30 days, 4 records couldn't be read, counting identical lines once: 2 aren't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 3 of the unread records have no date, so they may belong to any period.\""
@@ -364,8 +459,12 @@ cmd_capture() {
         echo "# Other processes write here too (macOS services); entries are attributed in the report, not here."
         sed "s|$HOME|~|" "$d/.changed" | sort
     } > "$d/new-files.txt"
-    { echo "# Power assertions"; pmset -g assertions | grep -i -E 'headroom|Claude Code or Grok|Keep awake' || echo "none from Headroom"; } > "$d/assertions.txt"
-    { echo "# Headroom processes"; ps -o pid,ppid,%cpu,rss,etime,comm -p "$(app_pid)" 2>/dev/null || echo "not running"; } > "$d/process.txt"
+    { echo "# Power assertions"; pmset -g assertions | grep -i -E "$APP_NAME|$LEGACY_NAME|Claude Code or Grok|Keep awake" || echo "none from $APP_NAME or $LEGACY_NAME"; } > "$d/assertions.txt"
+    {
+        echo "# $APP_NAME processes"; ps -o pid,ppid,%cpu,rss,etime,comm -p "$(app_pid)" 2>/dev/null || echo "not running"
+        echo "# $LEGACY_NAME processes (legacy, observed only)"; ps -o pid,ppid,%cpu,rss,etime,comm -p "$(legacy_pid)" 2>/dev/null || echo "not running"
+    } > "$d/process.txt"
+    state_fingerprint > "$d/state.txt"
     if [ -f "$run/canaries.txt" ]; then
         local list; list=$(paste -sd, "$run/canaries.txt")
         {
@@ -387,18 +486,31 @@ cmd_capture() {
 # ---------------------------------------------------------------------------------------------------------------
 cmd_launch() {
     gate
-    local secs=${1:-120} label=${2:-main}
-    local run; run=$(run_dir)
     local sha; sha=$(staged)
-    local app="$SHARED/$sha/Headroom.app"
-    [ -z "$(app_pid)" ] || die "Headroom is already running"
+    launch_app "$SHARED/$sha/$APP_NAME.app" "$APP_NAME" "$BUNDLE_ID" "$sha" "${1:-120}" "${2:-main}"
+}
+
+# #11: the staged legacy build (Headroom's identity), monitored the same way. Its forks are watched with the current
+# build's procwatch.
+cmd_legacy_launch() {
+    gate
+    local lsha; lsha=$(legacy_staged)
+    launch_app "$SHARED/legacy-$lsha/$LEGACY_NAME.app" "$LEGACY_NAME" "$LEGACY_BUNDLE_ID" "$(staged)" "${1:-120}" "legacy-${2:-main}"
+}
+
+# launch_app APP NAME BUNDLE_ID PROCWATCH_SHA SECONDS LABEL
+launch_app() {
+    local app=$1 name=$2 bundle=$3 sha=$4 secs=$5 label=$6
+    local run; run=$(run_dir)
+    pid_of() { pgrep -x "$name" 2>/dev/null | head -1 || true; }
+    [ -z "$(pid_of)" ] || die "$name is already running"
     local d="$run/launch-$label"
     [ ! -e "$d" ] || die "$d exists; give this launch its own label"
     mkdir -p "$d"
     # Unified log for the app's own process: network, CFNetwork, Security framework and ServiceManagement messages.
     # Hostnames are usually redacted as <private>; the count and type of events is what matters.
     log stream --style compact --level debug --predicate \
-        'process == "Headroom" AND (subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" OR subsystem BEGINSWITH "com.apple.security" OR subsystem BEGINSWITH "com.apple.servicemanagement" OR subsystem BEGINSWITH "com.apple.backgroundtaskmanagement")' \
+        'process == "'"$name"'" AND (subsystem BEGINSWITH "com.apple.network" OR subsystem BEGINSWITH "com.apple.CFNetwork" OR subsystem BEGINSWITH "com.apple.security" OR subsystem BEGINSWITH "com.apple.servicemanagement" OR subsystem BEGINSWITH "com.apple.backgroundtaskmanagement")' \
         > "$d/app-log.txt" 2>&1 &
     local logpid=$!
     # Any `security` or `grok` process started on this account while the app runs.
@@ -409,7 +521,7 @@ cmd_launch() {
     record "launch $label: open $app"
     open -n "$app"
     local pid=""
-    for _ in $(seq 1 100); do pid=$(app_pid); [ -n "$pid" ] && break; sleep 0.1; done
+    for _ in $(seq 1 100); do pid=$(pid_of); [ -n "$pid" ] && break; sleep 0.1; done
     [ -n "$pid" ] || { kill $logpid $toolpid 2>/dev/null; die "app did not start within 10 s"; }
     record "launch: pid $pid after $(( $(ms) - t0 )) ms"
     # Every fork of the app, reported by the kernel (kqueue): see scripts/runtime/procwatch.c. Started right after the
@@ -426,7 +538,9 @@ cmd_launch() {
         echo "$(( $(ms) - t0 )) $(ps -o %cpu=,rss= -p "$pid")" >> "$d/samples.txt"
         # Consent settings every 5 s; a line is written at the start and whenever a value changes.
         if [ $(( tick % 5 )) -eq 0 ]; then
-            consent="claude.limits.enabled=$(defaults read "$BUNDLE_ID" claude.limits.enabled 2>/dev/null || echo absent) grok.enabled=$(defaults read "$BUNDLE_ID" grok.enabled 2>/dev/null || echo absent)"
+            consent="$bundle: claude.limits.enabled=$(defaults read "$bundle" claude.limits.enabled 2>/dev/null || echo absent) grok.enabled=$(defaults read "$bundle" grok.enabled 2>/dev/null || echo absent)"
+            # #11: while SpanDeck runs, also what the legacy domain says (seeded on purpose in the coexistence run).
+            [ "$bundle" = "$LEGACY_BUNDLE_ID" ] || consent="$consent | $LEGACY_BUNDLE_ID: claude.limits.enabled=$(defaults read "$LEGACY_BUNDLE_ID" claude.limits.enabled 2>/dev/null || echo absent) grok.enabled=$(defaults read "$LEGACY_BUNDLE_ID" grok.enabled 2>/dev/null || echo absent)"
             [ "$consent" = "$was" ] || { echo "$(now) $consent" >> "$d/consent.txt"; was=$consent; }
         fi
         tick=$(( tick + 1 ))
@@ -446,17 +560,20 @@ cmd_launch() {
     record "launch: app log network/security/login-item events: $app_events; security/grok process log lines: $tool_events"
     awk '{c+=$2; n++; if ($3>m) m=$3} END{if (n) printf "launch: mean CPU %.1f%% over %d samples, peak RSS %d KB\n", c/n, n, m}' "$d/samples.txt" \
         | while read -r line; do record "$line"; done
-    echo "Leave the app running for the UI checks in the procedure, then run: $0 quit"
+    if [ "$name" = "$APP_NAME" ]; then echo "Leave the app running for the UI checks in the procedure, then run: $0 quit"
+    else echo "Leave the legacy app running if the procedure says so, then run: $0 quit-legacy"; fi
 }
 
 # Quitting is done in the app (popover > Quit), which also saves the cache. Scripting it would need an Automation
 # permission, and a signal skips the app's quit handler.
-cmd_quit() {
-    local pid; pid=$(app_pid)
-    [ -n "$pid" ] || { record "quit: not running"; return; }
-    echo "Quit the app now: click its menu-bar item, then Quit. Waiting up to 60 s..."
+cmd_quit() { quit_app "$APP_NAME" "$(app_pid)"; }
+cmd_quit_legacy() { quit_app "$LEGACY_NAME" "$(legacy_pid)"; }
+quit_app() {
+    local name=$1 pid=$2
+    [ -n "$pid" ] || { record "quit $name: not running"; return; }
+    echo "Quit $name now: click its menu-bar item, then Quit. Waiting up to 60 s..."
     for _ in $(seq 1 600); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-    if kill -0 "$pid" 2>/dev/null; then record "quit: still running after 60 s"; else record "quit: exited"; fi
+    if kill -0 "$pid" 2>/dev/null; then record "quit $name: still running after 60 s"; else record "quit $name: exited"; fi
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -469,12 +586,12 @@ cmd_snapshot() {
     local rel="$run/snapshot-release" dbg="$run/snapshot-debug"
     mkdir -p "$rel" "$dbg"
     local code=0
-    "$SHARED/$sha/Headroom.app/Contents/MacOS/Headroom" --snapshot "$rel" > "$run/snapshot-release.out" 2>&1 || code=$?
+    "$SHARED/$sha/$APP_NAME.app/Contents/MacOS/$APP_NAME" --snapshot "$rel" > "$run/snapshot-release.out" 2>&1 || code=$?
     record "snapshot release: exit $code (expect 64); files written: $(find "$rel" -type f | wc -l | tr -d ' ') (expect 0)"
     code=0
-    "$SHARED/$sha/Headroom-debug" --snapshot "$dbg" > "$run/snapshot-debug.out" 2>&1 || code=$?
+    "$SHARED/$sha/$APP_NAME-debug" --snapshot "$dbg" > "$run/snapshot-debug.out" 2>&1 || code=$?
     record "snapshot debug: exit $code (expect 0); files: $(cd "$dbg" && ls | tr '\n' ' ')(expect popover.png strip-dark.png strip-light.png)"
-    [ -z "$(app_pid)" ] && record "snapshot: no Headroom process left running" || record "snapshot: FAIL, a Headroom process is running"
+    [ -z "$(app_pid)" ] && record "snapshot: no $APP_NAME process left running" || record "snapshot: FAIL, a $APP_NAME process is running"
     local has_support=no; [ -e "$APP_SUPPORT" ] && has_support=yes
     record "snapshot: Application Support existed before: $had_support, after: $has_support"
     echo "Open $dbg/popover.png and check it shows only synthetic data, not the fixture model claude-rvmodel… or any real data."
@@ -504,21 +621,171 @@ cmd_summary() {
     echo "Wrote $out (no transcript content, credentials or payloads). Check it before sharing."
 }
 
+# Fixture cleanup fails closed (#11, review of e39f9c5): only files the script registered, or (clean-fixtures-legacy)
+# files positively shaped like Run 3's, are deleted, one by one; ~/.claude/projects is never removed wholesale, and
+# anything unexpected stops the cleanup before it deletes anything.
+FIXTURE_DIR_RE='^-Users-[A-Za-z0-9._-]+-rvpath[0-9a-f]{12}$'
+projects_safe() {
+    [ ! -L "$HOME/.claude" ] && [ ! -L "$HOME/.claude/projects" ] || die "~/.claude or ~/.claude/projects is a link; nothing is cleaned"
+}
+# Read-only: every entry under ~/.claude/projects with its type and size.
+fixture_inventory() {
+    (cd "$HOME/.claude/projects" && find . -mindepth 1 | sort | while read -r e; do
+        if [ -L "$e" ]; then echo "  link $e"; elif [ -d "$e" ]; then echo "  dir  $e"; else echo "  file $e $(stat -f %z "$e") bytes"; fi
+    done)
+}
+
 cmd_clean() {
     [ "$(id -un)" = "$RV_USER" ] || die "clean only runs in $RV_USER"
+    local projects="$HOME/.claude/projects" mark="$HOME/.claude/projects/$FIXTURE_MARK"
+    local registered=()
+    if [ -e "$projects" ] || [ -L "$projects" ]; then projects_safe; fi
+    if [ -f "$mark" ]; then
+        if ! grep -q '^run=' "$mark"; then
+            echo "An old fixture marker without a file registry (Run 3 or earlier). Nothing is deleted. What's there:"
+            fixture_inventory
+            die "use '$0 clean-fixtures-legacy' for Run 3's synthetic fixtures, or remove them by hand"
+        fi
+        local f
+        while read -r f; do
+            [[ "$f" =~ ^-Users-[A-Za-z0-9._-]+-rvpath[0-9a-f]{12}/rvid[0-9a-f]{12}-[a-z0-9]+\.jsonl$ ]] || die "unexpected registry entry: $f"
+            [[ "${f%%/*}" == "-Users-$RV_USER-"* ]] || die "registry entry for another account: $f"
+            if [ -e "$projects/$f" ] || [ -L "$projects/$f" ]; then
+                [ ! -L "$projects/$f" ] && [ -f "$projects/$f" ] && [ ! -L "$projects/${f%%/*}" ] || die "$f is not a plain file"
+            fi
+            registered+=("$f")
+        done < <(sed -n 's/^file=//p' "$mark")
+    fi
     cmd_quit || true
     echo "Before cleaning: if you enabled Launch at login, turn it off in the app's Settings first. Continue? [y/N]"
     read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled"
-    rm -rf "$APP_SUPPORT"
+    # SpanDeck's state only: legacy (Headroom) state is left alone; `clean-legacy` removes it on request.
+    rm -rf "$APP_SUPPORT" "$HOME/Library/Logs/$HOVER_LOG"
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
     # cfprefsd may keep an empty file; with the domain deleted, removing it is safe.
     defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
-    if [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ]; then rm -rf "$HOME/.claude/projects"; rmdir "$HOME/.claude" 2>/dev/null || true; fi
-    record "clean: app state and fixtures removed; evidence kept in $EVIDENCE_ROOT"
+    local n=0
+    for f in "${registered[@]+"${registered[@]}"}"; do
+        if [ -f "$projects/$f" ]; then rm -f "$projects/$f"; n=$((n + 1)); fi
+        rmdir "$projects/${f%%/*}" 2>/dev/null || true
+    done
+    if [ -f "$mark" ] && [ -z "$(cd "$projects" && find . -mindepth 1 ! -name "$FIXTURE_MARK")" ]; then
+        rm -f "$mark"; rmdir "$projects" "$HOME/.claude" 2>/dev/null || true
+    fi
+    local left=""; [ -d "$projects" ] && left=$(cd "$projects" && find . -mindepth 1 ! -name "$FIXTURE_MARK" | sort | tr '\n' ' ')
+    record "clean: $APP_NAME state and $n registered fixture files removed; kept: legacy state, evidence${left:+, and unregistered entries: $left}"
+}
+
+# Run 3's fixtures (staged before the registry existed) after confirmation, and only if every entry under
+# ~/.claude/projects is positively one of them: the old marker, folders -Users-<this account>-rvpath<token>, and
+# plain files rvid<token>-{main,identity,completeness,privacy,perfN}.jsonl that contain their token. Anything else
+# (other files, other project folders, links, a registered marker) stops it before anything is deleted.
+cmd_clean_fixtures_legacy() {
+    [ "$(id -un)" = "$RV_USER" ] || die "clean-fixtures-legacy only runs in $RV_USER"
+    if dsmemberutil checkmembership -U "$RV_USER" -G admin | grep -q "is a member"; then die "$RV_USER is an administrator"; fi
+    local projects="$HOME/.claude/projects" mark="$HOME/.claude/projects/$FIXTURE_MARK"
+    [ -d "$projects" ] || die "no ~/.claude/projects"
+    projects_safe
+    [ -f "$mark" ] && [ ! -L "$mark" ] || die "no fixture marker; these aren't the script's fixtures"
+    grep -q '^run=' "$mark" && die "this marker has a registry; use '$0 clean'"
+    local files=() dirs=() e base tok
+    while read -r e; do
+        e=${e#./}
+        if [ -L "$projects/$e" ]; then die "$e is a link; nothing deleted"; fi
+        if [ "$e" = "$FIXTURE_MARK" ]; then continue; fi
+        if [ -d "$projects/$e" ]; then
+            [[ "$e" =~ $FIXTURE_DIR_RE ]] && [[ "$e" == "-Users-$RV_USER-rvpath"* ]] || die "unexpected folder $e; nothing deleted"
+            dirs+=("$e"); continue
+        fi
+        base=${e##*/}; tok=${e%%/*}; tok=${tok##*-rvpath}
+        [[ "$e" == */* ]] && [[ "${e%%/*}" =~ $FIXTURE_DIR_RE ]] && [[ "${e%%/*}" == "-Users-$RV_USER-rvpath"* ]] \
+            && [[ "$base" =~ ^rvid${tok}-(main|identity|completeness|privacy|perf[0-9]+)\.jsonl$ ]] && [ -f "$projects/$e" ] \
+            || die "unexpected file $e; nothing deleted"
+        grep -q -e "rvid$tok" -e "RVCANARY$tok" "$projects/$e" || die "$e doesn't contain its fixture token; nothing deleted"
+        files+=("$e")
+    done < <(cd "$projects" && find . -mindepth 1 | sort)
+    [ ${#files[@]} -gt 0 ] || die "no Run 3 fixture files found"
+    echo "Run 3 synthetic fixtures to delete (${#files[@]} files, ${#dirs[@]} folders):"
+    printf '  %s\n' "${files[@]}"
+    echo "Delete exactly these, then the empty folders and the old marker? Evidence is kept. [y/N]"
+    read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled; nothing deleted"
+    for e in "${files[@]}"; do rm -f "$projects/$e"; done
+    for e in "${dirs[@]+"${dirs[@]}"}"; do rmdir "$projects/$e"; done
+    rm -f "$mark"; rmdir "$projects" "$HOME/.claude" 2>/dev/null || true
+    record "clean-fixtures-legacy: ${#files[@]} Run 3 fixture files and ${#dirs[@]} folders removed; evidence kept"
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+# #11 coexistence. Fingerprints hold names, modes, sizes, modification times and SHA-256 hashes, never contents; for
+# preferences, the key names and a hash of the exported domain.
+fp_files() { # a folder, or a single file
+    [ -e "$1" ] || { echo "  absent"; return; }
+    if [ -f "$1" ]; then echo "  ./$(basename "$1") $(stat -f '%Sp %z %m' "$1") $(shasum -a 256 "$1" | cut -d' ' -f1)"; return; fi
+    (cd "$1" 2>/dev/null && find . -print | sort | while read -r f; do
+        if [ -f "$f" ]; then echo "  $f $(stat -f '%Sp %z %m' "$f") $(shasum -a 256 "$f" | cut -d' ' -f1)"
+        else echo "  $f $(stat -f '%Sp' "$f")"; fi
+    done)
+}
+fp_prefs() { # domain
+    if defaults read "$1" >/dev/null 2>&1; then
+        echo "  keys: $(defaults read "$1" | grep -oE '^ +"?[A-Za-z0-9 ._-]+"? =' | tr -d ' "=' | sort | tr '\n' ' ')"
+        echo "  export sha256: $(defaults export "$1" - 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+    else echo "  absent"; fi
+}
+state_fingerprint() {
+    echo "[$APP_NAME] Application Support/$APP_SUPPORT_DIR"; fp_files "$APP_SUPPORT"
+    echo "[$APP_NAME] preferences $BUNDLE_ID"; fp_prefs "$BUNDLE_ID"
+    echo "[$APP_NAME] log $HOVER_LOG"; fp_files "$HOME/Library/Logs/$HOVER_LOG"
+    echo "[legacy] Application Support/Headroom"; fp_files "$LEGACY_SUPPORT"
+    echo "[legacy] preferences $LEGACY_BUNDLE_ID"; fp_prefs "$LEGACY_BUNDLE_ID"
+    echo "[legacy] log Headroom-hover.log"; fp_files "$LEGACY_LOG"
+}
+cmd_fingerprint() {
+    local label=${1:?fingerprint LABEL}
+    local f; f="$(run_dir)/fingerprint-$label.txt"
+    [ ! -e "$f" ] || die "$f exists; use a new label"
+    state_fingerprint > "$f"
+    record "fingerprint $label: $(grep -c '^  \./' "$f" || true) entries"
+    cat "$f"
+}
+cmd_compare() {
+    local a=${1:?compare A B} b=${2:?compare A B} run; run=$(run_dir)
+    for side in "$APP_NAME" legacy; do
+        if diff <(grep -A100000 "^\[$side\]" "$run/fingerprint-$a.txt" | awk -v s="[$side]" 'index($0,"[")==1 && index($0,s)!=1{exit} {print}') \
+                <(grep -A100000 "^\[$side\]" "$run/fingerprint-$b.txt" | awk -v s="[$side]" 'index($0,"[")==1 && index($0,s)!=1{exit} {print}') > /dev/null
+        then record "compare $a -> $b: $side state unchanged"
+        else record "compare $a -> $b: $side state CHANGED"; fi
+    done
+}
+# Consent in the legacy domain: SpanDeck must not inherit it. Never launch the legacy app while it's seeded (it would
+# act on it); unseed first.
+cmd_seed_legacy_consent() {
+    gate
+    [ -z "$(legacy_pid)" ] || die "quit the legacy app first"
+    defaults write "$LEGACY_BUNDLE_ID" claude.limits.enabled -bool true
+    defaults write "$LEGACY_BUNDLE_ID" grok.enabled -bool true
+    record "seeded $LEGACY_BUNDLE_ID claude.limits.enabled=1 grok.enabled=1 (expect $APP_NAME to keep both off)"
+}
+cmd_unseed_legacy_consent() {
+    gate
+    defaults delete "$LEGACY_BUNDLE_ID" claude.limits.enabled >/dev/null 2>&1 || true
+    defaults delete "$LEGACY_BUNDLE_ID" grok.enabled >/dev/null 2>&1 || true
+    record "unseeded $LEGACY_BUNDLE_ID consent keys"
+}
+cmd_clean_legacy() {
+    [ "$(id -un)" = "$RV_USER" ] || die "clean-legacy only runs in $RV_USER"
+    [ -z "$(legacy_pid)" ] || die "quit the legacy app first"
+    echo "Remove this test account's legacy Headroom state (Application Support/Headroom, $LEGACY_BUNDLE_ID preferences, Headroom-hover.log)? [y/N]"
+    read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled"
+    rm -rf "$LEGACY_SUPPORT" "$LEGACY_LOG"
+    defaults delete "$LEGACY_BUNDLE_ID" >/dev/null 2>&1 || true
+    defaults read "$LEGACY_BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$LEGACY_BUNDLE_ID.plist"
+    record "clean-legacy: test-account legacy state removed"
 }
 
 case "${1:-}" in
-stage|preflight|fixtures|identity|completeness|privacy|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
-*) sed -n '2,21p' "$0"; exit 64 ;;
+stage|preflight|fixtures|identity|completeness|privacy|capture|launch|quit|snapshot|summary|clean|fingerprint|compare) c=$1; shift; "cmd_$c" "$@" ;;
+stage-legacy|legacy-launch|quit-legacy|seed-legacy-consent|unseed-legacy-consent|clean-legacy|clean-fixtures-legacy) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
+*) sed -n '2,33p' "$0"; exit 64 ;;
 esac
