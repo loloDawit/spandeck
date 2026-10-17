@@ -160,8 +160,8 @@ struct LedgerFixtureTests {
 
         /// A new ledger over the same home and cache, as after a relaunch.
         func relaunch() {
-            let clock = clock
-            ledger = Ledger(home: box.home, appSupport: box.appSupport, pricing: pricing, now: { clock.now }, calendar: calendar)
+            let clock = clock, calendar = calendar
+            ledger = Ledger(home: box.home, appSupport: box.appSupport, pricing: pricing, now: { clock.now }, calendar: { calendar })
         }
 
         func apply(_ ops: [Op]) throws {
@@ -250,7 +250,7 @@ struct LedgerFixtureTests {
     // MARK: Tests
 
     @Test func everyFixtureIsComplete() throws {
-        #expect(Self.names.count == 45)
+        #expect(Self.names.count == 47)
         for name in Self.names {
             let f = try Self.load(name)
             #expect(["pass", "defect", "ambiguous"].contains(f.classification), "\(name)")

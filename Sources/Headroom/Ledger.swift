@@ -710,18 +710,19 @@ final class Ledger {
     private static let usageNeedle = Array(#""usage""#.utf8)
 
     /// The current time and the calendar for day boundaries. Injectable so accounting fixtures (#6) can pin "now" and
-    /// the time zone; by default the real clock and `Calendar.current`, read on every use as before.
+    /// the time zone, and tests can change the zone while the ledger runs (#57); by default the real clock and
+    /// `Calendar.current`, read on every use as before.
     private let now: @Sendable () -> Date
-    private let fixedCalendar: Calendar?
-    private var calendar: Calendar { fixedCalendar ?? .current }
+    private let currentCalendar: @Sendable () -> Calendar
+    private var calendar: Calendar { currentCalendar() }
 
     init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil,
-         now: @escaping @Sendable () -> Date = { Date() }, calendar: Calendar? = nil) {
+         now: @escaping @Sendable () -> Date = { Date() }, calendar: @escaping @Sendable () -> Calendar = { .current }) {
         self.home = home
         self.storage = storage ?? PrivateDirectory(url: appSupport)
         self.pricing = pricing
         self.now = now
-        self.fixedCalendar = calendar
+        self.currentCalendar = calendar
     }
 
     /// Why the cache isn't being saved, if it isn't; nil when it is (or nothing was tried yet).

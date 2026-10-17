@@ -1,0 +1,131 @@
+{
+  "title": "A negative half-hour offset across daylight saving (St. John's, UTC-03:30 -> -02:30 on 2026-03-08)",
+  "matrix": [
+    "time zones and day boundaries",
+    "streaming growth",
+    "identity merges (#55)",
+    "cost coverage"
+  ],
+  "classification": "pass",
+  "followUp": "#57",
+  "policy": "P14: a record belongs to the local day of its own timestamp, in any zone in use (every current offset is a multiple of 15 minutes). Today, the 7 days and the 30 days start at local midnight.",
+  "timeZone": "America/St_Johns",
+  "now": "2026-03-10T15:00:00Z",
+  "records": 11,
+  "duplicates": 2,
+  "derivation": "DST starts Mar 8 at 02:00 NST (05:30Z) -> 03:00 NDT, so Mar 8 has 23 hours. Midnights: Mar 8 00:00 NST = 03:30Z Mar 8; Mar 9 00:00 NDT = 02:30Z Mar 9; Mar 10 00:00 NDT = 02:30Z Mar 10. Now is 12:30 NDT Mar 10; the 7 and 30 days include everything. a 03:29:59Z Mar 8 = 23:59:59 NST Mar 7 (1). b 03:30Z = 00:00 Mar 8 (2). c 05:29Z = 01:59 NST (4), d 05:30Z = 03:00 NDT (8), both Mar 8. e 02:29:59Z Mar 9 = 23:59:59 NDT Mar 8 (16). f 02:30Z = 00:00 Mar 9 (32). g 02:30Z Mar 10 = 00:00 Mar 10 (64; streamed again in step 2 with output 5). h 02:29Z Mar 10 = 23:59 Mar 9 (128), request id only; its pair arrives in step 2 (#55, still incomplete). p 03:00Z Mar 10, Haiku, P9 flat 300 vs 100+100: [1, 1], 300 unresolved (a minimum, no dispute): known 6, minimum 300 x 1.25 = 375 micro-dollars. Step 1: Mar 7 = 1; Mar 8 = 2 + 4 + 8 + 16 = 30; Mar 9 = 32 + 128 = 160; Mar 10 = 64 + 302 = 366 = today; week = month = 557. Step 2: g +5 output: Mar 10 = today = 371, week = month = 562. Whole UTC hours put the 03:00Z Mar 8 bucket (23:30 NST) on Mar 7 and the 02:00Z buckets (23:30 NDT) on the earlier day: b on Mar 7, f on Mar 8, g on Mar 9.",
+  "steps": [
+    {
+      "expect": {
+        "hours": {
+          "2026-03-08T03": {
+            "claude-test-1": [3, 0, 0, 0, 0, 2]
+          },
+          "2026-03-08T05": {
+            "claude-test-1": [12, 0, 0, 0, 0, 2]
+          },
+          "2026-03-09T02": {
+            "claude-test-1": [48, 0, 0, 0, 0, 2]
+          },
+          "2026-03-10T02": {
+            "claude-test-1": [192, 0, 0, 0, 0, 2]
+          },
+          "2026-03-10T03": {
+            "claude-haiku-4-5-20251001": [1, 1, 0, 0, 0, 1]
+          }
+        },
+        "tiers": {
+          "2026-03-10T03": {
+            "claude-haiku-4-5-20251001": [300, 0]
+          }
+        },
+        "coverage": "partial",
+        "models": {
+          "claude-test-1": "unavailable",
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 6e-06,
+        "minimumCost": 0.000375,
+        "identity": {
+          "identified": 8,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "operations": 9,
+        "days": {
+          "2026-03-07": 1,
+          "2026-03-08": 30,
+          "2026-03-09": 160,
+          "2026-03-10": 366
+        },
+        "today": 366,
+        "week": 557,
+        "month": 557
+      },
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "hours": {
+          "2026-03-08T03": {
+            "claude-test-1": [3, 0, 0, 0, 0, 2]
+          },
+          "2026-03-08T05": {
+            "claude-test-1": [12, 0, 0, 0, 0, 2]
+          },
+          "2026-03-09T02": {
+            "claude-test-1": [48, 0, 0, 0, 0, 2]
+          },
+          "2026-03-10T02": {
+            "claude-test-1": [192, 5, 0, 0, 0, 2]
+          },
+          "2026-03-10T03": {
+            "claude-haiku-4-5-20251001": [1, 1, 0, 0, 0, 1]
+          }
+        },
+        "tiers": {
+          "2026-03-10T03": {
+            "claude-haiku-4-5-20251001": [300, 0]
+          }
+        },
+        "coverage": "partial",
+        "models": {
+          "claude-test-1": "unavailable",
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 6e-06,
+        "minimumCost": 0.000375,
+        "identity": {
+          "identified": 8,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "operations": 9,
+        "days": {
+          "2026-03-07": 1,
+          "2026-03-08": 30,
+          "2026-03-09": 160,
+          "2026-03-10": 371
+        },
+        "today": 371,
+        "week": 562,
+        "month": 562
+      },
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1b.jsonl"
+        }
+      ]
+    }
+  ]
+}
