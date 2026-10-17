@@ -101,11 +101,16 @@ struct ModelIdentifierTests {
     }
 
     /// Every string shown about these summaries that could carry a model id.
+    /// Built a step at a time: as one chained `+` expression, Xcode 16.4 (the CI runner) couldn't type-check it.
     private static func shown(_ s: (claude: UsageSummary, grok: UsageSummary)) -> [String] {
-        (s.claude.models + s.grok.models).map(\.model) + (s.claude.bars + s.grok.bars).map(\.family)
-            + s.claude.uncostedModels + s.grok.uncostedModels + s.claude.uncertainCacheModels
-            + [PricingText.coverageNote(claude: s.claude, grok: s.grok) ?? ""]
-            + UsageNotes.notes(s.claude).flatMap { [$0.text, $0.detail] }
+        var out: [String] = (s.claude.models + s.grok.models).map(\.model)
+        out += (s.claude.bars + s.grok.bars).map(\.family)
+        out += s.claude.uncostedModels
+        out += s.grok.uncostedModels
+        out += s.claude.uncertainCacheModels
+        out.append(PricingText.coverageNote(claude: s.claude, grok: s.grok) ?? "")
+        out += UsageNotes.notes(s.claude).flatMap { [$0.text, $0.detail] }
+        return out
     }
 
     private static func expectNoRaw(_ s: (claude: UsageSummary, grok: UsageSummary), _ rig: Rig, _ raws: [String],
