@@ -161,6 +161,50 @@ struct QuantityTests {
         #expect(s.incompleteCostDays.map(\.cost.amount) == [1.5, 1.5])
     }
 
+    /// A model without a price keeps its disputed tokens disputed (#58 re-review of `5f48f65`), counted once: next to a
+    /// priced model the total is provisional (~), never a lower bound (≥), in the text, on the chart and for
+    /// VoiceOver. Alone it is n/a, and the model is named as unpriced even when every token is disputed.
+    @Test func unpricedConflictStaysProvisional() async throws {
+        func line(_ n: String, _ model: String, _ usage: String) -> String {
+            let ts = ISO8601DateFormatter().string(from: Date())
+            return #"{"type":"assistant","timestamp":"\#(ts)","requestId":"req_\#(n)","message":{"id":"msg_\#(n)","model":"\#(model)","usage":\#(usage)}}"#
+        }
+        let priced = line("a", "claude-haiku-4-5-20251001", #"{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}}"#)
+        let conflict = line("b", "claude-test-1", #"{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":200,"ephemeral_1h_input_tokens":100}}"#)
+        let allDisputed = line("c", "claude-test-2", #"{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":30}}"#)
+
+        let box = try Sandbox()
+        try box.write(".claude/projects/-p/s1.jsonl", [priced, conflict, allDisputed].joined(separator: "\n") + "\n")
+        let s = await refreshLedger(Self.ledger(box)).claude
+        let rows = Dictionary(uniqueKeysWithValues: s.models.map { ($0.model, $0) })
+        for (model, tokens, disputed) in [("claude-test-1", 302, 200), ("claude-test-2", 80, 80)] {
+            let c = try #require(rows[model]).cost
+            // Counted once: unknown + disputed is the model's total, including when all of it is disputed.
+            #expect(c.unknownTokens + c.disputedTokens == tokens && c.disputedTokens == disputed && c.coverage == .unavailable)
+            #expect(Fmt.cost(c) == "n/a" && Fmt.spokenCost(c) == "cost not available")
+        }
+        #expect(rows["claude-test-2"]?.cost.unknownTokens == 0)
+        #expect(s.month.quantity.disputedTokens == 280 && s.month.cost.isProvisional)
+        #expect(Fmt.cost(s.month.cost) == "~$0.00006" && Fmt.spokenCost(s.month.cost) == "about $0.00006, provisional")
+        #expect(Fmt.costDetail(s.month.cost) == "Provisional estimate, not a lower bound: $0.00005 known; cost unknown for 102 tokens; cost unknown for 280 provisional cache-write tokens")
+        // The chart marks the day "~" and reads it the same way.
+        let day = try #require(s.incompleteCostDays.first)
+        #expect(s.incompleteCostDays.count == 1 && day.cost.isProvisional && Fmt.spokenCost(day.cost) == Fmt.spokenCost(s.month.cost))
+        #expect(s.uncostedModels == ["claude-test-1", "claude-test-2"])
+        let note = try #require(PricingText.coverageNote(claude: s, grok: nil))
+        #expect(note.hasPrefix("≥ partial estimate, ~ provisional estimate, n/a no estimate: no price for claude-test-1, claude-test-2;"))
+
+        // The all-disputed unpriced model alone: n/a, read as unavailable, and still named as unpriced.
+        let only = try Sandbox()
+        try only.write(".claude/projects/-p/s1.jsonl", allDisputed + "\n")
+        let o = await refreshLedger(Self.ledger(only)).claude
+        #expect(o.month.cost.coverage == .unavailable && o.month.quantity.disputedTokens == 80)
+        #expect(Fmt.cost(o.month.cost) == "n/a" && Fmt.spokenCost(o.month.cost) == "cost not available")
+        #expect(Fmt.costDetail(o.month.cost) == "Cost unavailable: cost unknown for 80 tokens")
+        #expect(o.uncostedModels == ["claude-test-2"])
+        #expect(try #require(PricingText.coverageNote(claude: o, grok: nil)).contains("no price for claude-test-2"))
+    }
+
     // MARK: Streamed cache writes (P9 re-review)
 
     private static func cw(_ t5: Int, _ t1: Int, u: Int = 0, d: Int = 0) -> Agg {

@@ -1,0 +1,99 @@
+{
+  "title": "A priced model without a conflict next to unpriced models with one, one of them all disputed",
+  "matrix": [
+    "input, output, cache-read and cache-write breakdowns",
+    "cost coverage",
+    "unknown models"
+  ],
+  "classification": "pass",
+  "followUp": "#58",
+  "policy": "P9 (#58 re-review of 5f48f65): a model without a price keeps its disputed tokens disputed, counted once (unknown + disputed = its total), so any total holding them is provisional, never a lower bound. Its own cost is unavailable (n/a), and it stays named as unpriced even when every token is disputed. The cost strings are checked in QuantityTests.unpricedConflictStaysProvisional.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 3,
+  "duplicates": 0,
+  "derivation": "a Haiku 4.5, 30 = 10+20: [1, 1, 5m 10, 1h 20], exact: 1 + 5 + 12.5 + 40 = 58.5 micro-dollars, complete. b claude-test-1 (no price), flat 100 vs 200+100: [1, 1], 100 unresolved, 200 disputed = 302 tokens: 102 unknown + 200 disputed, no minimum without a price, unavailable. Step 1: 32 + 302 = 334, 200 disputed, partial. Step 2 adds c claude-test-2 (no price), flat 0 vs 50+30: [0, 0], 80 disputed: 0 unknown + 80 disputed, unavailable. 414 tokens, 280 disputed. The known cost stays 58.5 micro-dollars throughout. Before this fix the unpriced models' disputed tokens were counted as unknown only, so the total read as a lower bound (>=).",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [1, 1, 10, 20, 0, 1],
+            "claude-test-1": [1, 1, 0, 0, 0, 1]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 200]
+          }
+        },
+        "month": 334,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "complete",
+          "claude-test-1": "unavailable"
+        },
+        "knownCost": 5.85e-05,
+        "minimumCost": 0,
+        "quantity": {
+          "disputedTokens": 200
+        },
+        "identity": {
+          "identified": 2,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "s2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-haiku-4-5-20251001": [1, 1, 10, 20, 0, 1],
+            "claude-test-1": [1, 1, 0, 0, 0, 1],
+            "claude-test-2": [0, 0, 0, 0, 0, 1]
+          }
+        },
+        "tiers": {
+          "2026-03-10T16": {
+            "claude-test-1": [100, 200],
+            "claude-test-2": [0, 80]
+          }
+        },
+        "month": 414,
+        "coverage": "partial",
+        "models": {
+          "claude-haiku-4-5-20251001": "complete",
+          "claude-test-1": "unavailable",
+          "claude-test-2": "unavailable"
+        },
+        "knownCost": 5.85e-05,
+        "minimumCost": 0,
+        "quantity": {
+          "disputedTokens": 280
+        },
+        "identity": {
+          "identified": 3,
+          "incomplete": 0,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        }
+      }
+    }
+  ]
+}

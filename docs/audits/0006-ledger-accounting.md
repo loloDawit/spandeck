@@ -375,3 +375,13 @@ The owner's re-review of `e48ab95` found three P9 gaps; the corrections follow t
   - a held bucket reduced instead of rebuilt;
   - the first tier split kept;
   - the first record kept at equal quantity.
+
+### 9.6 Follow-up: disputed tokens of unpriced models
+The re-review of `5f48f65` found that a model without a price returned all of its tokens as unknown. Its disputed tokens were lost to cost coverage, so a priced model without a conflict next to an unpriced one with a conflict showed `≥`. The quantity note said the counts were provisional at the same time.
+- **[code]** Without a price, `Pricing.estimate` returns `unknownTokens = total − disputed` and `disputedTokens = disputed`. Each token is counted once, including when all of them are disputed. A subset field, `unpricedDisputedTokens`, keeps such a model listed under "no price".
+  - The combined cost is provisional (`~`), with matching chart marks and VoiceOver wording.
+  - The model's own cost stays `n/a`, read aloud as "cost not available".
+- **[test]**
+  - **F45 (new):** a priced Haiku record without a conflict, an unpriced model with flat 100 against a 300 breakdown, then an unpriced model whose tokens are all disputed. It runs in every indexing mode.
+  - **`QuantityTests.unpricedConflictStaysProvisional`:** through a real ledger, it checks each model's unknown + disputed total, `~` against `≥`, the detail, the chart day, the spoken costs, the "no price" listing and the conflict-only `n/a`.
+- **[test] Against the old behaviour:** three mutations are each caught: the old return, disputed tokens also counted as unknown, and the old "no price" filter.

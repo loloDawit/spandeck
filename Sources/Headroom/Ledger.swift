@@ -128,6 +128,9 @@ struct CostEstimate: Equatable, Sendable {
     var minimumTokens = 0
     /// P9 (#58): provisional cache-write tokens beyond the flat total. Their cost is unknown, and no bound is claimed.
     var disputedTokens = 0
+    /// The part of `disputedTokens` whose model has no price (#58): already counted there, never again in
+    /// `unknownTokens`, and kept so the model is still named as unpriced when all its tokens are disputed.
+    var unpricedDisputedTokens = 0
 
     static let zero = CostEstimate()
 
@@ -149,7 +152,8 @@ struct CostEstimate: Equatable, Sendable {
         CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens.saturatingAdd(b.knownTokens),
                      unknownTokens: a.unknownTokens.saturatingAdd(b.unknownTokens), minimum: a.minimum + b.minimum,
                      minimumTokens: a.minimumTokens.saturatingAdd(b.minimumTokens),
-                     disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens))
+                     disputedTokens: a.disputedTokens.saturatingAdd(b.disputedTokens),
+                     unpricedDisputedTokens: a.unpricedDisputedTokens.saturatingAdd(b.unpricedDisputedTokens))
     }
 
     static func += (a: inout CostEstimate, b: CostEstimate) { a = a + b }
@@ -340,7 +344,9 @@ extension UsageSummary {
 
 extension UsageSummary {
     /// Models whose cost isn't fully known in the 30 days (R7), for the explanation under the totals.
-    var uncostedModels: [String] { models.filter { $0.cost.unknownTokens > 0 }.map(\.model).sorted() }
+    var uncostedModels: [String] {
+        models.filter { $0.cost.unknownTokens > 0 || $0.cost.unpricedDisputedTokens > 0 }.map(\.model).sorted()
+    }
 
     /// Priced models whose cache writes have an unknown tier or a disputed amount (P9, #58).
     var uncertainCacheModels: [String] {
@@ -563,7 +569,12 @@ final class Pricing: @unchecked Sendable {
             return CostEstimate(known: Double(ticks) / 1e10, knownTokens: a.total - unknown, unknownTokens: unknown)
         }
         if a.uncostedTokens != nil { return CostEstimate(unknownTokens: a.total) } // Grok, no turn reported a cost
-        guard let (c, p) = listCost(model: model, a) else { return CostEstimate(unknownTokens: a.total) }
+        guard let (c, p) = listCost(model: model, a) else {
+            // No price: everything is unknown, but disputed tokens stay disputed (counted once), so a total that holds
+            // them is still provisional (P9, #58).
+            return CostEstimate(unknownTokens: a.total - a.disputed, disputedTokens: a.disputed,
+                                unpricedDisputedTokens: a.disputed)
+        }
         // P9: unresolved writes cost at least the cheaper tier's rate; disputed ones aren't priced at all.
         return CostEstimate(known: c, knownTokens: a.resolved, minimum: Double(a.unresolved) * min(p.cacheWrite, p.cacheWrite1h),
                             minimumTokens: a.unresolved, disputedTokens: a.disputed)
