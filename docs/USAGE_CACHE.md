@@ -56,6 +56,8 @@ Any other id (text with spaces, control or non-ASCII characters, a path, an over
 - a `<synthetic>` record is still recognised and skipped;
 - an iteration is still compared with its message's model as written. A sub-call of another rejected id is still an extra operation, both under `unknown`.
 
+One label changes: an iteration (sub-call) whose model is `<synthetic>` used to get its own `<synthetic>` row. It is now counted under `unknown`, with the same tokens. None of the fixtures has one.
+
 A fingerprint still hashes the id as written (keyed, never stored), so dedupe keys don't change.
 
 **Limits:**

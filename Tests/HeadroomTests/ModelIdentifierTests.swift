@@ -319,6 +319,26 @@ struct ModelIdentifierTests {
         Self.expectNoRaw(s, rig, [Self.badModel], "appended")
     }
 
+    /// A cache whose ids all pass is loaded as it is: no rewrite at launch, so nothing changes on disk.
+    @Test func validCacheIsNotRewritten() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(model: "claude-test-1", id: "a"), Self.line(model: nil, id: "b"),
+                            Self.line(model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", id: "c")])
+        do {
+            let ledger = rig.ledger()
+            _ = await refreshLedger(ledger)
+            ledger.flush()
+        }
+        let before = try Data(contentsOf: rig.cacheURL)
+        let modified = try FileManager.default.attributesOfItem(atPath: rig.cacheURL.path)[.modificationDate] as? Date
+        let ledger = rig.ledger()
+        let s = await refreshLedger(ledger)
+        ledger.flush()
+        #expect(Self.tokens(s.claude) == ["claude-test-1": 150, "unknown": 150, "us.anthropic.claude-sonnet-4-5-20250929-v1:0": 150])
+        #expect(try Data(contentsOf: rig.cacheURL) == before)
+        #expect(try FileManager.default.attributesOfItem(atPath: rig.cacheURL.path)[.modificationDate] as? Date == modified)
+    }
+
     /// An over-long raw id in an old cache is normalised too.
     @Test func existingCacheWithLongIdIsNormalised() async throws {
         let rig = try Rig()
