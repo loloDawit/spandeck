@@ -274,10 +274,12 @@ struct PrivacyCanaryTests {
 
     /// Every failure text a cache problem can show: fixed wording plus `strerror`, never a path.
     @Test func failureTextsNameNoPath() {
-        let failures: [StorageFailure] = [.unsafeLocation, .notOwned, .permissions, .io(EACCES), .io(ENOENT), .io(EPERM)]
+        let failures: [StorageFailure] = [.unsafeLocation, .notOwned, .permissions, .backupExclusion, .io(EACCES),
+                                          .io(ENOENT), .io(EPERM)]
         for f in failures {
             for text in [LedgerCacheIssue.notSaved(f).text, LedgerCacheIssue.legacyNotRemoved(f).text,
-                         LedgerClearFailure.cache(f).text, LedgerClearFailure.incomplete(f).text] {
+                         LedgerClearFailure.cache(f).text, LedgerClearFailure.incomplete(f).text,
+                         LedgerCacheIssue.notExcludedFromBackup.text] {
                 #expect(!text.contains("/") && !text.contains("Users") && !text.contains("claude-ledger"), "\(text)")
             }
         }

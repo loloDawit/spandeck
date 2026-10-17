@@ -605,11 +605,15 @@ final class Pricing: @unchecked Sendable {
 enum LedgerCacheIssue: Equatable {
     case notSaved(StorageFailure)
     case legacyNotRemoved(StorageFailure)
+    /// The cache or key on disk couldn't be excluded from backup (audit 0007, P4). It is kept and used, not deleted.
+    case notExcludedFromBackup
 
     var text: String {
         switch self {
         case .notSaved(let f): return "Usage cache not saved: \(f.text). Totals are kept in memory only."
         case .legacyNotRemoved(let f): return "An old usage cache couldn't be removed: \(f.text)."
+        case .notExcludedFromBackup:
+            return "The usage cache or its key couldn't be excluded from backups. It is kept and still used, so backups may include it."
         }
     }
 }
@@ -727,6 +731,9 @@ final class Ledger {
     /// Key for the opaque ids. Loaded (or made) before anything is scanned, since ids are computed while indexing.
     private var key = SymmetricKey(size: .bits256)
     private var keyPersisted = false
+    /// Whether the key file on disk is marked excluded from backup (audit 0007, P4). It is written once, so a key from
+    /// before #70 is marked at load, and again at each save until that works.
+    private var keyExcluded = false
     private let issueLock = NSLock()
     private var issue: LedgerCacheIssue?
     private let home: URL
@@ -871,6 +878,7 @@ final class Ledger {
         lastSave = .distantPast
         key = SymmetricKey(size: .bits256)
         keyPersisted = false
+        keyExcluded = false
         hotFiles = []
         pendingFiles = []
         grokFiles = [:]
@@ -1577,9 +1585,11 @@ final class Ledger {
     /// re-indexed: a version 3 cache (raw paths and ids), a corrupt file, a cache whose key is gone or different, or a
     /// symlink.
     /// If the folder can't be made owner-only nothing is read, and usage is kept in memory with a fresh key.
+    /// A key and cache that are kept are marked excluded from backup (audit 0007, P4); see `excludeExisting`.
     private func loadCache() {
         key = SymmetricKey(size: .bits256)
         keyPersisted = false
+        keyExcluded = false
         do {
             try storage.prepare()
             try storage.removeTemporaryFiles(of: Self.cacheName)
@@ -1592,12 +1602,15 @@ final class Ledger {
             key = SymmetricKey(data: k)
             keyPersisted = true
         }
+        var cacheKept = false
+        defer { excludeExisting(cache: cacheKept) }
         let data: Data?
         do { data = try storage.read(Self.cacheName) } catch { data = Data() } // unreadable: discard
         guard let data else { return }
         if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version,
            s.keyCheck == keyCheck {
             state = s
+            cacheKept = true
             if normaliseModelIDs() { dirty = true; changeCounter += 1 }
             return
         }
@@ -1639,20 +1652,36 @@ final class Ledger {
         return changed
     }
 
-    /// Writes the key (once) and then the cache, both owner-only. On failure nothing is written elsewhere; the issue
-    /// is reported and the save retried later.
+    /// Marks the key (if one was loaded) and the cache (if it was kept) excluded from backup (audit 0007, P4), for
+    /// files written before #70. Nothing is deleted or rewritten to enforce it: a file that can't be marked is kept and
+    /// used, and that is reported unless a load problem already is.
+    private func excludeExisting(cache: Bool) {
+        var marked = true
+        if keyPersisted {
+            keyExcluded = (try? storage.excludeFromBackup(Self.keyName)) != nil
+            marked = keyExcluded
+        }
+        if cache, (try? storage.excludeFromBackup(Self.cacheName)) == nil { marked = false }
+        if !marked, cacheIssue == nil { setIssue(.notExcludedFromBackup) }
+    }
+
+    /// Writes the key (once) and then the cache, both owner-only and excluded from backup. On failure nothing is
+    /// written elsewhere; the issue is reported and the save retried later. A new file that can't be excluded isn't
+    /// written (fail closed). A key from before #70 that can't be excluded is kept, and the issue stays until it is.
     private func saveCache() {
         state.keyCheck = keyCheck
         guard let data = try? JSONEncoder().encode(state) else { return }
         lastSave = now()
         do {
             if !keyPersisted {
-                try storage.write(key.withUnsafeBytes { Data($0) }, to: Self.keyName)
+                try storage.write(key.withUnsafeBytes { Data($0) }, to: Self.keyName, excludedFromBackup: true)
                 keyPersisted = true
+                keyExcluded = true
             }
-            try storage.write(data, to: Self.cacheName)
+            try storage.write(data, to: Self.cacheName, excludedFromBackup: true)
             dirty = false
-            setIssue(nil)
+            if !keyExcluded { keyExcluded = (try? storage.excludeFromBackup(Self.keyName)) != nil }
+            setIssue(keyExcluded ? nil : .notExcludedFromBackup)
         } catch {
             setIssue(.notSaved(error as? StorageFailure ?? .io(EIO)))
         }
