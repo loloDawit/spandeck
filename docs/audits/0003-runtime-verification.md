@@ -343,6 +343,9 @@ These stay with the owner and aren't committed: one shows unrelated windows. Tim
 
 *Scope:* one Apple Silicon Mac on macOS 26.5, with an ad-hoc build, under the limits in §9.
 
+### 8.5 Run 3: pending (owner)
+For #5 on the v7 cache (`226a7d6` or later), with the new `privacy` fixture command. The procedure, the rows to re-observe and the stop conditions are in [audit 0007 §7](0007-privacy-verification.md#7-runtime-verification-run-3-pending-owner).
+
 ## 9. Observation limits
 
 - **Sampling:** child processes are sampled every 0.1 s, and sockets every 1 s. A process or connection shorter than that can be missed. **Run 1 confirmed this:** `security` runs that the code and UI show happened were not recorded (§8.2).

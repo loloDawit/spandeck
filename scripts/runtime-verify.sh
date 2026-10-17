@@ -11,6 +11,7 @@
 #     scripts/runtime-verify.sh fixtures [N]     synthetic transcripts with canaries (+ N extra files for timing)
 #     scripts/runtime-verify.sh identity         after fixtures: add records with one id or none (#55 identity note)
 #     scripts/runtime-verify.sh completeness     after fixtures: add records that can't be read (#58 completeness note)
+#     scripts/runtime-verify.sh privacy          after fixtures: add a session with every sensitive field kind (#5)
 #     scripts/runtime-verify.sh capture LABEL    record files, modes, preferences, assertions, canary hits
 #     scripts/runtime-verify.sh launch SECONDS [LABEL]  launch the app normally; watch processes, sockets, logs
 #     scripts/runtime-verify.sh quit             wait for you to quit the app from its menu
@@ -263,6 +264,37 @@ cmd_completeness() {
 }
 
 # ---------------------------------------------------------------------------------------------------------------
+# #5: one more synthetic session with a canary in every sensitive field a transcript can hold, and broken lines that
+# carry them. Adds canary kinds to canaries.txt; capture searches for every kind but the model.
+cmd_privacy() {
+    gate
+    local run; run=$(run_dir)
+    [ -f "$run/canaries.txt" ] || die "run fixtures first"
+    local tok; tok=$(sed -n 's/^id=rvid//p' "$run/canaries.txt")
+    local dir="$HOME/.claude/projects/-Users-$RV_USER-rvpath$tok"
+    [ -d "$dir" ] && [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ] || die "fixture folder missing"
+    grep -q '^secret=' "$run/canaries.txt" || printf 'secret=RVSECRET%s\ncode=RVCODE%s\ntool=RVTOOL%s\nthinking=RVTHINK%s\nbranch=RVBRANCH%s\n' \
+        "$tok" "$tok" "$tok" "$tok" "$tok" >> "$run/canaries.txt"
+    local f="$dir/rvid$tok-privacy.jsonl" ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    # Credential-shaped but fake: every one contains RVSECRET.
+    local creds="sk-ant-RVSECRET$tok AKIARVSECRET$tok ghp_RVSECRET$tok"
+    local env='"cwd":"/Users/'"$RV_USER"'/rvpath'"$tok"'","gitBranch":"RVBRANCH'"$tok"'","sessionId":"rvid'"$tok"'-p","uuid":"rvid'"$tok"'-u"'
+    {
+        printf '{"type":"user",%s,"timestamp":"%s","message":{"role":"user","content":"RVCANARY%s fix func RVCODE%s() { key = %s }"}}\n' "$env" "$ts" "$tok" "$tok" "$creds"
+        printf '{"type":"assistant",%s,"timestamp":"%s","requestId":"req_rvid%s_priv","message":{"id":"msg_rvid%s_priv","model":"claude-sonnet-4-5","content":[{"type":"thinking","thinking":"RVTHINK%s"},{"type":"text","text":"RVCODE%s"},{"type":"tool_use","id":"toolu_rvid%s","name":"Bash","input":{"command":"RVTOOL%s cat .env %s"}}],"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"RVSECRET%s"}}}\n' "$env" "$ts" "$tok" "$tok" "$tok" "$tok" "$tok" "$tok" "$creds" "$tok"
+        printf '{"type":"user",%s,"timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_rvid%s","content":"RVTOOL%s result %s"}]},"toolUseResult":{"stdout":"RVTOOL%s"}}\n' "$env" "$ts" "$tok" "$tok" "$creds" "$tok"
+        printf '{"type":"summary","summary":"RVCANARY%s summary","leafUuid":"rvid%s-u"}\n' "$tok" "$tok"
+        printf '{"type":"system",%s,"timestamp":"%s","content":"RVCANARY%s system"}\n' "$env" "$ts" "$tok"
+        # Broken lines carrying canaries: malformed, then cut off at the end of the file (pending, no newline).
+        printf '{"type":"assistant","timestamp":"%s","message":{"usage":{"input_tokens":1}},"text":"RVSECRET%s RVTOOL%s"\n' "$ts" "$tok" "$tok"
+        printf '{"type":"assistant","timestamp":"%s","message":{"text":"RVSECRET%s","usage":{"inp' "$ts" "$tok"
+    } > "$f"
+    record "privacy: 1 session with secret, code, tool, thinking and branch canaries (5 records, 15 tokens), 1 malformed line and 1 cut-off last line carrying them"
+    record "expected: totals grow by 15 claude-sonnet-4-5 tokens and 1 identified group; one more malformed record (a file still being written isn't reported); no secret, code, tool, thinking or branch canary in any file the app writes"
+    record "expected with completeness also applied (72 + 15 = 87 tokens, 4 identified groups), the completeness detail reads: \"In Claude Code's logs for the last 30 days, 4 records couldn't be read, counting identical lines once: 2 aren't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 3 of the unread records have no date, so they may belong to any period.\""
+}
+
+# ---------------------------------------------------------------------------------------------------------------
 # Summarizes the usage cache without printing any id, path or value other than counts and the schema version.
 inspect_cache() {
     osascript -l JavaScript - "$1" "$2" <<'JS'
@@ -338,7 +370,7 @@ cmd_capture() {
         local list; list=$(paste -sd, "$run/canaries.txt")
         {
             echo "# Canary search outside the fixtures (file names only)"
-            for kind in content path id; do
+            for kind in $(cut -d= -f1 "$run/canaries.txt" | grep -v '^model$'); do
                 local t; t=$(awk -F= -v k=$kind '$1==k{print $2}' "$run/canaries.txt")
                 # Only files changed since preflight can contain a canary created after it.
                 echo "$kind: $(tr '\n' '\0' < "$d/.changed" | xargs -0 grep -l -F "$t" 2>/dev/null | sed "s|$HOME|~|" | tr '\n' ' ')"
@@ -487,6 +519,6 @@ cmd_clean() {
 }
 
 case "${1:-}" in
-stage|preflight|fixtures|identity|completeness|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
-*) sed -n '2,20p' "$0"; exit 64 ;;
+stage|preflight|fixtures|identity|completeness|privacy|capture|launch|quit|snapshot|summary|clean) c=$1; shift; "cmd_$c" "$@" ;;
+*) sed -n '2,21p' "$0"; exit 64 ;;
 esac

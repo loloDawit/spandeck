@@ -39,7 +39,9 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 
 Which transcripts end in an unfinished line (#58) is kept in memory only. Every such file is read again on the first full scan after a launch, because its saved offset is short of its size.
 
-Only lines with a `"usage"` key (with any JSON whitespace before its colon) are parsed. The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are read every refresh and never cached. Model names and token counts are shown in the UI. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error.
+Only lines with a `"usage"` key (with any JSON whitespace before its colon) are parsed. The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are listed every refresh, read again when they change, and never cached; their model ids are shown in the UI and never written. Model names and token counts are shown in the UI. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error. One more file can be written outside this folder: with the hidden preference `debugHover` set (release builds included), `~/Library/Logs/Headroom-hover.log` records hover-panel geometry and timestamps, no usage data; *Clear cached usage data* doesn't remove it (#5, audit 0007 finding P2).
+
+A field-level inventory of everything read, kept in memory, written and shown, and a check of each statement on this page against the code, is in [audit 0007](audits/0007-privacy-verification.md).
 
 ## Opaque ids and their limits
 Each id is one of:
