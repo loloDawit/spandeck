@@ -233,43 +233,35 @@ struct ModelIdentifierTests {
 
     // MARK: Existing v7 caches
 
-    /// Renames model keys in a saved cache, as a version written before validation would have stored them: moves the
-    /// `unknown` usage of each seen operation that `match`es, in its parts and in its slot's bucket, to the raw id.
-    /// Returns how many keys changed.
-    private static func plant(_ url: URL, raw: String, where match: ([String: Any]) -> Bool) throws -> Int {
+    /// Renames model keys in a saved cache, in every operation's parts and every slot's buckets, as a version written
+    /// before validation would have stored them. Returns how many keys changed.
+    private static func renameModels(_ url: URL, _ rename: (String) -> String?) throws -> Int {
         var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
-        var seen = root["seen"] as! [String: Any]
-        var slots = root["slots"] as! [String: Any] // [Int: [String: Agg]]: slot numbers as string keys
         var changed = 0
+        func renamed(_ byModel: [String: Any]) -> [String: Any] {
+            var out: [String: Any] = [:]
+            for (m, a) in byModel {
+                if let to = rename(m) { out[to] = a; changed += 1 } else { out[m] = a }
+            }
+            return out
+        }
+        var seen = root["seen"] as! [String: Any]
         for (k, v) in seen {
             var op = v as! [String: Any]
-            var parts = op["parts"] as! [String: Any]
-            guard let part = parts["unknown"], match(part as! [String: Any]) else { continue }
-            parts["unknown"] = nil
-            parts[raw] = part
-            op["parts"] = parts
+            op["parts"] = renamed(op["parts"] as! [String: Any])
             seen[k] = op
-            changed += 1
-            // Move this operation's share of its slot's bucket to the raw id, as the old code would have kept it.
-            let slot = String(op["slot"] as! Int)
-            if var buckets = slots[slot] as? [String: Any], let total = buckets["unknown"] as? [String: Any] {
-                let mine = part as! [String: Any]
-                var rest = total
-                for (f, n) in mine { if let a = n as? Int, let b = total[f] as? Int { rest[f] = b - a } }
-                if (rest["input"] as? Int ?? 0) + (rest["output"] as? Int ?? 0) == 0 && (rest["calls"] as? Int ?? 0) == 0 {
-                    buckets["unknown"] = nil
-                } else {
-                    buckets["unknown"] = rest
-                }
-                buckets[raw] = mine
-                slots[slot] = buckets
-                changed += 1
-            }
         }
+        // [Int: [String: Agg]] is encoded with the slot numbers as string keys.
+        let slots = (root["slots"] as! [String: Any]).mapValues { renamed($0 as! [String: Any]) }
         root["seen"] = seen
         root["slots"] = slots
         try JSONSerialization.data(withJSONObject: root).write(to: url)
         return changed
+    }
+
+    /// Puts `raw` back where the ledger now keeps the one rejected id of a test (an `unknown#` key).
+    private static func plant(_ url: URL, raw: String) throws -> Int {
+        try renameModels(url) { $0.hasPrefix("unknown#") ? raw : nil }
     }
 
     /// A v7 cache saved before validation holds the raw id in `slots` and `seen.parts`. Loading it moves that usage to
@@ -286,8 +278,8 @@ struct ModelIdentifierTests {
             ledger.flush()
             #expect(Self.tokens(s.claude) == ["unknown": 160, "claude-test-1": 22])
         }
-        // The bad record's 100 input tokens identify it; the missing-model record stays `unknown`, as it always was.
-        let changed = try Self.plant(rig.cacheURL, raw: Self.badModel) { $0["input"] as? Int == 100 }
+        // The bad record's key gets its raw id back; the missing-model record stays `unknown`, as it always was.
+        let changed = try Self.plant(rig.cacheURL, raw: Self.badModel)
         #expect(changed == 2)
         #expect(rig.cache.contains("CANARY-MODEL-RAW"))
 
@@ -349,12 +341,99 @@ struct ModelIdentifierTests {
             _ = await refreshLedger(ledger)
             ledger.flush()
         }
-        #expect(try Self.plant(rig.cacheURL, raw: long) { _ in true } == 2)
+        #expect(try Self.plant(rig.cacheURL, raw: long) == 2)
         let ledger = rig.ledger()
         let s = await refreshLedger(ledger)
         ledger.flush()
         #expect(Self.tokens(s.claude) == ["unknown": 150])
         #expect(!rig.cache.contains("yyyyyyyy"))
         Self.expectNoRaw(s, rig, [long], "long cache")
+    }
+
+    // MARK: Streamed copies (review of #67)
+
+    static let badA = "bad model A CANARY-RAW-A /Users/CANARYUSER"
+    static let badB = "bad model B CANARY-RAW-B sk-ant-CANARY"
+
+    /// Two sub-calls of different rejected models in one operation, with `a` and `b` output tokens.
+    private static func subCalls(_ a: Int, _ b: Int, names: (String, String) = (badA, badB)) -> String {
+        #"[{"type":"advisor","model":\#(json(names.0)),"input_tokens":1,"output_tokens":\#(a)},"#
+            + #"{"type":"advisor","model":\#(json(names.1)),"input_tokens":1,"output_tokens":\#(b)}]"#
+    }
+
+    private static let streamDate = Date().addingTimeInterval(-600)
+
+    /// Two streamed copies of one operation (same ids and time): the sub-calls' counts move between the two rejected
+    /// models. Each model's counts are reconciled on their own, as before #66 (A: max(50, 10), B: max(10, 50)), so
+    /// `unknown` holds 2 inputs + 100 outputs, never the 60 outputs a single merged key would keep.
+    private static func copies(main: String?, names: (String, String) = (badA, badB)) -> [String] {
+        [line(model: main, id: "s", input: 100, output: 50, iterations: subCalls(50, 10, names: names), date: streamDate),
+         line(model: main, id: "s", input: 100, output: 50, iterations: subCalls(10, 50, names: names), date: streamDate)]
+    }
+
+    @Test(arguments: [false, true]) func streamedCopiesKeepEachRejectedModelsCounts(reversed: Bool) async throws {
+        let rig = try Rig()
+        let lines = Self.copies(main: "claude-test-1")
+        let url = try rig.transcript(reversed ? lines.reversed() : lines)
+        let ledger = rig.ledger()
+        var s = await refreshLedger(ledger)
+        ledger.flush()
+        #expect(Self.tokens(s.claude) == ["claude-test-1": 150, "unknown": 102])
+        #expect(s.claude.month.tokens == 252)
+        #expect(s.claude.uncostedModels.contains("unknown"))
+        Self.expectNoRaw(s, rig, [Self.badA, Self.badB], "streamed")
+        for m in s.claude.models.map(\.model) + s.claude.bars.map(\.family) { #expect(!m.contains("#"), "\(m)") }
+
+        // Read again from the start (a rewrite of the same bytes), then after a relaunch: nothing counts twice.
+        let data = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        try data.write(to: url)
+        s = await refreshLedger(ledger)
+        #expect(Self.tokens(s.claude) == ["claude-test-1": 150, "unknown": 102])
+        ledger.flush()
+        s = await refreshLedger(rig.ledger())
+        #expect(Self.tokens(s.claude) == ["claude-test-1": 150, "unknown": 102])
+    }
+
+    /// A message without a model (`unknown` as always) and a sub-call of a rejected model are separate counts too.
+    @Test func missingModelAndRejectedSubCallStaySeparate() async throws {
+        let rig = try Rig()
+        let it = { (n: Int) in #"[{"type":"advisor","model":\#(Self.json(Self.badA)),"input_tokens":1,"output_tokens":\#(n)}]"# }
+        try rig.transcript([Self.line(model: nil, id: "s", input: 1, output: 10, iterations: it(50), date: Self.streamDate),
+                            Self.line(model: nil, id: "s", input: 1, output: 50, iterations: it(10), date: Self.streamDate)])
+        let ledger = rig.ledger()
+        let s = await refreshLedger(ledger)
+        ledger.flush()
+        #expect(Self.tokens(s.claude) == ["unknown": 102])
+        Self.expectNoRaw(s, rig, [Self.badA], "missing + rejected")
+    }
+
+    /// A pre-#66 cache holds the first copy under both raw ids. Loading it keeps them apart (under opaque keys), so
+    /// the second copy, read when the transcript is rewritten, is reconciled per model exactly as on a cold index.
+    @Test(arguments: ["claude-test-1", nil] as [String?]) func existingCacheKeepsRejectedModelsApart(main: String?) async throws {
+        let rig = try Rig()
+        let placeholders = ("claude-plant-a", "claude-plant-b")
+        let url = try rig.transcript([Self.copies(main: main, names: placeholders)[0]])
+        do {
+            let ledger = rig.ledger()
+            _ = await refreshLedger(ledger)
+            ledger.flush()
+        }
+        let renamed = try Self.renameModels(rig.cacheURL) { [placeholders.0: Self.badA, placeholders.1: Self.badB][$0] }
+        #expect(renamed == 4)
+        #expect(rig.cache.contains("CANARY-RAW-A") && rig.cache.contains("CANARY-RAW-B"))
+
+        // The transcript as it really was: both copies, under the raw ids.
+        try FileManager.default.removeItem(at: url)
+        try rig.transcript(Self.copies(main: main))
+        let ledger = rig.ledger()
+        var s = await refreshLedger(ledger)
+        ledger.flush()
+        let mainTokens: [String: Int] = main.map { [$0: 150] } ?? [:]
+        let unknown = 102 + (main == nil ? 150 : 0)
+        #expect(Self.tokens(s.claude) == mainTokens.merging(["unknown": unknown]) { $1 })
+        Self.expectNoRaw(s, rig, [Self.badA, Self.badB], "migrated")
+        s = await refreshLedger(rig.ledger())
+        #expect(Self.tokens(s.claude) == mainTokens.merging(["unknown": unknown]) { $1 })
     }
 }
