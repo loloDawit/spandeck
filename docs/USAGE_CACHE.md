@@ -145,7 +145,7 @@ SpanDeck is a fork of Headroom and, before #11, used Headroom's identity:
 With both apps on one account they would replace each other's cache. Since #11, SpanDeck has its own identity:
 - **`SpanDeck.app`**, with the bundle id `io.github.lolodawit.SpanDeck`, its own preferences domain and its own login-item record;
 - **`~/Library/Application Support/SpanDeck/`** for its cache, key and price files;
-- **`~/Library/Logs/SpanDeck-hover.log`**, still only with the hidden `debugHover` preference.
+- **`~/Library/Logs/SpanDeck-hover.log`**, still only with the hidden `debugHover` preference, and since #68 only in debug builds (see [Hover debug log](#hover-debug-log-68)).
 
 **No migration.** SpanDeck never looks inside Headroom's folder, preferences or log, and never imports, renames or deletes them, whichever app created them. That includes state left by a SpanDeck build from before #11. It also doesn't check whether they exist.
 
@@ -192,6 +192,12 @@ The clear runs on the ledger's serial queue, so it can't interleave with a refre
 - Leftover temporary files are listed before anything is deleted. If the folder can't be listed (for example, it is writable but not readable), nothing is deleted and the failure is shown.
 - If the cache can't be deleted, nothing is reset and the failure is shown.
 - If the key or a temporary file can't be deleted after the cache is gone, that is shown, not success.
+
+## Hover debug log (#68)
+`~/Library/Logs/SpanDeck-hover.log` holds hover diagnostics: timestamps, mouse coordinates, panel frames and the hovered segment. No usage, transcript, model or credential data goes into it.
+- **Release builds** (`./build.sh`, the release workflow, `swift build -c release`) don't contain it. The `debugHover` lookup and the file writer are compiled only into debug builds (`#if DEBUG`, audit 0007, P2), so setting `debugHover` does nothing and a release build never creates, appends to, truncates or deletes the file. `build.sh` refuses to package a binary that has it (`scripts/check-hover-log-release.sh`).
+- **Debug builds** (`swift build`, `swift run SpanDeck`) write it only when `debugHover` is set in their preferences domain, read once at launch. `build.sh` never packages a debug build, so in practice that is the unbundled binary, whose domain is the process name ([audit 0008 §1](audits/0008-identity-isolation.md)): `defaults write SpanDeck debugHover -bool true` turns it on, and `defaults delete SpanDeck debugHover` and a relaunch turn it off. It is a development aid for a test account, not for an account with real usage data. The file is created `0600`, appended to, never followed through a symlink, and only if `~/Library/Logs` exists. An existing log that isn't a regular file of yours, or that others can read or write (a `0644` log from before #68, say), is left as it is: not appended to and not re-moded. Delete it or `chmod 600` it yourself to log again.
+- **Not erased:** *Clear cached usage data* doesn't touch it, and this change deletes no log, including `Headroom-hover.log` and a `SpanDeck-hover.log` from an earlier build. Copies in backups and snapshots stay too (see below). Delete them yourself if they're yours.
 
 ## Backups and erasure
 `~/Library/Application Support` is part of your home folder, so Time Machine and other backups include these files unless you exclude them; SpanDeck doesn't. Deleting a file (by clearing, migrating or replacing it) removes it from the folder, but it is not secure erasure:
