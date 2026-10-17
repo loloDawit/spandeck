@@ -21,7 +21,7 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 ## What the index holds
 | Field | Persisted as | Why it's kept |
 |---|---|---|
-| `files` | opaque file id → byte offset; since #56 also a keyed id of the file's change time (`stamp`) and a keyed id of the bytes before the offset (`anchor`: the first and the last 4 KiB) | Read only what was appended to each transcript, and read a transcript rewritten in place (at any size) again from the start (#56). The stamp is only compared, so no precise time is stored |
+| `files` | opaque file id → byte offset; since #56 also the file's size when last looked at (`size`), a keyed id of its change time (`stamp`) and a keyed id of sampled bytes before the offset (`anchor`: the first and the last 4 KiB and 16 evenly spaced 4 KiB windows between them) | Read only what was appended to each transcript, and read one rewritten in place again from the start (#56; see the limit below). The stamp is only compared, so no precise time is stored |
 | `seen` | opaque operation id → slot, token counts per model, how it was identified, and whether it was counted with an invalid counter (#58, only when it was) | Count a streamed message once as it grows, and a message repeated in a resumed session once |
 | `links` | opaque single id → opaque operation id (or `ambiguous`) + slot | Join a record that has only a message id or only a request id to the one pair that carries it (#55) |
 | `slots` | 15-minute UTC slot (#57) → model → token counts. Only where P9 applies (#58), also cache-write tokens whose tier is unresolved and tokens disputed between a flat total and its breakdown | Totals, windows and cost estimates. Each operation's counts in `seen` carry the same fields, so a #55 merge or a held (`Int.max`) sum can be rebuilt from them |
@@ -60,7 +60,7 @@ What it doesn't protect against:
 - The key sits next to the cache, so anyone who can read both (any process running as you, or a backup containing both) can test guesses. A path or id with little randomness can then be confirmed by trying candidates.
 - Time buckets (15-minute UTC slots since #57), models and token counts are stored in the clear. They show when, to the quarter hour, and how much you used each model over the last 32 days.
 - A fingerprint covers only a timestamp, a model name and token counts. Someone with the key who can guess all of those for a record can confirm it.
-- A file's anchor covers the first and the last 4 KiB before its saved offset (#56). Someone with the key who can guess those exact bytes can confirm them. They learn nothing about bytes they can't guess.
+- A file's anchor covers up to 18 windows of 4 KiB before its saved offset (#56). Someone with the key who can guess the exact bytes of all of them can confirm them. They learn nothing about bytes they can't guess.
 - An unread line's id covers the whole line. Someone with the key who can guess the exact bytes of a broken line can confirm it was in a transcript. They learn nothing about lines they can't guess.
 
 ## Retention
@@ -100,9 +100,13 @@ What users will notice:
 Interruptions behave as for version 4. No backup of the version 5 file is kept.
 
 ## Rewrite detection without a new version (#56)
-A version 7 cache saved before #56 has offsets but no `stamp` or `anchor`. It is still loaded. A transcript checked without an anchor resumes at its offset as before, and takes a stamp and an anchor: one read of at most 8 KiB, no line parsed. From then on, a rewrite in place is detected. The one gap is a same-size rewrite that happened before the upgrade, which stays uncounted as before. Older builds ignore the two fields. Their marks have no anchor, so if they later write one, the next check adopts it again.
+What is detected (the policy recorded on #56):
+- **Same size:** a transcript whose change time moved while its size stayed the same, as seen last time, is read again from the start. That catches any same-size rewrite in place, wherever the edit is, also when the file ends with an incomplete line (its saved offset is then short of its size, so the size seen last time is kept). A metadata-only change (a `touch`, an extended attribute) costs the same one full read, which counts nothing twice.
+- **Shorter:** read again from the start, as before.
+- **Larger:** read again from the start when any of the 18 anchor windows before the saved offset changed (the first and the last 4 KiB and 16 evenly spaced between them), else read on from the offset, as an append. **Accepted limit:** a larger rewrite that changes only bytes outside all 18 windows isn't detected. It is deterministic (the windows depend only on the saved offset), and only files larger than about 72 KiB have such bytes.
+- **Change time unavailable:** a file whose change time can't be read is checked by size alone, as before #56.
 
-**Limit (option (a) on #56):** a same-size edit confined to the middle of a transcript larger than 8 KiB, with its first 4 KiB and the 4 KiB before the saved offset intact, isn't detected. A metadata-only change (a `touch`, an extended attribute) costs only that check, never a full read.
+A version 7 cache saved before #56 has offsets but no `size`, `stamp` or `anchor`. It is still loaded. A transcript checked without an anchor resumes at its offset as before and takes the new fields: one read of at most 72 KiB, no line parsed. From then on, rewrites are detected as above. A rewrite that happened before the upgrade isn't. Older builds ignore the new fields.
 
 ## Upgrading from a version 6 cache (#57)
 Version 6 kept usage per whole UTC hour. In a time zone whose offset isn't a whole number of hours (+05:30, +05:45, −03:30 and others), local midnight falls inside an hour, and that hour's usage can't be split between the two days without the record times, which the cache doesn't hold. So version 6 hours are never reinterpreted as 15-minute slots: a version 6 cache is deleted when found, exactly as a version 4 or 5 cache is (above), and the transcripts still on disk are re-indexed under the existing key.

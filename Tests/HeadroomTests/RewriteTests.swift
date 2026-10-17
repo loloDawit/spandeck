@@ -72,6 +72,11 @@ struct RewriteTests {
         #expect(await Self.stats(second) == (size, 1))
         #expect(await Self.tokens(second) == 15000)
         #expect(await Self.stats(second) == (size, 1)) // once
+        // And not again after a relaunch: the restart was saved with the new stamp.
+        second.flush()
+        let third = rig.ledger()
+        #expect(await Self.tokens(third) == 15000)
+        #expect(await Self.stats(third) == (0, 0))
     }
 
     @Test func appendReadsOnlyNewBytes() async throws {

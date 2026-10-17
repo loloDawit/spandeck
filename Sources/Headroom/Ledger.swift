@@ -646,13 +646,18 @@ final class Ledger {
     static func slot(of d: Date) -> Int { Int((d.timeIntervalSince1970 / Double(slotSeconds)).rounded(.down)) }
     static func start(of slot: Int) -> Date { Date(timeIntervalSince1970: Double(slot) * Double(slotSeconds)) }
 
-    /// How far a transcript was read (#56). `offset` is just past the last complete line read. `stamp` is a keyed id of
+    /// How far a transcript was read (#56). `offset` is just past the last complete line read. `size` is the file's
+    /// size when it was last looked at, larger than `offset` when the last line is incomplete. `stamp` is a keyed id of
     /// the file's change time (ctime: it moves on every write and can't be set back by a restore or `touch`), only
-    /// compared for equality. `anchor` is a keyed id of the bytes before `offset` (the first and the last 4 KiB), so
-    /// a file rewritten in place, at any size, is told apart from one that was only appended to. Both are optional:
-    /// a mark saved before #56 has neither, and is adopted on its next check without reading any line.
-    private struct FileMark: Codable, Equatable { var offset: UInt64; var stamp: String?; var anchor: String? }
+    /// compared for equality. `anchor` is a keyed id of sampled bytes before `offset` (`anchorRanges`). A changed
+    /// stamp at an unchanged size means a same-size rewrite (or a metadata change): read again from the start. A
+    /// larger file whose anchor differs was rewritten; one whose anchor matches was appended to. All three are
+    /// optional: a mark saved before #56 has none, and is adopted on its next check without reading any line.
+    private struct FileMark: Codable, Equatable {
+        var offset: UInt64; var size: UInt64?; var stamp: String?; var anchor: String?
+    }
     static let anchorWindow = 4096
+    static let anchorSamples = 16
     /// What has been counted for one operation, per model, and how the operation was identified (#55). `flawed` is
     /// set (never cleared) once any of its records had an invalid counter (#58); left out of the cache when not.
     private struct Seen: Codable {
@@ -967,46 +972,59 @@ final class Ledger {
         return m.offset != size || (stamp != nil && m.stamp != stamp)
     }
 
-    /// The byte ranges before `offset` an anchor covers: the first and the last `anchorWindow` bytes (#56). For tests
+    /// The byte ranges before `offset` an anchor covers (#56): the first and the last `anchorWindow` bytes and
+    /// `anchorSamples` windows evenly spaced between them, at most 72 KiB whatever the file's size. A larger rewrite
+    /// that changes only bytes outside all of them isn't detected: the accepted, deterministic limit on #56. For tests
     /// and audits too, so they can place an edit inside or outside them.
     static func anchorRanges(upTo offset: Int) -> [Range<Int>] {
         guard offset > 0 else { return [] }
-        return [0..<min(anchorWindow, offset), max(0, offset - anchorWindow)..<offset]
+        let w = min(anchorWindow, offset), last = offset - w, n = anchorSamples + 1
+        return (0...n).map { k in let start = last * k / n; return start..<(start + w) }
     }
 
     /// A keyed id of the bytes before `offset` in `anchorRanges` (#56).
     private func anchor(_ raw: UnsafeRawBufferPointer, _ offset: Int) -> String {
         guard let base = raw.baseAddress, offset > 0 else { return opaqueID("file-anchor", data: []) }
-        return opaqueID("file-anchor", data: Self.anchorRanges(upTo: offset).map { Data(bytes: base + $0.lowerBound, count: $0.count) })
+        return opaqueID("file-anchor",
+                        data: Self.anchorRanges(upTo: offset).map { Data(bytes: base + $0.lowerBound, count: $0.count) })
     }
 
-    /// Reads a transcript from where it was left, or from the start if what was read before has changed (#56): it got
-    /// shorter, or the bytes before the saved offset differ (a rewrite in place, at any size). Reading again from the
-    /// start counts nothing twice (identity dedupe, #55) and keeps what was counted (P12). A mark saved before #56 has
-    /// no anchor: it resumes as before and takes one. The file is memory-mapped once for both the check and the
-    /// read, so even multi-hundred-megabyte transcripts are not copied into memory, and an unchanged prefix costs
-    /// two 4 KiB hashes. `stamp` was taken before mapping: a write in between is checked again on the next refresh.
+    /// Reads a transcript from where it was left, or from the start if what was read before may have changed (#56): it
+    /// got shorter, its change time moved at the same size, or the sampled bytes before the saved offset differ.
+    /// Reading again from the start counts nothing twice (identity dedupe, #55) and keeps what was counted (P12). A
+    /// mark saved before #56 has no anchor: it resumes as before and takes one. The file is memory-mapped once for
+    /// both the check and the read, so even multi-hundred-megabyte transcripts are not copied into memory, and an
+    /// append costs hashing at most 72 KiB. `stamp` and `size` were taken before mapping: a write in between is
+    /// checked again on the next refresh.
     private func readClaudeFile(_ path: String, id: String, size: UInt64, stamp: String?) {
         let mark = state.files[id]
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped) else {
             setPending(id, (mark?.offset ?? 0) < size)
             return
         }
+        // A changed stamp at the size seen last time (not the offset, which is short of it when the last line is
+        // incomplete) can't be an append: the file was rewritten at the same size, or only its metadata changed.
+        // Either way it is read again from the start, whatever the anchor says (#56 policy).
+        let sameSize = mark.map { m in
+            m.stamp != nil && stamp != nil && m.stamp != stamp && size == (m.size ?? m.offset)
+        } ?? false
         let (start, end, anchor) = data.withUnsafeBytes { raw -> (Int, Int, String) in
             var start = 0
-            if let m = mark, m.offset <= UInt64(raw.count),
+            if let m = mark, !sameSize, m.offset <= UInt64(raw.count),
                m.anchor == nil || m.anchor == self.anchor(raw, Int(m.offset)) {
                 start = Int(m.offset)
             }
             let end = ingestLines(raw, from: start)
             return (start, end, self.anchor(raw, end))
         }
-        if let m = mark, m.offset > 0, start == 0 { readStats.restarts += 1 }
+        let restarted = (mark?.offset ?? 0) > 0 && start == 0
+        if restarted { readStats.restarts += 1 }
         readStats.bytes += end - start
-        let next = FileMark(offset: UInt64(end), stamp: stamp, anchor: anchor)
-        // A new stamp alone (a metadata change) isn't worth a save: unsaved, it costs one more check after a relaunch.
+        let next = FileMark(offset: UInt64(end), size: size, stamp: stamp, anchor: anchor)
+        // A new stamp or size alone (a metadata change, an incomplete line growing) isn't worth a save: unsaved, it
+        // costs one more check after a relaunch. A restart is, or the file would be read again after every relaunch.
         if next != mark { state.files[id] = next }
-        if next.offset != mark?.offset || next.anchor != mark?.anchor { dirty = true }
+        if restarted || next.offset != mark?.offset || next.anchor != mark?.anchor { dirty = true }
         setPending(id, UInt64(end) < size)
     }
 
