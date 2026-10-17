@@ -144,8 +144,7 @@ enum ISO {
 }
 
 let appSupportDir: URL = {
-    let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Headroom", isDirectory: true)
+    let u = AppIdentity.applicationSupport(in: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
     // Owner-only (0700), checked again before every cache write (R8). A failure is reported by the ledger, which then
     // keeps usage in memory only.
     try? PrivateDirectory(url: u).prepare()

@@ -43,7 +43,7 @@ final class HoverController: NSResponder {
         guard Self.debug else { return }
         lastLog = Date()
         let line = "\(Date()) \(msg())\n"
-        let url = homeDir.appendingPathComponent("Library/Logs/Headroom-hover.log")
+        let url = AppIdentity.hoverLogURL(home: homeDir)
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
         else { try? line.write(to: url, atomically: true, encoding: .utf8) }
     }
