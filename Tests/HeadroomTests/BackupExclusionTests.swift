@@ -195,4 +195,113 @@ struct BackupExclusionTests {
             #expect(try String(contentsOf: f, encoding: .utf8) == "legacy \(f.lastPathComponent)")
         }
     }
+
+    // MARK: Failures
+
+    /// Names the marker was called with; it fails for the names `failing` accepts.
+    final class Marker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: [String] = []
+        var failing: (String) -> Bool
+
+        init(failing: @escaping (String) -> Bool = { _ in false }) { self.failing = failing }
+
+        var calls: [String] { lock.withLock { names } }
+
+        func storage(_ url: URL) -> PrivateDirectory {
+            var d = PrivateDirectory(url: url)
+            d.markExcluded = { [self] file in
+                let name = file.lastPathComponent
+                let fail = lock.withLock { names.append(name); return failing(name) }
+                if fail { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path]) }
+                try PrivateDirectory.setExcludedFromBackup(file)
+            }
+            return d
+        }
+    }
+
+    /// A new cache or key is marked as a temporary file, before rename(2) puts it in place; the final name is only
+    /// marked when it already existed at load.
+    @Test func newFilesAreMarkedBeforeTheyAreInPlace() async throws {
+        let marker = Marker()
+        let rig = try Rig(storage: marker.storage)
+        try rig.transcript(["A"])
+        let ledger = rig.ledger()
+        _ = await Self.tokens(ledger)
+        ledger.flush()
+        #expect(!marker.calls.isEmpty)
+        #expect(marker.calls.allSatisfy { $0.hasPrefix(".") && $0.contains(".tmp-") }, "\(marker.calls)")
+        #expect(Set(marker.calls.map { String($0.dropFirst().prefix { $0 != "." }) }) == ["claude-ledger"])
+    }
+
+    /// Fail closed: a new cache or key that can't be marked is never moved into place. Nothing is written anywhere,
+    /// no temporary file is left, usage is still counted in memory, and the reason is shown.
+    @Test func unmarkableNewFilesAreNotWritten() async throws {
+        let marker = Marker(failing: { _ in true })
+        let rig = try Rig(storage: marker.storage)
+        try rig.transcript(["A"])
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 150)
+        ledger.flush()
+        #expect(ledger.cacheIssue == .notSaved(.backupExclusion))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rig.box.appSupport.path).filter { $0.contains("claude-ledger") } == [])
+    }
+
+    /// An existing cache and key that can't be marked are kept and used, never deleted to enforce exclusion, and the
+    /// reason is shown.
+    @Test func unmarkableExistingFilesAreKeptAndReported() async throws {
+        let plain = try Rig()
+        try plain.transcript(["A"])
+        let first = plain.ledger()
+        _ = await Self.tokens(first)
+        first.flush()
+        try Self.unmark(plain.cacheURL)
+        try Self.unmark(plain.keyURL)
+        let key = try Data(contentsOf: plain.keyURL), cache = try Data(contentsOf: plain.cacheURL)
+
+        var rig = plain
+        let marker = Marker(failing: { _ in true })
+        rig.storage = marker.storage(plain.box.appSupport)
+        let relaunched = rig.ledger()
+        #expect(await Self.tokens(relaunched) == 150)
+        #expect(relaunched.cacheIssue == .notExcludedFromBackup)
+        #expect(try Data(contentsOf: rig.keyURL) == key && Data(contentsOf: rig.cacheURL) == cache)
+        #expect(try !Self.excluded(rig.keyURL) && !Self.excluded(rig.cacheURL))
+    }
+
+    /// The key is written once. If it can't be marked, a later successful cache save doesn't hide that; once it can
+    /// be marked, the next save does so and the issue goes.
+    @Test func cacheSaveDoesNotHideAnUnmarkedKey() async throws {
+        let plain = try Rig()
+        try plain.transcript(["A"])
+        let first = plain.ledger()
+        _ = await Self.tokens(first)
+        first.flush()
+        try Self.unmark(plain.keyURL)
+
+        var rig = plain
+        let marker = Marker(failing: { $0 == Ledger.keyName })
+        rig.storage = marker.storage(plain.box.appSupport)
+        try rig.transcript(["A", "B"])
+        let relaunched = rig.ledger()
+        #expect(await Self.tokens(relaunched) == 300)
+        relaunched.flush()
+        #expect(try Self.excluded(rig.cacheURL) && !Self.excluded(rig.keyURL))
+        #expect(relaunched.cacheIssue == .notExcludedFromBackup)
+
+        marker.failing = { _ in false }
+        try rig.transcript(["A", "B", "C"])
+        #expect(await Self.tokens(relaunched) == 450)
+        relaunched.flush()
+        #expect(try Self.excluded(rig.keyURL) && Self.excluded(rig.cacheURL))
+        #expect(relaunched.cacheIssue == nil)
+    }
+
+    @Test func failureTextsAreFixed() {
+        #expect(StorageFailure.backupExclusion.text == "the cache or its key couldn't be excluded from backups")
+        #expect(LedgerCacheIssue.notSaved(.backupExclusion).text
+                == "Usage cache not saved: the cache or its key couldn't be excluded from backups. Totals are kept in memory only.")
+        #expect(LedgerCacheIssue.notExcludedFromBackup.text
+                == "The usage cache or its key couldn't be excluded from backups. It is kept and still used, so backups may include it.")
+    }
 }
