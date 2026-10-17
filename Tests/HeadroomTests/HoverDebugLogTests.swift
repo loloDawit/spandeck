@@ -102,3 +102,82 @@ struct HoverDebugLogSourceTests {
         #expect(seen.isSubset(of: allowed), "unexpected values: \(seen.subtracting(allowed).sorted())")
     }
 }
+
+#if DEBUG
+/// Debug builds: the log is off unless `debugHover` is set, and then appends to SpanDeck's own log only.
+struct HoverDebugLogTests {
+    private let box: Sandbox
+    private let logs: URL
+    private var path: URL { logs.appendingPathComponent("SpanDeck-hover.log") }
+
+    init() throws {
+        box = try Sandbox()
+        logs = box.home.appendingPathComponent("Library/Logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+    }
+
+    private func log(_ enabled: Bool?) -> HoverDebugLog {
+        if let enabled { box.preferences.set(enabled, forKey: HoverDebugLog.preference) }
+        return HoverDebugLog(preferences: box.preferences, home: box.home)
+    }
+
+    private func contents() throws -> [String] { try FileManager.default.contentsOfDirectory(atPath: logs.path) }
+
+    @Test func offByDefault() throws {
+        let log = log(nil)
+        var built = false
+        log.write({ built = true; return "mouse" }())
+        #expect(!log.isEnabled && !built)
+        #expect(try contents().isEmpty)
+    }
+
+    @Test func onlyDebugHoverEnablesIt() {
+        #expect(HoverDebugLog.preference == "debugHover")
+        box.preferences.set(true, forKey: "debugHoverX")
+        box.preferences.set(true, forKey: "show.cpu")
+        #expect(!log(nil).isEnabled)
+        #expect(log(true).isEnabled)
+    }
+
+    @Test func unsetWritesNothing() throws {
+        log(false).write("show cpu")
+        #expect(try contents().isEmpty)
+    }
+
+    @Test func setWritesToSpanDecksLogOnly() throws {
+        let log = log(true)
+        #expect(log.url == AppIdentity.hoverLogURL(home: box.home))
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        log.write("show cpu", at: date)
+        log.write("panel frame (0.0, 0.0, 240.0, 100.0) visible true", at: date)
+        #expect(try contents() == ["SpanDeck-hover.log"])
+        #expect(try String(contentsOf: path, encoding: .utf8)
+                == "\(date) show cpu\n\(date) panel frame (0.0, 0.0, 240.0, 100.0) visible true\n")
+        let mode = try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o600)
+    }
+
+    @Test func appendsWithoutTruncating() throws {
+        try Data("earlier run\n".utf8).write(to: path)
+        log(true).write("show gpu", at: Date(timeIntervalSince1970: 0))
+        #expect(try String(contentsOf: path, encoding: .utf8) == "earlier run\n\(Date(timeIntervalSince1970: 0)) show gpu\n")
+    }
+
+    /// Headroom's log is never opened, and a link in place of SpanDeck's log isn't followed.
+    @Test func otherFilesUntouched() throws {
+        let legacy = logs.appendingPathComponent("Headroom-hover.log")
+        try Data("legacy hover log\n".utf8).write(to: legacy)
+        try FileManager.default.createSymbolicLink(at: path, withDestinationURL: legacy)
+        log(true).write("show memory")
+        #expect(try String(contentsOf: legacy, encoding: .utf8) == "legacy hover log\n")
+        #expect(try Set(contents()) == ["Headroom-hover.log", "SpanDeck-hover.log"])
+    }
+
+    /// A missing Logs folder isn't created; the write is dropped.
+    @Test func missingFolderIsNotCreated() throws {
+        try FileManager.default.removeItem(at: logs)
+        log(true).write("show battery")
+        #expect(!FileManager.default.fileExists(atPath: logs.path))
+    }
+}
+#endif
