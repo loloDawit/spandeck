@@ -157,10 +157,38 @@ struct HoverDebugLogTests {
         #expect(mode?.intValue == 0o600)
     }
 
-    @Test func appendsWithoutTruncating() throws {
+    private func seed(mode: Int) throws {
         try Data("earlier run\n".utf8).write(to: path)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: path.path)
+    }
+
+    private func mode() throws -> Int? {
+        (try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? NSNumber)?.intValue
+    }
+
+    @Test func appendsWithoutTruncating() throws {
+        try seed(mode: 0o600)
         log(true).write("show gpu", at: Date(timeIntervalSince1970: 0))
         #expect(try String(contentsOf: path, encoding: .utf8) == "earlier run\n\(Date(timeIntervalSince1970: 0)) show gpu\n")
+    }
+
+    /// Review of #69: `0600` only applies when the log is created. An existing log that others can read or write (from
+    /// a build before #68, or made by hand) is left exactly as it is: not appended to and not re-moded.
+    @Test(arguments: [0o644, 0o640, 0o604, 0o666, 0o620])
+    func existingLogOpenToOthersIsLeftAlone(_ existing: Int) throws {
+        try seed(mode: existing)
+        log(true).write("show cpu")
+        #expect(try String(contentsOf: path, encoding: .utf8) == "earlier run\n")
+        #expect(try mode() == existing)
+    }
+
+    /// Only a regular file is appended to. A FIFO with no reader at the log path returns at once instead of blocking
+    /// the hover handler (before this, the open blocked forever).
+    @Test(.timeLimit(.minutes(1))) func fifoIsNotWritten() throws {
+        #expect(mkfifo(path.path, 0o600) == 0)
+        log(true).write("show cpu")
+        let type = try FileManager.default.attributesOfItem(atPath: path.path)[.type] as? FileAttributeType
+        #expect(type != nil && type != .typeRegular)
     }
 
     /// Headroom's log is never opened, and a link in place of SpanDeck's log isn't followed.
