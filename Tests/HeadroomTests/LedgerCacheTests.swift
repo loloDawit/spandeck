@@ -104,23 +104,25 @@ struct LedgerCacheTests {
     /// Tests 5-6: a relaunch reuses the same ids and offsets: nothing is read again and nothing is counted twice.
     @Test func relaunchKeepsIdsAndOffsets() async throws {
         let rig = try Rig()
-        let file = try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A")])
         let first = rig.ledger()
         #expect(await Self.tokens(first) == 150)
         first.flush()
         let before = try rig.cacheJSON()
 
-        // Same size, different message id: only a ledger that ignored the saved offset would count it.
-        try Data((Self.line(id: "msg_B", req: "req_A") + "\n").utf8).write(to: file)
+        // Unchanged: the relaunched ledger resumes at the saved offset and reads nothing (#56: a same-size rewrite
+        // is read again now, so it can no longer be the probe).
         let second = rig.ledger()
         #expect(await Self.tokens(second) == 150)
+        let read = await withCheckedContinuation { c in second.claudeReadStats { c.resume(returning: $0) } }
+        #expect(read == (0, 0))
         second.flush()
         let after = try rig.cacheJSON()
         #expect(Set((before["files"] as? [String: Any] ?? [:]).keys) == Set((after["files"] as? [String: Any] ?? [:]).keys))
         #expect(Set((before["seen"] as? [String: Any] ?? [:]).keys) == Set((after["seen"] as? [String: Any] ?? [:]).keys))
 
         // New data after the relaunch is still counted once.
-        try rig.transcript([Self.line(id: "msg_B", req: "req_A"), Self.line(id: "msg_C", req: "req_C")])
+        try rig.transcript([Self.line(id: "msg_A", req: "req_A"), Self.line(id: "msg_C", req: "req_C")])
         #expect(await Self.tokens(second) == 300)
     }
 

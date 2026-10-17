@@ -707,6 +707,9 @@ final class Ledger {
     /// Newest transcript write seen (Claude or Grok), used to tell when an agent is working.
     private var lastActivity = Date.distantPast
     private var changeCounter = 0
+    /// Bytes scanned for lines, and files read again from the start, since this ledger started (#56). For tests and
+    /// audits: they show unchanged transcripts aren't re-read.
+    private var readStats = (bytes: 0, restarts: 0)
     private var lastSummaryKey = ""
     private var cachedSummaries: (UsageSummary, UsageSummary)?
     private let storage: PrivateDirectory
@@ -881,7 +884,7 @@ final class Ledger {
         for (i, (path, id, size)) in candidates.enumerated() {
             if initial, i % 25 == 0 { progress("Indexing Claude logs \(i)/\(candidates.count)") }
             var offset = state.files[id]?.offset ?? 0
-            if size < offset { offset = 0 } // rewritten file; dedupe keys prevent double counting
+            if size < offset { offset = 0; readStats.restarts += 1 } // rewritten file; dedupe keys prevent double counting
             offset = ingestClaudeFile(path, from: offset)
             state.files[id] = FileMark(offset: offset)
             setPending(id, offset < size)
@@ -946,7 +949,7 @@ final class Ledger {
             if let m = attrs[.modificationDate] as? Date { lastActivity = max(lastActivity, m) }
             var offset = state.files[id]?.offset ?? 0
             if size == offset { continue }
-            if size < offset { offset = 0 }
+            if size < offset { offset = 0; readStats.restarts += 1 }
             offset = ingestClaudeFile(path, from: offset)
             state.files[id] = FileMark(offset: offset)
             setPending(id, offset < size)
@@ -975,6 +978,7 @@ final class Ledger {
             }
             return start
         }
+        readStats.bytes += consumed - Int(offset)
         return UInt64(consumed)
     }
 
@@ -1284,6 +1288,12 @@ final class Ledger {
             }
         }
         return (bySlot, undated)
+    }
+
+    /// Bytes scanned for lines and files read again from the start since this ledger started, read on the ledger
+    /// queue (#56). For tests and audits; the app doesn't use it.
+    func claudeReadStats(completion: @escaping ((bytes: Int, restarts: Int)) -> Void) {
+        queue.async { [self] in completion(readStats) }
     }
 
     /// Claude's usage per whole UTC hour (hours since 1970, then model): the 15-minute slots summed, read on the ledger

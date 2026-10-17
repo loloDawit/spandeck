@@ -3,14 +3,14 @@
   "matrix": [
     "file overwrite"
   ],
-  "classification": "defect",
+  "classification": "pass",
   "followUp": "#56",
   "policy": "P13: a file whose content was replaced is read again from the start (identity dedupe prevents double counting); a byte offset alone can't tell an append from an overwrite.",
   "timeZone": "America/Los_Angeles",
   "now": "2026-03-10T19:00:00Z",
   "records": 4,
   "duplicates": 0,
-  "derivation": "A [100, 50] = 150. Overwritten with B [200, 20] (a longer line) and C [300, 30]: 700. Overwritten with D [7, 7], padded to the same byte size: 714, 4 operations. Today the saved offset falls inside B, so B is skipped (480), and the same-size file isn't read at all (still 480). A fresh index of the final file is D alone: 14.",
+  "derivation": "A [100, 50] = 150. Overwritten with B [200, 20] (a longer line) and C [300, 30]: 700. Overwritten with D [7, 7], padded to the same byte size: 714, 4 operations. Before #56 the saved offset fell inside B, so B was skipped (480), and the same-size file wasn't read at all (still 480). A fresh index of the final file is D alone: 14.",
   "steps": [
     {
       "ops": [
@@ -46,15 +46,6 @@
         },
         "operations": 3,
         "month": 700
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [400, 80, 0, 0, 0, 2]
-          }
-        },
-        "operations": 2,
-        "month": 480
       }
     },
     {
@@ -78,21 +69,6 @@
         },
         "today": 714,
         "week": 714,
-        "coverage": "unavailable"
-      },
-      "baseline": {
-        "hours": {
-          "2026-03-10T16": {
-            "claude-test-1": [400, 80, 0, 0, 0, 2]
-          }
-        },
-        "operations": 2,
-        "month": 480,
-        "days": {
-          "2026-03-10": 480
-        },
-        "today": 480,
-        "week": 480,
         "coverage": "unavailable"
       }
     }
