@@ -18,13 +18,10 @@ These were produced by `./build.sh dmg` into the git-ignored `build/` folder. No
 
 ## Decisions needed before any signed build (product owner)
 
-1. **Bundle identity.** `Info.plist` still says `CFBundleIdentifier = dev.headroom.Headroom` and `CFBundleName = Headroom` (inherited). A Developer ID signature ties SpanDeck's Team ID to whatever identifier ships. Changing the identifier also changes:
-   - the preferences domain;
-   - the login-item registration;
-   - the Keychain access context;
-   - the `~/Library/Application Support/Headroom` path, if that is renamed too.
-
-   The project rules forbid rebranding identifiers without a documented migration, so decide this (and write the migration) first.
+1. **Bundle identity.** *Decided and implemented in #11:* `CFBundleIdentifier = io.github.lolodawit.SpanDeck`, `CFBundleName`/`CFBundleExecutable = SpanDeck`, `~/Library/Application Support/SpanDeck/`, all from `Resources/identity.env`. The documented policy is no migration, and Headroom's state is never touched (`docs/USAGE_CACHE.md`, *Separate from Headroom*).
+   - A Developer ID signature ties SpanDeck's Team ID to this identifier.
+   - The Keychain access context follows the new identity.
+   - The commands below now produce `build/SpanDeck.app` and `build/SpanDeck-<version>.dmg`. The inventory table above was recorded on the earlier `Headroom` build.
 2. **Who holds the certificate.** Decide whether it is an individual or an organization Apple Developer account, who the Account Holder is, and who may sign.
 3. **Where signing happens.** Choose either:
    - (a) the maintainer's Mac, by hand, with a local Keychain;
@@ -47,11 +44,11 @@ These were produced by `./build.sh dmg` into the git-ignored `build/` folder. No
 
 Run from a clean checkout of the **tagged** commit, with the toolchain recorded in the release notes.
 
-1. **Build**, universal: `./build.sh`. It runs `swift build -c release --arch arm64 --arch x86_64` and assembles `build/Headroom.app`. Check both slices with `lipo -archs`.
+1. **Build**, universal: `./build.sh`. It runs `swift build -c release --arch arm64 --arch x86_64` and assembles `build/SpanDeck.app`. Check both slices with `lipo -archs`.
 2. **Sign the app** with Hardened Runtime and a secure timestamp, replacing the ad-hoc signature:
    ```sh
    codesign --force --options runtime --timestamp \
-     --sign "Developer ID Application: <Name> (<TEAMID>)" build/Headroom.app
+     --sign "Developer ID Application: <Name> (<TEAMID>)" build/SpanDeck.app
    ```
    The bundle has one executable and no nested frameworks or helpers, so `--deep` isn't needed. If nested code is ever added, sign it inside-out first.
 3. **Entitlements: none planned.**
@@ -59,34 +56,34 @@ Run from a clean checkout of the **tagged** commit, with the toolchain recorded 
    - Hardened Runtime doesn't restrict outgoing HTTPS, IOKit reads, launching `/usr/bin/security` or the Grok CLI as child processes, or `SMAppService`.
    - It doesn't use JIT, unsigned executable memory, `DYLD_*` environment variables, debugging of other processes, Apple Events or the camera or microphone.
 
-   If a runtime test (step 8) shows a need, add a reviewed `Headroom.entitlements` and record why.
+   If a runtime test (step 8) shows a need, add a reviewed `SpanDeck.entitlements` and record why.
 4. **Verify the app signature:**
    ```sh
-   codesign --verify --strict --verbose=2 build/Headroom.app
-   codesign -dvv build/Headroom.app      # Authority=Developer ID Application: …, TeamIdentifier=<TEAMID>, flags=0x10000(runtime), Timestamp=…
+   codesign --verify --strict --verbose=2 build/SpanDeck.app
+   codesign -dvv build/SpanDeck.app      # Authority=Developer ID Application: …, TeamIdentifier=<TEAMID>, flags=0x10000(runtime), Timestamp=…
    ```
 5. **Package and sign the DMG:** `./build.sh dmg` (or rebuild only the DMG from the signed app), then:
    ```sh
-   codesign --force --timestamp --sign "Developer ID Application: <Name> (<TEAMID>)" build/Headroom-<version>.dmg
-   codesign --verify --verbose=2 build/Headroom-<version>.dmg
+   codesign --force --timestamp --sign "Developer ID Application: <Name> (<TEAMID>)" build/SpanDeck-<version>.dmg
+   codesign --verify --verbose=2 build/SpanDeck-<version>.dmg
    ```
    `build.sh dmg` currently re-runs the build and the ad-hoc signing. Before the first signed release, change it to take an already-signed app (a separate, reviewed change) so the DMG contains exactly the app verified in step 4.
 6. **Notarize the DMG and wait for the verdict:**
    ```sh
-   xcrun notarytool submit build/Headroom-<version>.dmg --keychain-profile spandeck-notary --wait
+   xcrun notarytool submit build/SpanDeck-<version>.dmg --keychain-profile spandeck-notary --wait
    xcrun notarytool log <submission-id> --keychain-profile spandeck-notary notary-log.json   # keep with the release record
    ```
    Only status `Accepted` continues. On `Invalid`, read the log, fix and resubmit. Never ship the rejected file.
 7. **Staple and validate the ticket:**
    ```sh
-   xcrun stapler staple build/Headroom-<version>.dmg
-   xcrun stapler validate build/Headroom-<version>.dmg
+   xcrun stapler staple build/SpanDeck-<version>.dmg
+   xcrun stapler validate build/SpanDeck-<version>.dmg
    ```
 8. **Gatekeeper assessment and runtime check** on a separate test Mac or user account with no real Claude or Grok data (#3 Phase 2):
    ```sh
-   spctl --assess --type open --context context:primary-signature --verbose=4 build/Headroom-<version>.dmg   # accepted, source=Notarized Developer ID
+   spctl --assess --type open --context context:primary-signature --verbose=4 build/SpanDeck-<version>.dmg   # accepted, source=Notarized Developer ID
    # after copying the app out of the mounted DMG:
-   spctl --assess --type execute --verbose=4 /Applications/Headroom.app                                     # accepted, source=Notarized Developer ID
+   spctl --assess --type execute --verbose=4 /Applications/SpanDeck.app                                     # accepted, source=Notarized Developer ID
    ```
    Launch it once on Apple Silicon and once on Intel hardware, both on macOS 14 or later. Confirm that the R1–R10 defaults hold at runtime: no Keychain read, Grok key read or login item without consent, `--snapshot` refused, and cache modes `0700`/`0600`.
 9. **Provenance record**, attached to the GitHub release and kept with the tag:

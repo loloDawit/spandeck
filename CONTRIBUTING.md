@@ -8,7 +8,7 @@ SpanDeck is a fork of [sandrich/headroom](https://github.com/sandrich/headroom),
 3. Branch from `main` with a descriptive topic name. Do not implement unrelated changes in one PR.
 4. Run `swift test` and `swift build` on macOS 14+ with appropriate Swift/Xcode toolchain. Record any unavailable checks honestly.
    CI runs `swift test --no-parallel` on a 3-core runner. On a Mac with more cores, `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test` (one-thread pool) shows failures that only appear when cores are scarce.
-   For screenshots, a debug build renders synthetic data only: `swift run Headroom --snapshot <existing folder>` writes `strip-light.png`, `strip-dark.png` and `popover.png`, then exits without starting the app. Release builds refuse `--snapshot` (R10, #36).
+   For screenshots, a debug build renders synthetic data only: `swift run SpanDeck --snapshot <existing folder>` writes `strip-light.png`, `strip-dark.png` and `popover.png`, then exits without starting the app. Release builds refuse `--snapshot` (R10, #36).
 5. Describe evidence for changed accounting semantics and attach synthetic fixture coverage.
 6. Submit a PR; do not merge with failing checks or unresolved credential/privacy risks.
 

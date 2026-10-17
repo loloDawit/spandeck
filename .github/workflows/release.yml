@@ -76,11 +76,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" build/Headroom-*.dmg --clobber
+            gh release upload "$TAG" build/SpanDeck-*.dmg --clobber
             # Keep notes written when publishing; a manual run regenerates them.
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -z "$(gh release view "$TAG" --json body -q .body)" ]; then
               gh release edit "$TAG" --notes-file build/notes.md
             fi
           else
-            gh release create "$TAG" build/Headroom-*.dmg --title "Headroom ${TAG#v}" --notes-file build/notes.md
+            gh release create "$TAG" build/SpanDeck-*.dmg --title "SpanDeck ${TAG#v}" --notes-file build/notes.md
           fi

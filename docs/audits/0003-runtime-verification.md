@@ -166,6 +166,8 @@ Build with `scripts/runtime-verify.sh stage` in your normal account, after this 
 
 ## 5. Procedure (owner, in the `spandecktest` account)
 
+*Since #11, the app under test is `SpanDeck.app` (`io.github.lolodawit.SpanDeck`, `Application Support/SpanDeck`). The script reads those names from `identity.env`. The `Headroom` names below are those of runs 1–3. The coexistence run with a Headroom-identity build is in [audit 0008 §5](0008-identity-isolation.md#5-runtime-coexistence-run-owner-spandecktest-pending).*
+
 **In your normal account, building only:**
 1. `cd ~/Desktop/project/spandeck && git checkout main && git pull --ff-only && scripts/runtime-verify.sh stage`. This records the commit, toolchain and hashes in `/Users/Shared/spandeck-rv/<sha>/manifest.txt`. It does not launch anything. Until this page's PR is merged, the script isn't on `main`: check out `docs/runtime-verification-plan` instead. `stage` records whichever commit is checked out.
 2. Log out, or use Fast User Switching, then log in as **`spandecktest`**. Don't sign in to any Apple ID, Claude, Grok or work service there.
