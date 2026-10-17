@@ -198,6 +198,49 @@ struct RewriteTests {
         #expect(await Self.stats(ledger).restarts == 1)
     }
 
+    /// The size seen last time must survive a quit (review of `bf374de`): an incomplete line appended (the file grows,
+    /// the offset doesn't), the app quits, then a middle record is rewritten in place at that size, outside every
+    /// anchor window. After the relaunch the change time moved at the size seen last, so the file is read again: the
+    /// new record counts once, the incomplete line stays pending, and a second relaunch reads nothing.
+    @Test func sizeSeenOnlyBeforeAQuitSurvivesTheRelaunch() async throws {
+        let rig = try Rig()
+        let partial = #"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"usage":{"input_tok"#
+        try rig.write(Self.huge)
+        let first = rig.ledger()
+        #expect(await Self.tokens(first) == 90000) // saved: the first refresh always saves
+
+        // An incomplete line: the file grows, the offset doesn't, and that is all the app sees before quitting.
+        let h = try FileHandle(forWritingTo: rig.file)
+        try h.seekToEnd()
+        try h.write(contentsOf: Data(partial.utf8))
+        try h.close()
+        let grown = await refreshLedger(first).claude
+        #expect(grown.month.tokens == 90000 && grown.month.completeness.pending == 1)
+        first.flush() // quit
+
+        // While the app is closed: a middle record rewritten in place, same size, outside every window.
+        let i = try #require(Self.lines(of: Self.huge, outsideAndInside: Self.layout(Self.huge).end).outside)
+        var edited = Self.huge
+        edited[i] = Self.line(String(format: "Q%03d", i % 1000), pad: 80)
+        let before = try Data(contentsOf: rig.file).count
+        let w = try FileHandle(forWritingTo: rig.file)
+        try w.write(contentsOf: Data((edited.joined(separator: "\n") + "\n" + partial).utf8))
+        try w.close()
+        let after = try Data(contentsOf: rig.file).count
+        #expect(before == after)
+
+        let second = rig.ledger()
+        let s = await refreshLedger(second).claude
+        #expect(s.month.tokens == 90150 && s.month.completeness.pending == 1)
+        #expect(await Self.stats(second).restarts == 1)
+        second.flush()
+
+        let third = rig.ledger()
+        let t = await refreshLedger(third).claude
+        #expect(t.month.tokens == 90150 && t.month.completeness.pending == 1)
+        #expect(await Self.stats(third) == (0, 0))
+    }
+
     /// Larger, with an edit inside a sampled window in the middle: detected by the anchor.
     @Test func largerRewriteInsideASampleIsRead() async throws {
         let rig = try Rig()
