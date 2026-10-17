@@ -29,6 +29,7 @@
 #     scripts/runtime-verify.sh compare A B      which app's state changed between two fingerprints
 #     scripts/runtime-verify.sh seed-legacy-consent / unseed-legacy-consent  set or remove Headroom-domain consent
 #     scripts/runtime-verify.sh clean-legacy     remove the test account's legacy state (asks first)
+#     scripts/runtime-verify.sh clean-fixtures-legacy  remove Run 3's unregistered synthetic fixtures only (asks first)
 #
 # Evidence goes to ~/spandeck-rv-evidence/<run>/. It holds file names, modes, counts and pass/fail lines only:
 # no transcript content, no preference values other than booleans and numbers, no network payloads.
@@ -620,8 +621,41 @@ cmd_summary() {
     echo "Wrote $out (no transcript content, credentials or payloads). Check it before sharing."
 }
 
+# Fixture cleanup fails closed (#11, review of e39f9c5): only files the script registered, or (clean-fixtures-legacy)
+# files positively shaped like Run 3's, are deleted, one by one; ~/.claude/projects is never removed wholesale, and
+# anything unexpected stops the cleanup before it deletes anything.
+FIXTURE_DIR_RE='^-Users-[A-Za-z0-9._-]+-rvpath[0-9a-f]{12}$'
+projects_safe() {
+    [ ! -L "$HOME/.claude" ] && [ ! -L "$HOME/.claude/projects" ] || die "~/.claude or ~/.claude/projects is a link; nothing is cleaned"
+}
+# Read-only: every entry under ~/.claude/projects with its type and size.
+fixture_inventory() {
+    (cd "$HOME/.claude/projects" && find . -mindepth 1 | sort | while read -r e; do
+        if [ -L "$e" ]; then echo "  link $e"; elif [ -d "$e" ]; then echo "  dir  $e"; else echo "  file $e $(stat -f %z "$e") bytes"; fi
+    done)
+}
+
 cmd_clean() {
     [ "$(id -un)" = "$RV_USER" ] || die "clean only runs in $RV_USER"
+    local projects="$HOME/.claude/projects" mark="$HOME/.claude/projects/$FIXTURE_MARK"
+    local registered=()
+    if [ -e "$projects" ] || [ -L "$projects" ]; then projects_safe; fi
+    if [ -f "$mark" ]; then
+        if ! grep -q '^run=' "$mark"; then
+            echo "An old fixture marker without a file registry (Run 3 or earlier). Nothing is deleted. What's there:"
+            fixture_inventory
+            die "use '$0 clean-fixtures-legacy' for Run 3's synthetic fixtures, or remove them by hand"
+        fi
+        local f
+        while read -r f; do
+            [[ "$f" =~ ^-Users-[A-Za-z0-9._-]+-rvpath[0-9a-f]{12}/rvid[0-9a-f]{12}-[a-z0-9]+\.jsonl$ ]] || die "unexpected registry entry: $f"
+            [[ "${f%%/*}" == "-Users-$RV_USER-"* ]] || die "registry entry for another account: $f"
+            if [ -e "$projects/$f" ] || [ -L "$projects/$f" ]; then
+                [ ! -L "$projects/$f" ] && [ -f "$projects/$f" ] && [ ! -L "$projects/${f%%/*}" ] || die "$f is not a plain file"
+            fi
+            registered+=("$f")
+        done < <(sed -n 's/^file=//p' "$mark")
+    fi
     cmd_quit || true
     echo "Before cleaning: if you enabled Launch at login, turn it off in the app's Settings first. Continue? [y/N]"
     read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled"
@@ -631,8 +665,55 @@ cmd_clean() {
     # cfprefsd may keep an empty file; with the domain deleted, removing it is safe.
     defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
     rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
-    if [ -f "$HOME/.claude/projects/$FIXTURE_MARK" ]; then rm -rf "$HOME/.claude/projects"; rmdir "$HOME/.claude" 2>/dev/null || true; fi
-    record "clean: $APP_NAME state and fixtures removed; legacy state and evidence kept in $EVIDENCE_ROOT"
+    local n=0
+    for f in "${registered[@]+"${registered[@]}"}"; do
+        if [ -f "$projects/$f" ]; then rm -f "$projects/$f"; n=$((n + 1)); fi
+        rmdir "$projects/${f%%/*}" 2>/dev/null || true
+    done
+    if [ -f "$mark" ] && [ -z "$(cd "$projects" && find . -mindepth 1 ! -name "$FIXTURE_MARK")" ]; then
+        rm -f "$mark"; rmdir "$projects" "$HOME/.claude" 2>/dev/null || true
+    fi
+    local left=""; [ -d "$projects" ] && left=$(cd "$projects" && find . -mindepth 1 ! -name "$FIXTURE_MARK" | sort | tr '\n' ' ')
+    record "clean: $APP_NAME state and $n registered fixture files removed; kept: legacy state, evidence${left:+, and unregistered entries: $left}"
+}
+
+# Run 3's fixtures (staged before the registry existed) after confirmation, and only if every entry under
+# ~/.claude/projects is positively one of them: the old marker, folders -Users-<this account>-rvpath<token>, and
+# plain files rvid<token>-{main,identity,completeness,privacy,perfN}.jsonl that contain their token. Anything else
+# (other files, other project folders, links, a registered marker) stops it before anything is deleted.
+cmd_clean_fixtures_legacy() {
+    [ "$(id -un)" = "$RV_USER" ] || die "clean-fixtures-legacy only runs in $RV_USER"
+    if dsmemberutil checkmembership -U "$RV_USER" -G admin | grep -q "is a member"; then die "$RV_USER is an administrator"; fi
+    local projects="$HOME/.claude/projects" mark="$HOME/.claude/projects/$FIXTURE_MARK"
+    [ -d "$projects" ] || die "no ~/.claude/projects"
+    projects_safe
+    [ -f "$mark" ] && [ ! -L "$mark" ] || die "no fixture marker; these aren't the script's fixtures"
+    grep -q '^run=' "$mark" && die "this marker has a registry; use '$0 clean'"
+    local files=() dirs=() e base tok
+    while read -r e; do
+        e=${e#./}
+        if [ -L "$projects/$e" ]; then die "$e is a link; nothing deleted"; fi
+        if [ "$e" = "$FIXTURE_MARK" ]; then continue; fi
+        if [ -d "$projects/$e" ]; then
+            [[ "$e" =~ $FIXTURE_DIR_RE ]] && [[ "$e" == "-Users-$RV_USER-rvpath"* ]] || die "unexpected folder $e; nothing deleted"
+            dirs+=("$e"); continue
+        fi
+        base=${e##*/}; tok=${e%%/*}; tok=${tok##*-rvpath}
+        [[ "$e" == */* ]] && [[ "${e%%/*}" =~ $FIXTURE_DIR_RE ]] && [[ "${e%%/*}" == "-Users-$RV_USER-rvpath"* ]] \
+            && [[ "$base" =~ ^rvid${tok}-(main|identity|completeness|privacy|perf[0-9]+)\.jsonl$ ]] && [ -f "$projects/$e" ] \
+            || die "unexpected file $e; nothing deleted"
+        grep -q -e "rvid$tok" -e "RVCANARY$tok" "$projects/$e" || die "$e doesn't contain its fixture token; nothing deleted"
+        files+=("$e")
+    done < <(cd "$projects" && find . -mindepth 1 | sort)
+    [ ${#files[@]} -gt 0 ] || die "no Run 3 fixture files found"
+    echo "Run 3 synthetic fixtures to delete (${#files[@]} files, ${#dirs[@]} folders):"
+    printf '  %s\n' "${files[@]}"
+    echo "Delete exactly these, then the empty folders and the old marker? Evidence is kept. [y/N]"
+    read -r ans; [ "${ans:-n}" = "y" ] || die "cancelled; nothing deleted"
+    for e in "${files[@]}"; do rm -f "$projects/$e"; done
+    for e in "${dirs[@]+"${dirs[@]}"}"; do rmdir "$projects/$e"; done
+    rm -f "$mark"; rmdir "$projects" "$HOME/.claude" 2>/dev/null || true
+    record "clean-fixtures-legacy: ${#files[@]} Run 3 fixture files and ${#dirs[@]} folders removed; evidence kept"
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -705,6 +786,6 @@ cmd_clean_legacy() {
 
 case "${1:-}" in
 stage|preflight|fixtures|identity|completeness|privacy|capture|launch|quit|snapshot|summary|clean|fingerprint|compare) c=$1; shift; "cmd_$c" "$@" ;;
-stage-legacy|legacy-launch|quit-legacy|seed-legacy-consent|unseed-legacy-consent|clean-legacy) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
-*) sed -n '2,32p' "$0"; exit 64 ;;
+stage-legacy|legacy-launch|quit-legacy|seed-legacy-consent|unseed-legacy-consent|clean-legacy|clean-fixtures-legacy) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
+*) sed -n '2,33p' "$0"; exit 64 ;;
 esac

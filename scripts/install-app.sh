@@ -19,6 +19,14 @@ refuse() { echo "install-app: $*. Nothing was changed." >&2; exit 1; }
 [ "$(basename "$src")" = "$APP_NAME.app" ] || refuse "$src is not $APP_NAME.app"
 [ "$(bundle_id "$src")" = "$BUNDLE_ID" ] || refuse "$src is not $BUNDLE_ID"
 [ -x "$src/Contents/MacOS/$APP_NAME" ] || refuse "$src has no $APP_NAME executable"
+# Source and target must not overlap (review of e39f9c5): installing the installed app over itself, a copy inside it,
+# or into a folder inside the source would remove the source before it's copied. Compared as resolved paths, so links
+# don't hide it. Checked before anything is quit or removed.
+[ -d "$dest_dir" ] || refuse "$dest_dir is not a folder"
+src_real=$(cd "$src" && pwd -P)
+target_real="$(cd "$dest_dir" && pwd -P)/$APP_NAME.app"
+case "$src_real/" in "$target_real/"*) refuse "$src overlaps $target (it is, or is inside, the installed app)" ;; esac
+case "$target_real/" in "$src_real/"*) refuse "$target overlaps $src (it would be inside the source)" ;; esac
 if [ -e "$target" ] || [ -L "$target" ]; then
     [ ! -L "$target" ] || refuse "$target is a link"
     [ "$(bundle_id "$target")" = "$BUNDLE_ID" ] || refuse "$target exists and isn't $BUNDLE_ID"

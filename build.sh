@@ -10,13 +10,9 @@ cd "$(dirname "$0")"
 # shellcheck source=Resources/identity.env
 . Resources/identity.env
 
-plist() { /usr/libexec/PlistBuddy -c "Print $1" Resources/Info.plist; }
-# Info.plist must say what identity.env says.
-for key in CFBundleName CFBundleDisplayName CFBundleExecutable; do
-    [ "$(plist "$key")" = "$APP_NAME" ] || { echo "Info.plist $key is not $APP_NAME" >&2; exit 1; }
-done
-[ "$(plist CFBundleIdentifier)" = "$BUNDLE_ID" ] || { echo "Info.plist CFBundleIdentifier is not $BUNDLE_ID" >&2; exit 1; }
-VERSION=$(plist CFBundleShortVersionString)
+# Info.plist and every AppIdentity constant must say what identity.env says, before anything is compiled or packaged.
+scripts/check-identity.sh "$PWD"
+VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
 
 swift build -c release --arch arm64 --arch x86_64 --product "$APP_NAME"
 BIN=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/$APP_NAME

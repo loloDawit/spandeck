@@ -43,7 +43,13 @@ Evidence labels follow [audit 0003](0003-security-inventory.md): `[code]`, `[tes
   - `seed-legacy-consent`/`unseed-legacy-consent` and `clean-legacy`;
   - a per-run fixture registry: a new run refuses transcripts it didn't write and lists them by name without deleting them; later steps of the same run register theirs.
 
-  The `clean` command now removes SpanDeck's state only.
+  **Cleanup fails closed** (review of `e39f9c5`):
+  - `clean` removes SpanDeck's state and only the fixture files the script registered, each checked as a plain file under an expected path.
+  - It refuses an old marker without a registry, showing a read-only inventory, and refuses a linked projects folder.
+  - It never removes `~/.claude/projects` wholesale.
+  - `clean-fixtures-legacy` handles Run 3's unregistered fixtures (§5).
+- **[code] `scripts/check-identity.sh`** (review of `e39f9c5`): Info.plist and **every `AppIdentity` constant** must match `identity.env`. Each constant must be declared exactly once as an exact line, and `AppIdentity` must not be declared or extended in another file. `build.sh` runs it before compiling or packaging, so `./build.sh dmg` in `release.yml` is guarded too.
+- **[code] `install-app.sh` overlap check** (review of `e39f9c5`): source and target are compared as resolved paths. It refuses the installed app as its own source (also through a link), a source inside it, and a target inside the source, before anything is quit or removed.
 - **Docs:** `USAGE_CACHE.md` (*Separate from Headroom*), `RELEASE_SIGNING.md` step 1, `README.md`, `CONTRIBUTING.md`, and audit 0007 P3 status.
 
 ## 3. Policy: no migration
@@ -69,6 +75,21 @@ SpanDeck never opens, reads, imports, renames or deletes Headroom's folder, pref
   - four refusals change and quit nothing: a `Headroom.app` source, Headroom's bundle id, a foreign installed `SpanDeck.app`, and an installed `SpanDeck.app` that links to `Headroom.app`.
 
   Two mutations each fail it: `pkill -x Headroom`, and dropping the installed-app id check.
+
+  Since the review of `e39f9c5`, it has 14 checks. The four overlap cases failed before the fix (each quit SpanDeck and deleted the installed app) and pass now.
+- **[test, shell] `scripts/test-identity-check.sh`:** 7 checks:
+  - the checkout passes;
+  - a changed `supportFolder` alone, a changed `bundleID` alone, a second declaration, a missing declaration and a drifted plist are each refused;
+  - `./build.sh dmg` with a drifted `supportFolder` stops before `swift build` runs, with no `build/` created.
+- **[test, shell] `scripts/test-runtime-clean.sh`:** 16 checks, in a scratch home with stand-ins for `defaults` and `dsmemberutil`:
+  - `clean` keeps an unregistered transcript, a sentinel and the evidence, and removes only the registered fixtures;
+  - an old marker is refused with an inventory, and nothing is deleted;
+  - `clean-fixtures-legacy` deletes nothing when declined, and exactly the Run 3 fixtures when confirmed;
+  - it refuses an unexpected file, another project folder, an untokened name, a link and a registered marker;
+  - a linked projects folder is refused by both commands.
+
+  7 checks failed before the fix; the old `clean` deleted everything.
+- **[test] `IdentityTests.checksComeBeforeDestructiveSteps`:** the identity check precedes `swift build` in `build.sh`, and the overlap check precedes `pkill` and `rm -rf` in `install-app.sh`.
 - **[code] `./build.sh`:** produces `build/SpanDeck.app` with `Identifier=io.github.lolodawit.SpanDeck`, executable `SpanDeck`, universal. A plist with `CFBundleName = Headroom` stops the build ("Info.plist CFBundleName is not SpanDeck").
 - **[test] Runtime script dry run** in a scratch home with a `defaults` stand-in, so this account's preferences aren't read:
   - fixtures register per run, and a new run refuses the earlier run's four transcripts by name;
@@ -87,10 +108,14 @@ SpanDeck never opens, reads, imports, renames or deletes Headroom's folder, pref
 Handle it like this, before step 1:
 - **Stage first.** Until `stage` moves `current`, `$RV` still resolves to `c68b108`'s script, whose `clean` deletes the Headroom-named state.
 - **Keep Run 3's Headroom state as the pre-existing legacy state** for Order A. It's the realistic case, and `226a7d6` loads that v7 cache. Step 2's `0-start` fingerprint records it. If you'd rather start from nothing, run `$RV clean-legacy` instead; it asks first.
-- **Remove Run 3's transcripts** with the new script's `$RV clean`. It removes the fixtures and SpanDeck state only, never Headroom's.
+- **Remove Run 3's transcripts with `$RV clean-fixtures-legacy`**, not `$RV clean`. Run 3's marker has no file registry, so `clean` refuses it and only lists what's there.
+  - `clean-fixtures-legacy` runs only in this Standard account.
+  - It deletes only if every entry under `~/.claude/projects` is positively a Run 3 fixture: the old marker, `-Users-spandecktest-rvpath<token>` folders, and plain `rvid<token>-{main,identity,completeness,privacy,perfN}.jsonl` files containing their token.
+  - It lists them and asks first. Anything else (another file, another project, a link) stops it with nothing deleted.
+  - It never removes `~/.claude/projects` wholesale, and keeps the evidence.
 
 **`spandecktest`**, with `RV=/Users/Shared/spandeck-rv/$(cat /Users/Shared/spandeck-rv/current)/runtime-verify.sh`, after checking that `current` names this PR's head:
-1. **`$RV preflight`.** It must pass: no SpanDeck app, process, folder or preferences, and no leftover transcripts. If transcripts remain, it lists them by name and deletes nothing: run `$RV clean` and preflight again. Legacy state is recorded, not failed.
+1. **`$RV preflight`.** It must pass: no SpanDeck app, process, folder or preferences, and no leftover transcripts. If transcripts remain, it lists them by name and deletes nothing. Run `clean-fixtures-legacy` (above) for Run 3's, or `$RV clean` for a registered run's, then preflight again. Legacy state is recorded, not failed.
 2. **Fixtures:** `$RV fixtures 0`, `identity`, `completeness`, `privacy`. Then `$RV fingerprint 0-start`.
 3. **Order A, legacy first.**
    - `$RV legacy-launch 90`, quit it from its menu, `$RV quit-legacy`, then `$RV fingerprint 1-legacy`.

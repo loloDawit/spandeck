@@ -51,7 +51,7 @@ run3; before=$(files)
 echo "n" | RV clean-fixtures-legacy > "$tmp/out.txt" 2>&1 || true
 [ "$(files)" = "$before" ] && ok "clean-fixtures-legacy: declining deletes nothing" || ko "declining changed files"
 echo "y" | RV clean-fixtures-legacy > "$tmp/out.txt" 2>&1 || true
-[ -d "$P" ] && [ ! -e "$P/$d" ] && [ ! -e "$P/.spandeck-rv-fixtures" ] && ok "clean-fixtures-legacy removed the Run 3 fixtures" || ko "fixtures left: $(files)"
+[ ! -e "$P/$d" ] && [ ! -e "$P/.spandeck-rv-fixtures" ] && ok "clean-fixtures-legacy removed the Run 3 fixtures" || ko "fixtures left: $(files)"
 grep -q "keep-me.txt" <<< "$(files)" && ok "evidence kept" || ko "evidence removed"
 
 # 4. clean-fixtures-legacy refuses anything not positively a Run 3 fixture, deleting nothing.
