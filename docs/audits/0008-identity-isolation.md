@@ -3,7 +3,7 @@
 **Issue:** #11 (M0), from #5 finding P3. **Contract:** [owner decision on #11](https://github.com/loloDawit/spandeck/issues/11#issuecomment-6232125128). **Base:** `main` at `d529fa8`.
 **Why:** before this change SpanDeck used upstream Headroom's macOS identity and storage. On one account, the two apps would replace each other's cache, share preferences and consent, and `./build.sh install` would quit and delete `Headroom.app`. The owner's main account already has a `~/Library/Application Support/Headroom/` of unknown origin. It stays untouched.
 
-Evidence labels follow [audit 0003](0003-security-inventory.md): `[code]`, `[test]`, `[runtime]`, `[assumption]`. Nothing in this audit is `[runtime]` yet. §5 is the owner's run.
+Evidence labels follow [audit 0003](0003-security-inventory.md): `[code]`, `[test]`, `[runtime]`, `[assumption]`. §5's results are `[runtime]`. The owner ran it on 2026-10-17 in `spandecktest`, as run `20261017T165341Z` at `b57dea6`. The independent reviewer checked an owner-supplied report and screenshots and posted findings on [#11](https://github.com/loloDawit/spandeck/issues/11#issuecomment-6237971909) and [#5](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6237973276). Neither the reviewer nor this audit's author ran it.
 
 ## 1. Identity
 
@@ -95,7 +95,8 @@ SpanDeck never opens, reads, imports, renames or deletes Headroom's folder, pref
   - fixtures register per run, and a new run refuses the earlier run's four transcripts by name;
   - `compare` reports "SpanDeck state CHANGED" and "legacy unchanged", and the reverse, correctly.
 
-## 5. Runtime coexistence run (owner, `spandecktest`): pending
+## 5. Runtime coexistence run (owner, `spandecktest`): completed 2026-10-17
+Results and limits are in §5.1. The procedure as run follows.
 **Build account:**
 1. `scripts/runtime-verify.sh stage` on this PR's head.
 2. `scripts/runtime-verify.sh stage-legacy 226a7d6`: the last build with Headroom's identity, built in a temporary worktree, never installed.
@@ -142,6 +143,49 @@ Handle it like this, before step 1:
 - a canary in any SpanDeck file;
 - a Keychain or permission prompt.
 
+### 5.1 Results: run `20261017T165341Z`, build `b57dea6`
+**Result: pass for the scoped coexistence checks, within the limits below.** No stop condition was hit. These bullets come from the run's sanitized results file (1,178 lines), kept in the owner's shared results folder and not committed. Items that come only from the owner-supplied report or screenshots the reviewer saw are marked that way.
+
+- **[runtime] Preflight passed.**
+  - Standard account; no Claude Code Keychain item (attribute lookup only); no Claude or Grok credential files.
+  - No earlier run's transcripts; no SpanDeck app, process, folder or preferences.
+  - The staged app is `io.github.lolodawit.SpanDeck` and matches its manifest hash.
+  - Legacy state was recorded, not failed: `Application Support/Headroom` and `dev.headroom.Headroom` preferences present, no `/Applications/Headroom.app`.
+- **[runtime] Clean accounting:** 4 synthetic transcripts. The expected totals add up to 600 + 180 + 72 + 15 = 867 `claude-sonnet-4-5` tokens, plus 10 unpriced, for 877 in total. Run 3's leftover-fixture discrepancy doesn't recur. The 877 shown in the UI comes from the owner's screenshots, which aren't in the shared folder.
+- **[runtime] Fingerprint comparisons, the four that were recorded:**
+
+  | Compare | Step | SpanDeck | Legacy |
+  |---|---|---|---|
+  | `1-legacy → 2-spandeck` | 3, Order A | CHANGED (expected) | **unchanged** |
+  | `2-spandeck → 3-cleared` | 4, Clear | CHANGED (expected) | **unchanged** |
+  | `3-cleared → 4-legacy-again` | 5, Order B | **unchanged** | unchanged |
+  | `4-post-consent → 5-end` | 8, relaunch | **unchanged** | **unchanged** |
+
+- **[runtime] Keys:** in `2-after/state.txt`, SpanDeck's key begins `f7f6f01a…` and Headroom's begins `82ea0af6…`. Headroom's is unchanged through Clear, per the compare above. After Clear, SpanDeck's state CHANGED. The new key's hash, `330aada3…`, comes from the owner-supplied report on #11 and isn't in the shared file.
+- **[runtime] Both at once:** Headroom (pid 56569) ran from 17:34:42 and SpanDeck (pid 57524) from 17:35:11. SpanDeck quit at 17:36:40 and Headroom at 17:36:55, so the two ran together. Separate menu-bar items come from the owner's screenshot.
+- **[runtime] Consent not inherited:**
+  - `seed-legacy-consent` set `dev.headroom.Headroom` `claude.limits.enabled=1 grok.enabled=1`.
+  - Over the 90-second seeded launch, SpanDeck's domain read `claude.limits.enabled=absent grok.enabled=absent`.
+  - The legacy keys were then removed with `unseed-legacy-consent`. SpanDeck's keys were absent in every launch.
+- **[runtime] No observed side effects:** in all eight launch windows (60–120 s each, both apps), there were 0 kernel-reported child forks, 0 socket lines, 0 app-log network, security or login-item events, and 0 `security`/`grok` process log lines.
+- **[runtime] Cache, at `2-after`** (after the first index, before Clear):
+  - `Application Support/SpanDeck` is `0700`; `claude-ledger.json` and `claude-ledger.key` are `0600`.
+  - Version 7, with 4 files, 31 `seen` and 53 `links`, all 32-hex ids. 4 of 4 marks have a stamp and anchor.
+  - `unread`: `malformed=2 undated=1 invalidUsage=1`; 1 flawed group; cache-write tokens `tier-unresolved=10 disputed=20`. There's no `/` in the cache.
+  - No content, path, id, secret, code, tool, thinking or branch canary in the cache or in any file outside the fixtures. The model canary is present by design (the model field).
+- **[runtime] Final relaunch:** `4-post-consent → 5-end` was unchanged for both apps. The quit step logged `quit SpanDeck: not running`: the app had already exited.
+
+**Evidence limits:**
+- **No comparison covers steps 6 and 7.** Step 8 asks for `compare 4-legacy-again 5-end`, but the run compared `4-post-consent → 5-end`. `4-post-consent` was taken after the seeded launch and the unseed. So neither app's state is compared across the both-at-once and seeded-consent window; only the consent keys and side effects are recorded for it.
+- **Keychain:** the changed-files list includes `~/Library/Keychains/login.keychain-db` and a `keychain-2.db-wal`. They're not attributed to SpanDeck, and they're not shown to be unrelated either. Other macOS services and Chrome also wrote files during the run. The only Keychain check is preflight's attribute lookup, before any launch. This doesn't show the Keychain was untouched; it shows no observed app-attributed child process, socket or filtered log event, and no prompt reported.
+- **Bounded negatives:** fork, socket and log results cover only each watch window and its filters, not everything macOS does.
+- **Not examined:** crash reports, Spotlight, Time Machine and APFS snapshots, and every provider's credential stores.
+- **Single capture point:** the canary, version and mode checks are from `2-after` only, the one capture the procedure asks for.
+- **Process names:** step 6's `process.txt` check isn't in the shared file. Concurrency rests on the pids and times above and the owner's screenshot.
+- **Login Items:** preflight records the owner's observation that neither app is listed. Step 9's optional enable and disable wasn't done.
+- **Report size:** the reviewer's comment cites a 1,334-line report. This section was checked against the 1,178-line shared file.
+- **Separate UI follow-ups noted in the run:** the screen-width Clear confirmation, the Battery heading wrap and the long cost explanation.
+
 ## 6. Limits and what this doesn't do
 - **Existing Headroom state** on any account isn't inspected, migrated or cleaned up. Whose it is stays unknown, and that's deliberate.
 - **The unbundled debug binary's preferences domain** is the process name (§1).
@@ -151,4 +195,4 @@ Handle it like this, before step 1:
   - P4: backup exclusion;
   - the Swift module rename;
   - UI changes.
-- **The personal-account trial remains NO-GO** until this PR passes review and the §5 run, followed by a deliberate trial decision.
+- **The personal-account trial remains NO-GO.** Code review and §5 are done, but they don't lift it. It waits on an explicit owner GO and the remaining #5 decisions: P1, P2, P4 and the residual risks.
