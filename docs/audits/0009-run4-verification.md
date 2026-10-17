@@ -54,7 +54,7 @@ rv4_stage() {
   local co=${1:?usage: rv4_stage CHECKOUT COMMIT} want=${2:?usage: rv4_stage CHECKOUT COMMIT} full wt rc
   [ "$(id -un)" != spandecktest ] || { echo "STOP: build steps run in your normal account"; return 1; }
   git -C "$co" rev-parse --git-dir >/dev/null 2>&1 || { echo "STOP: $co is not a git checkout"; return 1; }
-  git -C "$co" fetch -q origin || { echo "STOP: git fetch failed"; return 1; }
+  git -C "$co" fetch -q origin || echo "note: git fetch failed; using the commits already in the checkout"
   full=$(git -C "$co" rev-parse --verify "$want^{commit}") || { echo "STOP: unknown commit $want"; return 1; }
   wt=$(mktemp -d "${TMPDIR:-/tmp}/rv4-stage.XXXXXX") || return 1
   git -C "$co" worktree add -q --detach "$wt" "$full" || { rmdir "$wt"; echo "STOP: worktree failed"; return 1; }
@@ -191,10 +191,9 @@ Replace the path with your checkout's. Expect `OK: staged 6ce1987…`. **Don't r
 ### T0. `spandecktest`: start from a clean SpanDeck state, keeping Headroom's state and any hover log
 Open a Terminal in `spandecktest`, type `bash`, paste the helpers, then:
 ```bash
-rv4_use 6ce1987
-rv4_keep_log
-"$RV" preflight
+rv4_use 6ce1987 && rv4_keep_log && "$RV" preflight
 ```
+The `&&` chain stops at the first helper that fails, so nothing after a `STOP` runs.
 - **All `PASS`:** go on.
 - **`FAIL` only on SpanDeck state, its preferences or old fixtures:**
   1. Run `"$RV" clean`, and answer `y` when it asks. It removes SpanDeck's state, this script's registered fixtures and the hover log. It keeps Headroom's state and the evidence. For Run 3's unregistered fixtures, run `"$RV" clean-fixtures-legacy`.
@@ -214,12 +213,7 @@ rv4_log start
 
 ### T1. Fixtures and baseline
 ```bash
-"$RV" fixtures 0
-"$RV" identity
-"$RV" completeness
-"$RV" privacy
-rv4_control
-"$RV" capture before
+"$RV" fixtures 0 && "$RV" identity && "$RV" completeness && "$RV" privacy && rv4_control && "$RV" capture before
 ```
 Expected totals are what the script records in `log.txt`. The audit 0008 run, with the same four steps, showed **877 tokens: 867 `claude-sonnet-4-5` and 10 unpriced `claude-rvmodel…`**.
 
@@ -227,7 +221,7 @@ Expected totals are what the script records in `log.txt`. The audit 0008 run, wi
 ```bash
 "$RV" launch 120 pre70
 ```
-Wait until the menu bar shows the Claude total; the popover's totals should match T1. Quit from the app's menu, then:
+Wait until the menu bar shows the Claude total; the popover's totals should match T1. Note the identity note's "Of N logged messages" figure for T4. Quit from the app's menu, then:
 ```bash
 "$RV" quit
 "$RV" capture pre70
@@ -248,11 +242,9 @@ Expect `OK: staged 6e777c0…`. For a newer verified commit, use its SHA here an
 
 ### T3. `spandecktest`: switch to the new build, add the P1 fixture, set `debugHover`
 ```bash
-rv4_use 6e777c0
-rv4_p1_fixture
-rv4_debughover on
-rv4_log before-main
+rv4_use 6e777c0 && rv4_p1_fixture && rv4_debughover on && rv4_log before-main
 ```
+If anything prints `STOP`, the rest of the line doesn't run. Don't go on to T4.
 `rv4_use` checks four things and refuses to go on otherwise: the staged commit, the manifest hash, the bundle id and the quarantine attribute. The `gate` inside `launch` only checks that this run's preflight passed, so this check is what stops the wrong build from being launched.
 
 **The P1 fixture** holds 5 assistant records, 10 input + 5 output tokens each. Every model id is invalid under #66 for a reason unrelated to the canary; all five were checked against `Ledger.modelID`:
@@ -274,7 +266,7 @@ While it runs, after the totals appear:
   - No `RVBADMODEL` text anywhere in the popover, Settings or notes.
   - Take screenshots of the popover's model list and notes.
 - **Totals:** 877 + 75 = **952 tokens** (867 `claude-sonnet-4-5`; 10 `claude-rvmodel…`; 75 `unknown`). Unpriced: 85.
-- **Identity note:** its "Of N logged messages" count is **5 higher** than the `identity` line in `log.txt`, because the P1 records carry both ids. The completeness note doesn't change.
+- **Identity note:** its "Of N logged messages" count is **5 higher than in T2's popover**, because the P1 records carry both ids. Note the T2 figure while it's on screen. Don't compare it with `log.txt`'s `identity` line, which counts only part of T1. The completeness note doesn't change.
 
 Quit from the app's menu, then:
 ```bash
@@ -360,7 +352,9 @@ rm -f "$CONTROL"
 - **Removing them later:** run `"$RV" clean` (it deletes `SpanDeck-hover.log` too), then `rv4_restore_log`.
 
 ### If you abort
-Quit SpanDeck from its menu, then run `rv4_abort`. It removes the one `debugHover` key and the control file, and restores the kept hover log only if the log is absent. Run `"$RV" clean` when you want SpanDeck's state and fixtures gone, then `rv4_restore_log` again. A new attempt starts at T0 with a new `preflight`.
+Quit SpanDeck from its menu, then run `rv4_abort`. It removes the one `debugHover` key and the control file, and restores the kept hover log only if the log is absent. Run `"$RV" clean` when you want SpanDeck's state and fixtures gone, then `rv4_restore_log` again.
+
+**A new attempt starts at B1:** after B2 the staged build is `6e777c0`, and T0's `rv4_use 6ce1987` refuses it. If the log was absent at the first attempt's start, `"$RV" clean` must also remove the synthetic log seeded in T5, so the absent case can be tested again. Delete `~/rv4-hover-log.keep` only if it holds the line `rv4 synthetic existing hover log`, which marks it as the synthetic log rather than a real one.
 
 ## Report (post on #5: sanitized, no paths, hashes or tokens)
 | ID | Check | Expected | Result |
