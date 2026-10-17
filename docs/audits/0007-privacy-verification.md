@@ -2,7 +2,12 @@
 
 **Issue:** #5 (M0, privacy). **Parent:** #2. **Related:** #8, #11. **Code base:** `main` at `226a7d6` (cache version 7, after #55–#58, #57 and #56).
 **Question:** can SpanDeck safely process sensitive local Claude Code history in a supervised trial on the owner's main macOS account?
-**Short answer:** **not yet: NO-GO until the runtime gate in §7 passes on `226a7d6`.** The code review and the automated canary tests found no transcript content, path or id written to disk, shown in the UI or put in an error message. Two hardening proposals and one storage collision need the owner's decisions; none of them leaks content. §8 lists the gates.
+**Status (reconciled at `main` `6e777c0`, 2026-10-17):** still **NO-GO** for a personal-account trial.
+- Run 3 passed within its bounds. P3 is resolved by #11's identity isolation, verified at runtime in [audit 0008](0008-identity-isolation.md).
+- P1 (#66), P2 (#68) and P4 (#70) are implemented.
+- **Run 4**, which checks P1, P2 and P4 in the running app, is **pending** ([guide](0009-run4-verification.md)). So is the owner's acceptance of the residual limits. §7 and §8 have the details.
+
+*Original short answer, at `226a7d6`:* **not yet: NO-GO until the runtime gate in §7 passes on `226a7d6`.** The code review and the automated canary tests found no transcript content, path or id written to disk, shown in the UI or put in an error message. Two hardening proposals and one storage collision need the owner's decisions; none of them leaks content. §8 lists the gates.
 
 ## Evidence labels
 Same scheme as [audit 0003](0003-security-inventory.md):
@@ -11,7 +16,7 @@ Same scheme as [audit 0003](0003-security-inventory.md):
 |---|---|
 | **[code]** | Read in the source at `226a7d6`; file:line given |
 | **[test]** | Asserted by an automated test in this repository, run locally (`swift test`) |
-| **[runtime]** | Observed in the running app on macOS. Runs 1–2 of [audit 0003](0003-runtime-verification.md) are on build `227015c`; nothing in this audit is new runtime evidence |
+| **[runtime]** | Observed in the running app on macOS. Runs 1–2 of [audit 0003](0003-runtime-verification.md) are on build `227015c`. Since then the owner has supplied Run 3 (`c68b108`, §7) and the audit 0008 run (`b57dea6`). Claude ran none of them |
 | **[assumption]** | Not verified; stated so a reviewer can challenge it |
 
 ## 1. Field-level inventory
@@ -193,9 +198,33 @@ No new issue is filed: no verified defect qualifies. P3 goes to #11 as a comment
 
 **Leak detection:** the suite fails when a leak is planted: raw paths as file ids, an unread line's text as its key, or the git branch appended to the model.
 
-## 7. Runtime verification (Run 3: pending, owner)
+## 7. Runtime verification (Run 3: done; audit 0008 run: done; Run 4: **pending**)
 
-Nothing here was run on macOS by Claude. The runtime evidence above is from runs 1–2 on `227015c`.
+Nothing here was run on macOS by Claude. Every result below was observed by the owner in `spandecktest` and supplied sanitized (#5).
+
+**Run 3, `c68b108`: passed within its bounds** (owner, 2026-10-17, #5):
+- **Checked:**
+  - preflight passed;
+  - content, path, id, secret, code, tool, thinking and branch canaries were absent from every captured app-written artifact, and the model canary appeared only as allowed;
+  - cache v7 with a `0700` folder and `0600` files, 32-hex keyed ids, and a stamp and anchor on all 5 marks;
+  - four unread kinds counted;
+  - no child process or socket captured; consent switches stayed off;
+  - `--snapshot` refused in release and worked in debug;
+  - Clear rotated the key and left the synthetic transcripts unchanged; relaunch stable.
+- **Two caveats:**
+  - The 1.5K total included a second `main` fixture left from an earlier run, so the clean 867 + 10 baseline wasn't verified in Run 3. Preflight now fails on leftover transcripts (`no_old_fixtures`, #11). The audit 0008 run then verified the clean 877 total.
+  - The Clear confirmation filled the screen. That is a UI issue, not a privacy one, and has no issue yet.
+- `c68b108` still used Headroom's identity, so Run 3 says nothing about P3 isolation.
+
+**Audit 0008 run, `b57dea6`: P3 isolation passed** ([audit 0008 §5.1](0008-identity-isolation.md#51-results-run-20261017t165341z-build-b57dea6)):
+- 877 tokens; cache privacy as in Run 3;
+- SpanDeck's consent stayed off even with Headroom-domain consent seeded;
+- both identities coexisted, and Headroom's state was unchanged through index, Clear and relaunch.
+- Limits: OS files changed without attribution, Keychain files among them, and monitor windows bound the negative results.
+
+**Run 4, `6e777c0`: pending.** It checks P1, P2 and P4 in the running app, plus P3 and consent again; the earlier runs predate all three. Procedure, expected results, stop conditions and report table: [0009-run4-verification.md](0009-run4-verification.md). **No Run 4 result exists yet.**
+
+*Run 3's procedure, as written before it ran:* the runtime evidence above was from runs 1–2 on `227015c`.
 
 The credential, network, consent, storage and snapshot sources are unchanged since then, but the ledger and the UI aren't: cache v4 → v7, unread records, slots, anchors and new notes.
 
@@ -225,7 +254,7 @@ The credential, network, consent, storage and snapshot sources are unchanged sin
 
 ## 8. GO / NO-GO for a supervised personal-account trial
 
-**Recommendation: NO-GO today.** It becomes a **conditional GO** once every open gate below is closed.
+**Recommendation: NO-GO today** (reconciled at `6e777c0`). It becomes a **conditional GO** once every open gate below is closed. Closing #5 and the trial GO are separate decisions; closing #5 doesn't authorize a trial.
 
 **Satisfied:**
 - ✔ Field-level inventory of what is read, kept in memory, written and shown, with each `USAGE_CACHE.md` statement checked against code (§1–§2); two corrections made.
@@ -234,14 +263,17 @@ The credential, network, consent, storage and snapshot sources are unchanged sin
 - ✔ Credentials, network and login item off by default, and consent persistence: runtime-verified on `227015c`, code unchanged since.
 
 **Open (must close before a GO):**
-1. **Run 3** on `226a7d6` or this PR's head passes §7, including the new `privacy` fixture and screenshots.
-2. **P3:** the owner confirms the main account has no Headroom install, no `~/Library/Application Support/Headroom/` and no `dev.headroom.Headroom` preferences domain. If it has any of them, decide what to do with that data first.
-3. The owner **accepts or schedules P2 and P4** (neither blocks by itself). P1 is implemented in #66, P2 in #68 and P4 in #70.
-4. The owner **accepts the residual limits:**
+1. ✔ **Run 3** passed within its bounds on `c68b108` (§7). Its stale-fixture caveat is closed by the audit 0008 run's clean total.
+2. ✔ **P3:** the owner found `~/Library/Application Support/Headroom/` on the main account (preferences absent, not running). That state is kept as is. Instead of deleting or migrating it, SpanDeck has its own identity (#11) and never touches Headroom's state, verified in the audit 0008 run.
+3. ✔ **P1, P2 and P4** are decided and implemented: #66, #68 and #70 (§5).
+4. **Run 4** (pending, owner): P1, P2 and P4 in the running app on `6e777c0`, plus P3 and consent again ([guide](0009-run4-verification.md)).
+5. The owner **accepts the residual limits:**
    - the key sits beside the cache, including in backups made before #70 and in any copy that ignores the backup-exclusion attribute;
    - model ids (validated, #66) and 15-minute activity per model are in the clear;
    - no secure erase;
-   - crash-report and Spotlight content are unverified.
+   - crash-report and Spotlight content are unverified;
+   - OS background files changed during runtime runs without attribution.
+6. The owner **accepts "no migration"** (#11, `USAGE_CACHE.md` *Separate from Headroom*) as #5's design for the old Headroom cache.
 
 **Trial conditions** (once GO):
 - Both consent switches stay off.
