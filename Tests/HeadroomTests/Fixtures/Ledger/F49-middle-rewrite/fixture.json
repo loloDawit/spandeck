@@ -1,0 +1,117 @@
+{
+  "title": "Same-size rewrites in the middle of files larger than the head and tail windows, one ending with an incomplete line; then a larger rewrite",
+  "matrix": [
+    "rewrites and truncation",
+    "rescans and relaunch",
+    "incomplete last line"
+  ],
+  "classification": "pass",
+  "followUp": "#56",
+  "policy": "P13 (#56 policy): a file whose change time moved while its observed size didn't is read again from the start, whatever its anchors say; that size is the one observed last time, not the saved offset, which is short of it when the last line is incomplete. A larger rewrite is read again when the head, the tail or one of 16 sampled 4 KiB windows before the saved offset changed.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 403,
+  "duplicates": 199,
+  "derivation": "Every record is [1, 0]. sa holds 120 records (about 25 KiB), sb 80 records (about 17 KiB) and an incomplete last line, which is pending (not counted, reported). Step 1: 200. Step 2: sa rewritten in place at the same size with record 60 replaced (M060): + 1; sb rewritten at the same size with record 40 replaced (N040) and the same incomplete line: + 1. Both edits are outside the first and the last 4 KiB before the saved offsets. 202. Step 3: sa rewritten larger: record 30 replaced (X030) and one record appended (E120). sa is about 25 KiB, so the 16 sampled windows cover all of it and the anchor changes: read again, + 2 = 204. Records already counted stay counted (P12). A fresh index of the final files: sa 121 + sb 80 = 201. Before the policy (1a7669c) step 2 added nothing (the anchors matched) and so did step 3's middle edit.",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/sa.jsonl",
+          "from": "a1.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/sb.jsonl",
+          "from": "b1.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [200, 0, 0, 0, 0, 200]
+          }
+        },
+        "operations": 200,
+        "month": 200,
+        "completeness": {
+          "pending": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/sa.jsonl",
+          "from": "a2.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/sb.jsonl",
+          "from": "b2.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [202, 0, 0, 0, 0, 202]
+          }
+        },
+        "operations": 202,
+        "month": 202,
+        "completeness": {
+          "pending": 1
+        }
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/sa.jsonl",
+          "from": "a3.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [204, 0, 0, 0, 0, 204]
+          }
+        },
+        "operations": 204,
+        "month": 204,
+        "completeness": {
+          "pending": 1
+        },
+        "days": {
+          "2026-03-10": 204
+        },
+        "today": 204,
+        "week": 204,
+        "coverage": "unavailable"
+      }
+    }
+  ],
+  "rebuild": {
+    "expect": {
+      "hours": {
+        "2026-03-10T16": {
+          "claude-test-1": [201, 0, 0, 0, 0, 201]
+        }
+      },
+      "operations": 201,
+      "month": 201,
+      "completeness": {
+        "pending": 1
+      },
+      "days": {
+        "2026-03-10": 201
+      },
+      "today": 201,
+      "week": 201,
+      "coverage": "unavailable"
+    }
+  }
+}

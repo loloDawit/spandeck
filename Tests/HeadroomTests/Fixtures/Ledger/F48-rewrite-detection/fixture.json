@@ -1,0 +1,119 @@
+{
+  "title": "Transcripts rewritten in place: larger with the same start, larger with a different start, shorter then longer, and unchanged",
+  "matrix": [
+    "rewrites and truncation",
+    "rescans and relaunch"
+  ],
+  "classification": "pass",
+  "followUp": "#56",
+  "policy": "P13: a file whose content before the saved offset changed is read again from the start (identity dedupe prevents double counting, P12 keeps what was counted); one whose earlier content is unchanged resumes at the offset. Writes are in place (same inode), and the fixture rig gives every file the same modification time at every step, so neither inode nor mtime can tell.",
+  "timeZone": "America/Los_Angeles",
+  "now": "2026-03-10T19:00:00Z",
+  "records": 15,
+  "duplicates": 2,
+  "derivation": "Each record has input only, a distinct power of two. Step 1: s1 = A B (1 + 2), s2 = P Q (8 + 16), s3 = U (128), s4 = T0 T1 (2048 + 4096): 6299, 7 operations. Step 2: s1 rewritten as A B C, byte-identical start: resumes, + C 4. s2 rewritten as R S, 2 bytes longer, different from the start: read again, + R 32 + S 64 (P and Q stay counted). s4 rewritten shorter as T: read again, + 256 (T0 T1 stay). s3 unchanged. 6299 + 4 + 96 + 256 = 6655, 11 operations. Step 3: s4 rewritten as W (a longer line) and V, longer than T: read again, + 512 + 1024 = 8191, 13 operations. A fresh index of the final files (A B C, R S, U, W V): 1 + 2 + 4 + 32 + 64 + 128 + 512 + 1024 = 1767, 8 operations. Before #56 the larger rewrites resumed inside a line: s2's R and S, and s4's W, were lost (step 2 6559, step 3 7583).",
+  "steps": [
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "ab.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "pq.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s3.jsonl",
+          "from": "u.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s4.jsonl",
+          "from": "t01.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [6299, 0, 0, 0, 0, 7]
+          }
+        },
+        "operations": 7,
+        "month": 6299
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "abc.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s2.jsonl",
+          "from": "rs.jsonl"
+        },
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s4.jsonl",
+          "from": "t.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [6655, 0, 0, 0, 0, 11]
+          }
+        },
+        "operations": 11,
+        "month": 6655
+      }
+    },
+    {
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s4.jsonl",
+          "from": "wv.jsonl"
+        }
+      ],
+      "expect": {
+        "hours": {
+          "2026-03-10T16": {
+            "claude-test-1": [8191, 0, 0, 0, 0, 13]
+          }
+        },
+        "operations": 13,
+        "month": 8191,
+        "days": {
+          "2026-03-10": 8191
+        },
+        "today": 8191,
+        "week": 8191,
+        "coverage": "unavailable"
+      }
+    }
+  ],
+  "rebuild": {
+    "expect": {
+      "hours": {
+        "2026-03-10T16": {
+          "claude-test-1": [1767, 0, 0, 0, 0, 8]
+        }
+      },
+      "operations": 8,
+      "month": 1767,
+      "days": {
+        "2026-03-10": 1767
+      },
+      "today": 1767,
+      "week": 1767,
+      "coverage": "unavailable"
+    }
+  }
+}

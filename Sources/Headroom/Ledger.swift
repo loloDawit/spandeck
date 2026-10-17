@@ -646,7 +646,18 @@ final class Ledger {
     static func slot(of d: Date) -> Int { Int((d.timeIntervalSince1970 / Double(slotSeconds)).rounded(.down)) }
     static func start(of slot: Int) -> Date { Date(timeIntervalSince1970: Double(slot) * Double(slotSeconds)) }
 
-    private struct FileMark: Codable { var offset: UInt64 }
+    /// How far a transcript was read (#56). `offset` is just past the last complete line read. `size` is the file's
+    /// size when it was last looked at, larger than `offset` when the last line is incomplete. `stamp` is a keyed id of
+    /// the file's change time (ctime: it moves on every write and can't be set back by a restore or `touch`), only
+    /// compared for equality. `anchor` is a keyed id of sampled bytes before `offset` (`anchorRanges`). A changed
+    /// stamp at an unchanged size means a same-size rewrite (or a metadata change): read again from the start. A
+    /// larger file whose anchor differs was rewritten; one whose anchor matches was appended to. All three are
+    /// optional: a mark saved before #56 has none, and is adopted on its next check without reading any line.
+    private struct FileMark: Codable, Equatable {
+        var offset: UInt64; var size: UInt64?; var stamp: String?; var anchor: String?
+    }
+    static let anchorWindow = 4096
+    static let anchorSamples = 16
     /// What has been counted for one operation, per model, and how the operation was identified (#55). `flawed` is
     /// set (never cleared) once any of its records had an invalid counter (#58); left out of the cache when not.
     private struct Seen: Codable {
@@ -707,6 +718,9 @@ final class Ledger {
     /// Newest transcript write seen (Claude or Grok), used to tell when an agent is working.
     private var lastActivity = Date.distantPast
     private var changeCounter = 0
+    /// Bytes scanned for lines, and files read again from the start, since this ledger started (#56). For tests and
+    /// audits: they show unchanged transcripts aren't re-read.
+    private var readStats = (bytes: 0, restarts: 0)
     private var lastSummaryKey = ""
     private var cachedSummaries: (UsageSummary, UsageSummary)?
     private let storage: PrivateDirectory
@@ -856,8 +870,9 @@ final class Ledger {
 
     private func scanClaude(progress: (String?) -> Void) {
         let cutoff = now().addingTimeInterval(-Double(Self.retentionDays) * 86400)
-        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
-        var candidates: [(path: String, id: String, size: UInt64)] = []
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .attributeModificationDateKey, .fileSizeKey,
+                                      .isRegularFileKey]
+        var candidates: [(path: String, id: String, size: UInt64, stamp: String?)] = []
         var present = Set<String>()
         var hot = Set<String>()
         let hotCutoff = now().addingTimeInterval(-2 * 3600)
@@ -871,27 +886,22 @@ final class Ledger {
                 let id = fileID(path)
                 present.insert(id)
                 if mtime >= hotCutoff { hot.insert(path); lastActivity = max(lastActivity, mtime) }
-                let size = UInt64(v.fileSize ?? 0)
-                if state.files[id]?.offset != size { candidates.append((path, id, size)) }
+                let size = UInt64(v.fileSize ?? 0), stamp = fileStamp(v.attributeModificationDate)
+                if needsCheck(id, size: size, stamp: stamp) { candidates.append((path, id, size, stamp)) }
             }
         }
 
         hotFiles = hot
         let initial = state.files.isEmpty
-        for (i, (path, id, size)) in candidates.enumerated() {
+        for (i, (path, id, size, stamp)) in candidates.enumerated() {
             if initial, i % 25 == 0 { progress("Indexing Claude logs \(i)/\(candidates.count)") }
-            var offset = state.files[id]?.offset ?? 0
-            if size < offset { offset = 0 } // rewritten file; dedupe keys prevent double counting
-            offset = ingestClaudeFile(path, from: offset)
-            state.files[id] = FileMark(offset: offset)
-            setPending(id, offset < size)
-            dirty = true
+            readClaudeFile(path, id: id, size: size, stamp: stamp)
         }
 
         // Forget files that aged out or were removed, and prune old buckets and dedupe keys.
         let stale = state.files.keys.filter { !present.contains($0) }
         if !stale.isEmpty { stale.forEach { state.files.removeValue(forKey: $0) }; dirty = true }
-        // Every other file was read to its end before (offset == size), or is gone: neither is pending.
+        // Every other file was read to its end before (offset == size, unchanged), or is gone: neither is pending.
         let read = Set(candidates.map(\.id))
         for id in pendingFiles where !read.contains(id) { setPending(id, false) }
         let minSlot = Self.slot(of: cutoff)
@@ -939,43 +949,101 @@ final class Ledger {
     }
 
     private func tailHotFiles() {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .attributeModificationDateKey, .fileSizeKey]
         for path in hotFiles {
             let id = fileID(path)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                  let size = (attrs[.size] as? NSNumber)?.uint64Value else { setPending(id, false); continue }
-            if let m = attrs[.modificationDate] as? Date { lastActivity = max(lastActivity, m) }
-            var offset = state.files[id]?.offset ?? 0
-            if size == offset { continue }
-            if size < offset { offset = 0 }
-            offset = ingestClaudeFile(path, from: offset)
-            state.files[id] = FileMark(offset: offset)
-            setPending(id, offset < size)
-            dirty = true
+            guard let v = try? URL(fileURLWithPath: path).resourceValues(forKeys: keys), let n = v.fileSize
+            else { setPending(id, false); continue }
+            if let m = v.contentModificationDate { lastActivity = max(lastActivity, m) }
+            let size = UInt64(n), stamp = fileStamp(v.attributeModificationDate)
+            if needsCheck(id, size: size, stamp: stamp) { readClaudeFile(path, id: id, size: size, stamp: stamp) }
         }
     }
 
-    /// Reads complete lines from `offset` and returns the new offset (just past the last newline).
-    /// The file is memory-mapped, so even multi-hundred-megabyte transcripts are not copied into memory.
-    private func ingestClaudeFile(_ path: String, from offset: UInt64) -> UInt64 {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped),
-              UInt64(data.count) > offset else { return offset }
-        let consumed = data.withUnsafeBytes { raw -> Int in
-            guard let base = raw.baseAddress else { return Int(offset) }
-            let n = raw.count
-            var start = Int(offset)
-            while start < n, let nl = memchr(base + start, 0x0A, n - start) {
-                let end = base.distance(to: UnsafeRawPointer(nl))
-                if end > start, Self.hasUsageKey(UnsafeRawBufferPointer(start: base + start, count: end - start)) {
-                    autoreleasepool {
-                        ingestClaudeLine(Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base + start),
-                                              count: end - start, deallocator: .none))
-                    }
-                }
-                start = end + 1
-            }
-            return start
+    /// A keyed id of a file's change time: compared, never read back, so the cache holds no precise timestamp (#56).
+    private func fileStamp(_ changed: Date?) -> String? {
+        changed.map { opaqueID("file-stamp", String($0.timeIntervalSinceReferenceDate.bitPattern)) }
+    }
+
+    /// Whether a file may have changed since it was read: new, a different size, or a different change time. A file
+    /// whose change time can't be read is checked by size alone, as before #56.
+    private func needsCheck(_ id: String, size: UInt64, stamp: String?) -> Bool {
+        guard let m = state.files[id] else { return true }
+        return m.offset != size || (stamp != nil && m.stamp != stamp)
+    }
+
+    /// The byte ranges before `offset` an anchor covers (#56): the first and the last `anchorWindow` bytes and
+    /// `anchorSamples` windows evenly spaced between them, at most 72 KiB whatever the file's size. A larger rewrite
+    /// that changes only bytes outside all of them isn't detected: the accepted, deterministic limit on #56. For tests
+    /// and audits too, so they can place an edit inside or outside them.
+    static func anchorRanges(upTo offset: Int) -> [Range<Int>] {
+        guard offset > 0 else { return [] }
+        let w = min(anchorWindow, offset), last = offset - w, n = anchorSamples + 1
+        return (0...n).map { k in let start = last * k / n; return start..<(start + w) }
+    }
+
+    /// A keyed id of the bytes before `offset` in `anchorRanges` (#56).
+    private func anchor(_ raw: UnsafeRawBufferPointer, _ offset: Int) -> String {
+        guard let base = raw.baseAddress, offset > 0 else { return opaqueID("file-anchor", data: []) }
+        return opaqueID("file-anchor",
+                        data: Self.anchorRanges(upTo: offset).map { Data(bytes: base + $0.lowerBound, count: $0.count) })
+    }
+
+    /// Reads a transcript from where it was left, or from the start if what was read before may have changed (#56): it
+    /// got shorter, its change time moved at the same size, or the sampled bytes before the saved offset differ.
+    /// Reading again from the start counts nothing twice (identity dedupe, #55) and keeps what was counted (P12). A
+    /// mark saved before #56 has no anchor: it resumes as before and takes one. The file is memory-mapped once for
+    /// both the check and the read, so even multi-hundred-megabyte transcripts are not copied into memory, and an
+    /// append costs hashing at most 72 KiB. `stamp` and `size` were taken before mapping: a write in between is
+    /// checked again on the next refresh.
+    private func readClaudeFile(_ path: String, id: String, size: UInt64, stamp: String?) {
+        let mark = state.files[id]
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .alwaysMapped) else {
+            setPending(id, (mark?.offset ?? 0) < size)
+            return
         }
-        return UInt64(consumed)
+        // A changed stamp at the size seen last time (not the offset, which is short of it when the last line is
+        // incomplete) can't be an append: the file was rewritten at the same size, or only its metadata changed.
+        // Either way it is read again from the start, whatever the anchor says (#56 policy).
+        let sameSize = mark.map { m in
+            m.stamp != nil && stamp != nil && m.stamp != stamp && size == (m.size ?? m.offset)
+        } ?? false
+        let (start, end, anchor) = data.withUnsafeBytes { raw -> (Int, Int, String) in
+            var start = 0
+            if let m = mark, !sameSize, m.offset <= UInt64(raw.count),
+               m.anchor == nil || m.anchor == self.anchor(raw, Int(m.offset)) {
+                start = Int(m.offset)
+            }
+            let end = ingestLines(raw, from: start)
+            return (start, end, self.anchor(raw, end))
+        }
+        let restarted = (mark?.offset ?? 0) > 0 && start == 0
+        if restarted { readStats.restarts += 1 }
+        readStats.bytes += end - start
+        let next = FileMark(offset: UInt64(end), size: size, stamp: stamp, anchor: anchor)
+        // Any change to the mark is saved (at the usual cadence, and on quit): the size seen last is what tells a
+        // same-size rewrite after a relaunch, also when only an incomplete line made the file grow (review of
+        // `bf374de`), and a restart saved with its stamp isn't repeated after every relaunch.
+        if next != mark { state.files[id] = next; dirty = true }
+        setPending(id, UInt64(end) < size)
+    }
+
+    /// Reads the complete lines from `start` and returns the offset just past the last newline.
+    private func ingestLines(_ raw: UnsafeRawBufferPointer, from offset: Int) -> Int {
+        guard let base = raw.baseAddress else { return offset }
+        let n = raw.count
+        var start = offset
+        while start < n, let nl = memchr(base + start, 0x0A, n - start) {
+            let end = base.distance(to: UnsafeRawPointer(nl))
+            if end > start, Self.hasUsageKey(UnsafeRawBufferPointer(start: base + start, count: end - start)) {
+                autoreleasepool {
+                    ingestClaudeLine(Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base + start),
+                                          count: end - start, deallocator: .none))
+                }
+            }
+            start = end + 1
+        }
+        return start
     }
 
     /// Whether a line has a `"usage"` key: the quoted name, then optional JSON whitespace and a colon, anywhere in the
@@ -1284,6 +1352,12 @@ final class Ledger {
             }
         }
         return (bySlot, undated)
+    }
+
+    /// Bytes scanned for lines and files read again from the start since this ledger started, read on the ledger
+    /// queue (#56). For tests and audits; the app doesn't use it.
+    func claudeReadStats(completion: @escaping ((bytes: Int, restarts: Int)) -> Void) {
+        queue.async { [self] in completion(readStats) }
     }
 
     /// Claude's usage per whole UTC hour (hours since 1970, then model): the 15-minute slots summed, read on the ledger
