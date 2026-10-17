@@ -21,6 +21,8 @@ APP="build/$APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
+# The hover debug log is compiled into debug builds only (audit 0007, P2); refuse a packaged binary that has it.
+scripts/check-hover-log-release.sh "$APP/Contents/MacOS/$APP_NAME"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Ad-hoc signature. For a notarized release, sign with a Developer ID instead:
