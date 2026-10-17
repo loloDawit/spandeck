@@ -652,7 +652,7 @@ final class Ledger {
     /// a file rewritten in place, at any size, is told apart from one that was only appended to. Both are optional:
     /// a mark saved before #56 has neither, and is adopted on its next check without reading any line.
     private struct FileMark: Codable, Equatable { var offset: UInt64; var stamp: String?; var anchor: String? }
-    private static let anchorWindow = 4096
+    static let anchorWindow = 4096
     /// What has been counted for one operation, per model, and how the operation was identified (#55). `flawed` is
     /// set (never cleared) once any of its records had an invalid counter (#58); left out of the cache when not.
     private struct Seen: Codable {
@@ -967,12 +967,17 @@ final class Ledger {
         return m.offset != size || (stamp != nil && m.stamp != stamp)
     }
 
-    /// A keyed id of the bytes before `offset`: the first and the last `anchorWindow` bytes of them (#56).
+    /// The byte ranges before `offset` an anchor covers: the first and the last `anchorWindow` bytes (#56). For tests
+    /// and audits too, so they can place an edit inside or outside them.
+    static func anchorRanges(upTo offset: Int) -> [Range<Int>] {
+        guard offset > 0 else { return [] }
+        return [0..<min(anchorWindow, offset), max(0, offset - anchorWindow)..<offset]
+    }
+
+    /// A keyed id of the bytes before `offset` in `anchorRanges` (#56).
     private func anchor(_ raw: UnsafeRawBufferPointer, _ offset: Int) -> String {
-        guard let base = raw.baseAddress, offset > 0 else { return opaqueID("file-anchor", data: [Data(), Data()]) }
-        let tail = max(0, offset - Self.anchorWindow)
-        return opaqueID("file-anchor", data: [Data(bytes: base, count: min(Self.anchorWindow, offset)),
-                                              Data(bytes: base + tail, count: offset - tail)])
+        guard let base = raw.baseAddress, offset > 0 else { return opaqueID("file-anchor", data: []) }
+        return opaqueID("file-anchor", data: Self.anchorRanges(upTo: offset).map { Data(bytes: base + $0.lowerBound, count: $0.count) })
     }
 
     /// Reads a transcript from where it was left, or from the start if what was read before has changed (#56): it got

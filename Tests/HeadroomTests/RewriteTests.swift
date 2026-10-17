@@ -64,10 +64,14 @@ struct RewriteTests {
         #expect(await Self.tokens(second) == 15000)
         #expect(await Self.stats(second) == (0, 0))
 
-        // Metadata only (the change time moves, the content doesn't): checked, not read.
+        // Metadata only (the change time moves, the size and content don't): by the #56 policy a same-size change
+        // is read again from the start once, which counts nothing twice.
+        let size = try Data(contentsOf: rig.file).count
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-30)], ofItemAtPath: rig.file.path)
         #expect(await Self.tokens(second) == 15000)
-        #expect(await Self.stats(second) == (0, 0))
+        #expect(await Self.stats(second) == (size, 1))
+        #expect(await Self.tokens(second) == 15000)
+        #expect(await Self.stats(second) == (size, 1)) // once
     }
 
     @Test func appendReadsOnlyNewBytes() async throws {
@@ -126,10 +130,9 @@ struct RewriteTests {
         #expect(after.restarts == 0 && after.bytes - before.bytes == Self.line("MORE").utf8.count + 1)
     }
 
-    /// A known limit (option (a) on #56): a same-size edit confined to the middle of a file larger than both anchor
-    /// windows, with its first 4 KiB and the 4 KiB before the offset intact, isn't detected. Recorded so that changing
-    /// this is a deliberate decision.
-    @Test func sameSizeEditInTheMiddleIsALimit() async throws {
+    /// A same-size edit in the middle of a large file, where no anchor window changes, is read again from the start
+    /// (#56 policy, after review of `1a7669c`): the change time moved and the size didn't.
+    @Test func sameSizeEditInTheMiddleIsRead() async throws {
         let rig = try Rig()
         try rig.write(Self.large)
         let ledger = rig.ledger()
@@ -137,8 +140,101 @@ struct RewriteTests {
         var edited = Self.large
         edited[50] = Self.line("M050", pad: 80)
         try rig.write(edited)
-        #expect(await Self.tokens(ledger) == 15000)
+        #expect(await Self.tokens(ledger) == 15150)
+        #expect(await Self.stats(ledger).restarts == 1)
+    }
+
+    // MARK: Large files, sampled anchors
+
+    /// About 150 KiB: large enough that 16 sampled 4 KiB windows leave gaps between them.
+    private static let huge = (0..<600).map { line(String(format: "%04d", $0), pad: 80) }
+
+    /// Byte ranges of each line (newline excluded) and the offset just past the last newline.
+    private static func layout(_ lines: [String]) -> (ranges: [Range<Int>], end: Int) {
+        var at = 0, out: [Range<Int>] = []
+        for l in lines { let n = l.utf8.count; out.append(at..<(at + n)); at += n + 1 }
+        return (out, at)
+    }
+
+    /// A line in the middle that no anchor window touches, and one inside a sampled window (neither the first nor
+    /// the last), for a file read up to `end`.
+    private static func lines(of lines: [String], outsideAndInside end: Int) -> (outside: Int?, inside: Int?) {
+        let windows = Ledger.anchorRanges(upTo: end), ranges = layout(lines).ranges
+        let middle = windows.dropFirst().dropLast()
+        let outside = ranges.indices.dropFirst(2).dropLast(2).first { i in !windows.contains { $0.overlaps(ranges[i]) } }
+        let inside = ranges.indices.dropFirst(2).dropLast(2).first { i in
+            middle.contains { $0.contains(ranges[i].lowerBound) && $0.contains(ranges[i].upperBound - 1) }
+            && !windows.first!.overlaps(ranges[i]) && !windows.last!.overlaps(ranges[i])
+        }
+        return (outside, inside)
+    }
+
+    /// The file ends with an incomplete line, so its saved offset is short of its size. A same-size rewrite outside
+    /// every anchor window is still read again: the size compared is the one observed last time, not the offset.
+    @Test func sameSizeRewriteWithIncompleteLastLine() async throws {
+        let rig = try Rig()
+        let partial = #"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"usage":{"input_tok"#
+        try rig.write(Self.huge)
+        var text = try Data(contentsOf: rig.file)
+        text.append(Data(partial.utf8)) // no newline after it
+        try text.write(to: rig.file)
+        let ledger = rig.ledger()
+        let first = await refreshLedger(ledger).claude
+        #expect(first.month.tokens == 90000 && first.month.completeness.pending == 1)
+
+        let end = Self.layout(Self.huge).end
+        let i = try #require(Self.lines(of: Self.huge, outsideAndInside: end).outside)
+        var edited = Self.huge
+        edited[i] = Self.line(String(format: "E%03d", i % 1000), pad: 80)
+        let h = try FileHandle(forWritingTo: rig.file)
+        try h.write(contentsOf: Data((edited.joined(separator: "\n") + "\n" + partial).utf8)) // in place, same size
+        try h.close()
+        #expect(await Self.tokens(ledger) == 90150)
+        #expect(await Self.stats(ledger).restarts == 1)
+    }
+
+    /// Larger, with an edit inside a sampled window in the middle: detected by the anchor.
+    @Test func largerRewriteInsideASampleIsRead() async throws {
+        let rig = try Rig()
+        try rig.write(Self.huge)
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 90000)
+        let i = try #require(Self.lines(of: Self.huge, outsideAndInside: Self.layout(Self.huge).end).inside)
+        var edited = Self.huge
+        edited[i] = Self.line(String(format: "I%03d", i % 1000), pad: 80)
+        try rig.write(edited + [Self.line("TAIL")])
+        #expect(await Self.tokens(ledger) == 90300)
+        #expect(await Self.stats(ledger).restarts == 1)
+    }
+
+    /// The accepted exception (#56 policy): a larger rewrite that changes only bytes outside every anchor window
+    /// (head, tail and the 16 samples) isn't detected; only the appended part is read. Deterministic, recorded so that
+    /// changing it is a decision.
+    @Test func largerRewriteOutsideTheSamplesIsALimit() async throws {
+        let rig = try Rig()
+        try rig.write(Self.huge)
+        let ledger = rig.ledger()
+        #expect(await Self.tokens(ledger) == 90000)
+        let i = try #require(Self.lines(of: Self.huge, outsideAndInside: Self.layout(Self.huge).end).outside)
+        var edited = Self.huge
+        edited[i] = Self.line(String(format: "O%03d", i % 1000), pad: 80)
+        try rig.write(edited + [Self.line("TAIL")])
+        #expect(await Self.tokens(ledger) == 90150)
         #expect(await Self.stats(ledger).restarts == 0)
+    }
+
+    /// Sixteen evenly spaced 4 KiB samples between the first and the last window, inside the bytes read.
+    @Test func anchorWindows() {
+        #expect(Ledger.anchorRanges(upTo: 0).isEmpty)
+        let small = Ledger.anchorRanges(upTo: 100)
+        #expect(small.allSatisfy { $0.lowerBound >= 0 && $0.upperBound <= 100 })
+        let big = Ledger.anchorRanges(upTo: 1_000_000)
+        #expect(big.count == 18 && big.allSatisfy { $0.count == Ledger.anchorWindow && $0.upperBound <= 1_000_000 })
+        #expect(big.first == 0..<4096 && big.last == (1_000_000 - 4096)..<1_000_000)
+        let starts = big.map(\.lowerBound)
+        #expect(starts == starts.sorted())
+        let gaps = zip(starts.dropFirst(), starts).map { $0 - $1 }
+        #expect(gaps.max()! - gaps.min()! <= 1) // evenly spaced
     }
 
     /// A cache saved before #56 has offsets but no anchors: the first check adopts them without reading any line, and
