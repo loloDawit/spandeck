@@ -428,6 +428,7 @@ The re-review of `5f48f65` found that a model without a price returned all of it
 - **[test] `TimeZoneTests`:**
   - a zone change while running: fails without the zone in the memo key;
   - a zone change across a relaunch: Kolkata, then Kathmandu over one cache;
+  - Lord Howe's 30-minute DST shift: midnights at 13:00Z and 13:30Z, a 24.5-hour day;
   - Grok turns in +05:30.
 - **[test] `LedgerCacheTests.olderCacheReplaced(6)`:** a v6 cache is replaced and nothing from it survives. The other cache tests expect version 7.
 - **[test] Unchanged:** F19, F20, F23 and F24. Each test above failed before the fix; each fixture failed on its days, today and window.

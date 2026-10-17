@@ -75,6 +75,21 @@ struct TimeZoneTests {
         #expect(Self.days(n, kathmandu) == ["2026-03-09": 1, "2026-03-10": 2] && n.today.tokens == 2 && n.month.tokens == 3)
     }
 
+    /// A 30-minute daylight-saving shift (Lord Howe Island: +11:00 until 02:00 on 2026-04-05, then +10:30), so the
+    /// day's two midnights are 13:00Z and 13:30Z: both slot boundaries, and Apr 5 is 24.5 hours long.
+    @Test func halfHourDaylightSavingShift() async throws {
+        let box = try Sandbox()
+        try box.write(".claude/projects/-p/s1.jsonl", [
+            Self.line("a", "2026-04-04T12:59:00Z", input: 4), // 23:59 LHDT Apr 4
+            Self.line("b", "2026-04-04T13:00:00Z", input: 8), // 00:00 LHDT Apr 5
+            Self.line("c", "2026-04-05T13:29:00Z", input: 1), // 23:59 LHST Apr 5
+            Self.line("d", "2026-04-05T13:30:00Z", input: 2), // 00:00 LHST Apr 6
+        ].joined(separator: "\n") + "\n")
+        let zone = Zone("Australia/Lord_Howe")
+        let s = await refreshLedger(Self.ledger(box, now: try #require(ISO.parse("2026-04-06T03:00:00Z")), zone: zone)).claude
+        #expect(Self.days(s, zone) == ["2026-04-04": 4, "2026-04-05": 9, "2026-04-06": 2] && s.today.tokens == 2)
+    }
+
     /// Grok turns are bucketed like Claude records, so their days are exact in a half-hour zone too.
     @Test func grokInHalfHourZone() async throws {
         let box = try Sandbox()
