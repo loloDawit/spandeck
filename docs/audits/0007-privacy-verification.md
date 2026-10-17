@@ -99,7 +99,7 @@ Same scheme as [audit 0003](0003-security-inventory.md):
 | C9 | Cache and key `0600`, folder `0700`, temp files cleaned | ✔ | ✔ `LedgerCacheTests` | ✔ V8, V12 on `227015c` | Run 3 |
 | C10 | Credentials and network off by default; consent persists | ✔ | ✔ `GrokConsentTests`, `QuotaVisibilityTests`, default-launch tests | ✔ V2–V4, V14 (run 2, kernel-reported forks) | Smoke check in Run 3. Code unchanged since `227015c` |
 | C11 | No transcript data in logs | ✔ | — | ✔ run 1 log stream | Run 3 log capture |
-| C12 | Snapshot is synthetic, debug only | ✔ | ✔ `SnapshotTests` | ✔ V17–V18 | — |
+| C12 | Snapshot is synthetic, debug only | ✔ | ✔ `SnapshotTests` (no live environment is built, so nothing is scanned or read; the fixture holds nothing about the machine or user) | ✔ V17–V18 | — |
 | C13 | Clear removes cache and key, makes a new key, keeps transcripts | ✔ | ✔ | ✔ V13 on `227015c` | Run 3 |
 | C14 | Crash reports and Spotlight hold no transcript data | — | — | — | **Not verified** [assumption: crash reports carry backtraces, not heap; Spotlight isn't asked to index the cache] |
 | C15 | No side effects of upstream Headroom on the same account | — | — | — | **Owner check** (P3) |
@@ -138,7 +138,7 @@ No **verified defect** exposes transcript content, paths or ids. All checks in �
 |---|---|---|---|---|---|---|---|
 | **P1** | Accepted limitation, with a hardening proposal | Low | `Ledger.swift:1075` (`model`), `State.slots`; Grok `parseGrokUsage` | `PrivacyCanaryTests.modelIdIsKeptAsWritten`: a 2,000-character model id with spaces and slashes is stored and shown verbatim | Whatever a record's `model` field holds is persisted in the clear (Claude) and shown (Claude, Grok) | Low: Claude Code writes model ids there. A corrupted or crafted transcript would be needed | **Owner decision:** bound model ids (for example ≤ 100 characters of `[A-Za-z0-9._:@/-]`) and count anything else as `unknown`. Not implemented here |
 | **P2** | Hygiene | Low | `Hover.swift:39–48` | `defaults write dev.headroom.Headroom debugHover -bool true`, then hover the menu bar | UI geometry and timestamps only; the file is world-readable under the default umask, never pruned, and not removed by Clear | Needs a hidden preference | **Owner decision:** compile the hover log out of release builds, or document it. Not implemented here |
-| **P3** | Verified collision (by code), not a SpanDeck leak | Medium for the trial | `Resources/Info.plist:12`, `Util.swift:148` (`Application Support/Headroom`), `Ledger.cacheName` | Install upstream Headroom on the same account | Upstream writes a raw-path, raw-id cache to the **same** `claude-ledger.json`. SpanDeck deletes it at its next load and re-indexes, and upstream writes it again. The preferences domain is shared too | Only if upstream Headroom is installed on the trial account | **Trial gate:** confirm no Headroom install or `dev.headroom.Headroom` domain on the main account. Identity change to [#11](https://github.com/loloDawit/spandeck/issues/11) (comment, no new issue) |
+| **P3** | Collision verified by code; upstream behavior an [assumption] | Medium for the trial | `Resources/Info.plist:12`, `Util.swift:148` (`Application Support/Headroom`), `Ledger.cacheName` | Install upstream Headroom on the same account | **Verified:** both apps would use the same Application Support folder, `claude-ledger.json` and `dev.headroom.Headroom` preferences domain. SpanDeck deletes any cache that isn't its own version at load and re-indexes. **[assumption]**, upstream's current code not read: upstream writes its own cache there, a version 3 cache with raw paths and ids in the version SpanDeck forked from, so the two apps would keep replacing each other's file and upstream's would hold paths and ids | Only if upstream Headroom is installed on the trial account | **Trial gate:** confirm no Headroom install or `dev.headroom.Headroom` domain on the main account. Identity change to [#11](https://github.com/loloDawit/spandeck/issues/11) (comment, no new issue) |
 | **P4** | Accepted limitation, with a hardening proposal | Low | no `isExcludedFromBackup` | — | Backups hold the cache and its key | Depends on the user's backups | **Owner decision:** mark the cache and key excluded from backup. Not implemented here |
 | P5 | Accepted limitation | — | Clear | — | Old file versions in snapshots and backups | — | Documented (§4); no secure-erase claim |
 | P6 | Accepted limitation | — | in-memory parsing | — | Whole lines are parsed into memory transiently; paths are held in memory | — | Inherent to reading transcripts. Crash-report content not verified (C14) |
@@ -186,6 +186,7 @@ The credential, network, consent, storage and snapshot sources are unchanged sin
 
 **Run 3**, in the `spandecktest` account, on the build staged from `226a7d6` or this PR's head. Following [0003-runtime-verification.md §5](0003-runtime-verification.md):
 
+0. The `privacy` command exists only on this branch until it is merged. The script runs from the checkout, so check out `audit/5-privacy-verification` (or merge it) before `stage`.
 1. `stage` (in the build account), then `preflight`.
 2. `fixtures 0`, `identity`, `completeness` and **`privacy`** (new: secret, code, tool, thinking and branch canaries, a malformed line and a cut-off last line).
 3. `capture before` → `launch 180 main` → `capture main`. The canary search now covers every kind but the model.
@@ -203,7 +204,7 @@ The credential, network, consent, storage and snapshot sources are unchanged sin
 - V1, V4 (network), V5 and V7 (preferences);
 - V2, V3 and V9 with the fork monitor.
 
-**Expected results** are recorded by the script lines of `fixtures`, `completeness` and `privacy`.
+**Expected results** are recorded by the script lines of `fixtures`, `completeness` and `privacy`. With all three applied: 87 more `claude-sonnet-4-5` tokens than `fixtures` alone, and a completeness detail reading "4 records couldn't be read … 2 aren't valid JSON …". The exact text is in the `privacy` record, derived through the ledger and `CompletenessText`. A file still being written isn't reported in the note.
 
 **Stop conditions:** any canary other than the model in any file the app writes, or in a screenshot → **stop and file a P0**.
 

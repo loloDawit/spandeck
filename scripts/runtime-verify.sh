@@ -290,7 +290,8 @@ cmd_privacy() {
         printf '{"type":"assistant","timestamp":"%s","message":{"text":"RVSECRET%s","usage":{"inp' "$ts" "$tok"
     } > "$f"
     record "privacy: 1 session with secret, code, tool, thinking and branch canaries (5 records, 15 tokens), 1 malformed line and 1 cut-off last line carrying them"
-    record "expected: totals grow by 15 claude-sonnet-4-5 tokens and 1 identified group; one more malformed record and one pending file in the completeness note; no secret, code, tool, thinking or branch canary in any file the app writes"
+    record "expected: totals grow by 15 claude-sonnet-4-5 tokens and 1 identified group; one more malformed record (a file still being written isn't reported); no secret, code, tool, thinking or branch canary in any file the app writes"
+    record "expected with completeness also applied (72 + 15 = 87 tokens, 4 identified groups), the completeness detail reads: \"In Claude Code's logs for the last 30 days, 4 records couldn't be read, counting identical lines once: 2 aren't valid JSON, 1 has no usable timestamp, 1 has usage in a form SpanDeck doesn't recognize. 1 message had a token count that isn't a valid number; it was left out and the rest counted. 3 of the unread records have no date, so they may belong to any period.\""
 }
 
 # ---------------------------------------------------------------------------------------------------------------
