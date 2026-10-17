@@ -93,7 +93,7 @@ struct LedgerCacheTests {
         }
         #expect(!cache.contains("/") && !cache.contains("\\/")) // no path at all, escaped or not
         let json = try rig.cacheJSON()
-        #expect(json["version"] as? Int == 6)
+        #expect(json["version"] as? Int == 7)
         let ids = Array((json["files"] as? [String: Any] ?? [:]).keys) + Array((json["seen"] as? [String: Any] ?? [:]).keys)
             + Self.linkIDs(json)
         #expect(ids.count == 8 && Set(ids).count == 8) // 2 files, 2 messages, each message's 2 single ids
@@ -294,12 +294,13 @@ struct LedgerCacheTests {
 
     // MARK: Migration
 
-    /// #55 and #58: an older cache, even under the right key, is deleted and the transcripts re-indexed into version
-    /// 6. A version 4 ledger counted records without ids on every read and merged records with empty ids. A version 5
-    /// ledger subtracted negative counters, dropped cache-write breakdowns without a flat total and skipped
-    /// `"usage": {`, and its offsets are past those lines. Neither total can be kept, and none of it is mixed into the
-    /// new one. The key file is kept.
-    @Test(arguments: [4, 5])
+    /// #55, #58 and #57: an older cache, even under the right key, is deleted and the transcripts re-indexed into
+    /// version 7. A version 4 ledger counted records without ids on every read and merged records with empty ids. A
+    /// version 5 ledger subtracted negative counters, dropped cache-write breakdowns without a flat total and skipped
+    /// `"usage": {`, and its offsets are past those lines. A version 6 ledger kept whole UTC hours, which can't be split
+    /// at a local midnight that falls inside one, so they are never reinterpreted as 15-minute slots. None of their
+    /// totals is kept or mixed into the new one. The key file is kept.
+    @Test(arguments: [4, 5, 6])
     func olderCacheReplaced(_ version: Int) async throws {
         let rig = try Rig()
         try rig.transcript([Self.partialLine(id: nil, req: nil)])
@@ -310,7 +311,8 @@ struct LedgerCacheTests {
         let key = try Data(contentsOf: rig.keyURL)
         let hour = Int(Date().timeIntervalSince1970 / 3600)
         let agg = #"{"input":987654321,"output":0,"cacheWrite5m":0,"cacheWrite1h":0,"cacheRead":-1000,"calls":3}"#
-        let extra = version == 5 ? #","links":{},"identity":{}"# : ""
+        let extra = version == 5 ? #","links":{},"identity":{}"#
+            : version == 6 ? #","links":{},"identity":{"\#(hour)":{"identified":3}},"unread":{},"flawed":{}"# : ""
         let old = #"{"version":\#(version),"keyCheck":"\#(keyCheck)","files":{},"seen":{},"hours":{"\#(hour)":{"claude-test-1":\#(agg)}}\#(extra)}"#
         try Data(old.utf8).write(to: rig.cacheURL)
         let transcripts = try rig.box.snapshot(".claude")
@@ -322,7 +324,7 @@ struct LedgerCacheTests {
         #expect(second.cacheIssue == nil)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
         #expect(!cache.contains("987654321") && !cache.contains("-1000"))
-        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.cacheURL) == 0o600)
+        #expect(try rig.cacheJSON()["version"] as? Int == 7 && Self.mode(rig.cacheURL) == 0o600)
         #expect(try Data(contentsOf: rig.keyURL) == key)
         #expect(try rig.box.snapshot(".claude") == transcripts)
     }
@@ -379,7 +381,7 @@ struct LedgerCacheTests {
         let migrated = rig.ledger()
         #expect(await Self.tokens(migrated) == 300)
         migrated.flush()
-        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.box.appSupport) == 0o700)
+        #expect(try rig.cacheJSON()["version"] as? Int == 7 && Self.mode(rig.box.appSupport) == 0o700)
 
         // The state a stop between deleting the old cache and saving the new one leaves: no cache, the key kept.
         try FileManager.default.removeItem(at: rig.cacheURL)
@@ -407,7 +409,7 @@ struct LedgerCacheTests {
         #expect(rebuilt.month.tokens == 310 && rebuilt.month.identity == want)
     }
 
-    /// Tests 15-16: a version 3 cache (raw paths and ids) is deleted and the transcripts re-indexed into version 6,
+    /// Tests 15-16: a version 3 cache (raw paths and ids) is deleted and the transcripts re-indexed into version 7,
     /// with the same totals; its bytes don't survive.
     @Test func legacyCacheReplaced() async throws {
         let rig = try Rig()
@@ -425,7 +427,7 @@ struct LedgerCacheTests {
         #expect(ledger.cacheIssue == nil)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
         #expect(!cache.contains(Self.messageCanary) && !cache.contains(Self.userCanary) && !cache.contains("987654321"))
-        #expect(try rig.cacheJSON()["version"] as? Int == 6 && Self.mode(rig.cacheURL) == 0o600)
+        #expect(try rig.cacheJSON()["version"] as? Int == 7 && Self.mode(rig.cacheURL) == 0o600)
         #expect(try rig.box.snapshot(".claude") == transcripts) // transcripts untouched
     }
 
@@ -455,7 +457,7 @@ struct LedgerCacheTests {
 
         try Data("{not json".utf8).write(to: rig.cacheURL)
         #expect(await Self.tokens(rig.ledger()) == 150)
-        #expect(try rig.cacheJSON()["version"] as? Int == 6)
+        #expect(try rig.cacheJSON()["version"] as? Int == 7)
     }
 
     /// A cache next to a different key (e.g. an old cache restored after a clear made a new key) is rebuilt, not

@@ -3,7 +3,7 @@
 **Issue:** #6 (M0, research). **Parent:** #2. **Code base:** `main` at `98c3ac3`, plus the test seam described in §6.
 **Fixtures:** [`Tests/HeadroomTests/Fixtures/Ledger`](../../Tests/HeadroomTests/Fixtures/Ledger/README.md). **Tests:** `Tests/HeadroomTests/LedgerFixtureTests.swift`.
 **Follow-ups:** #55, #56, #57, #58. Open policy questions are posted on #7, #9, #10 and #58.
-**Update:** #55 was fixed in #60 (§8). #58 is fixed on branch `fix/58-ledger-input-validation` (§9), including P9 as [decided on #58](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6226520316). Sections 1–7 describe the ledger before those fixes, as audited.
+**Update:** #55 was fixed in #60 (§8). #58 was fixed in #61 (§9), including P9 as [decided on #58](https://github.com/loloDawit/spandeck/issues/58#issuecomment-6226520316). Sections 1–7 describe the ledger before those fixes, as audited.
 
 This report covers Claude transcript accounting in `Ledger.swift`: identity, deduplication, incremental reading, the cache and time buckets. Grok usage files are covered only where R7 already tested them. Pricing values and pricing integrity are out of scope (#7, #11).
 
@@ -385,3 +385,50 @@ The re-review of `5f48f65` found that a model without a price returned all of it
   - **F45 (new):** a priced Haiku record without a conflict, an unpriced model with flat 100 against a 300 breakdown, then an unpriced model whose tokens are all disputed. It runs in every indexing mode.
   - **`QuantityTests.unpricedConflictStaysProvisional`:** through a real ledger, it checks each model's unknown + disputed total, `~` against `≥`, the detail, the chart day, the spoken costs, the "no price" listing and the conflict-only `n/a`.
 - **[test] Against the old behaviour:** three mutations are each caught: the old return, disputed tokens also counted as unknown, and the old "no price" filter.
+
+## 10. #57: local days in fractional-offset time zones
+**Branch:** `fix/57-fractional-offset-days`, from `main` at `219f58d`. Design posted on [#57](https://github.com/loloDawit/spandeck/issues/57#issuecomment-6230245734) before any code.
+
+### 10.1 Cause
+- **[code]** Every record went into `Int(epoch / 3600)`, a whole UTC hour. `summarize` put each hour on the local day containing its *start*.
+- **[code]** In +05:30, local midnight is 18:30Z, inside the 18:00Z bucket, which starts at 23:30 IST the day before. Up to 30 minutes of usage after midnight (45 in +05:45) landed on the previous day. It left "today" and shifted the 7-day and 30-day edges.
+- **[code]** The same placement applied to identity (#55) and completeness (#58) per hour, and to Grok turns.
+- **[test]** F21 reproduced on `main`: Mar 9 = 3 and Mar 10 = 4, against 1 and 6; today 4 against 6. Whole-hour zones and DST (F19, F20) were right, because their midnights fall on hour boundaries.
+
+### 10.2 Fix: 15-minute UTC slots
+- **[code]** `Ledger.slotSeconds = 900`, with `slot(of:)` and `start(of:)` used at every site: ingest, unread records, pruning, Grok turns, and all three placements in `summarize` (tokens, identity, completeness).
+- **[code]** Every current IANA offset is a multiple of 15 minutes, so every local midnight is a slot boundary and a slot lies in exactly one local day in any zone, DST included (Lord Howe's 30-minute shift too).
+- **Rejected alternative:** exact per-record timestamps. `summarize` would have to walk every operation, and identity, completeness and unread records would need the same change, for the same result in every zone in use.
+- **Limit:** an offset that isn't a multiple of 15 minutes would misattribute again. None is in use, and historical LMT offsets are outside the 32-day window.
+- **[code] Time-zone changes:** days are still computed at summary time from UTC slots, so nothing cached depends on the zone. The summary memo key now includes the zone identifier, because two zones can share today's midnight and differ on earlier days (UTC and London after summer time).
+  - The ledger takes its calendar as a closure, so a test can change the zone while it runs.
+  - Whether macOS updates `Calendar.current` in a running app after a system change is the system's behavior. It belongs to runtime QA.
+- **[code] Window (P15, #7):** the start is rounded down to 15 minutes instead of an hour. F22's expected value, 6, now holds and its baseline is removed. The fixture stays `ambiguous` under #7: the window is exact only when the provider's reset falls on a quarter hour.
+- **[code] Retention (P16)** prunes by slot. F24 is unchanged.
+- **[code] Cache version 7:**
+  - the stored `hours`/`hour` fields are renamed `slots`/`slot`;
+  - a version 6 cache can't be split at a midnight inside an hour, so it is deleted and the transcripts re-indexed, never reinterpreted;
+  - usage whose transcripts were deleted is lost at the upgrade, as at v5 and v6;
+  - older builds re-index a v7 cache the same way.
+
+  `docs/USAGE_CACHE.md` has the upgrade and downgrade notes.
+- **[code]** `claudeHourlyUsage` (fixtures and audits only) sums slots into UTC hours, so every existing fixture's `hours` expectation is unchanged.
+
+### 10.3 Tests
+- **[test] F21:** passes without its baseline and is now classified `pass`. **F22:** passes without its baseline.
+- **[test] F46 (new), Asia/Kathmandu, +05:45:**
+  - records one second before and at local midnight, including at the 7-day and 30-day starts;
+  - a streamed update and a partial-then-pair join (#55);
+  - a P9 conflict, so tiers, quantity, known and minimum cost and coverage are checked.
+- **[test] F47 (new), America/St_Johns, −03:30 to −02:30 across DST:**
+  - midnights before, during and after the 23-hour day;
+  - a streamed update and a request-only partial joined by its pair;
+  - a P9 minimum.
+- **[test] Modes:** F46 and F47 run in tail, full-scan, relaunch and rebuild modes.
+- **[test] `TimeZoneTests`:**
+  - a zone change while running: fails without the zone in the memo key;
+  - a zone change across a relaunch: Kolkata, then Kathmandu over one cache;
+  - Lord Howe's 30-minute DST shift: midnights at 13:00Z and 13:30Z, a 24.5-hour day;
+  - Grok turns in +05:30.
+- **[test] `LedgerCacheTests.olderCacheReplaced(6)`:** a v6 cache is replaced and nothing from it survives. The other cache tests expect version 7.
+- **[test] Unchanged:** F19, F20, F23 and F24. Each test above failed before the fix; each fixture failed on its days, today and window.

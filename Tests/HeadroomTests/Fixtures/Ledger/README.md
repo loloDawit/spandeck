@@ -73,7 +73,7 @@ These are proposals for review. The ones marked *ambiguous* need a decision, and
 |---|---|
 | P1 | An operation is identified by message id + request id; every record with that identity is the same operation, in any file. |
 | P2 | *Ambiguous.* Repeated records are cumulative snapshots: each field counts its largest value, so totals never go down. Cache writes are the exception since #58: they are one quantity whose P9 classification can change between snapshots (P9, F43, F44). |
-| P3 | An operation belongs to the hour of the first record read; later growth is added there, even if a later record's timestamp is in another hour or earlier. |
+| P3 | An operation belongs to the time slot (15 minutes since #57) of the first record read; later growth is added there, even if a later record's timestamp is in another hour or earlier. |
 | P4 | *Decided on #9 for #55.* An id that is missing, empty, only whitespace or not a string is absent. With one id absent, the other alone identifies the operation (`message-only` or `request-only`), and joins the one pair that carries the same id. If more than one pair carries it, the record is counted on its own as ambiguous, never merged into either. A join is never undone. Records with neither id are identified by a keyed fingerprint of the parsed instant (to the millisecond), the model and the value of every usage counter (absent ≠ 0), so an identical record counts once in any file, however its time zone or numbers are spelled (F34). Changed counters count again (F33) and identical distinct operations count once (F32); both are accepted limitations. Anything but both ids makes the total uncertain (`identity`). |
 | P5 | *Ambiguous.* The same message id under another request id is another operation (as in ccusage). |
 | P6 | *Ambiguous for the last line.* A line counts once its newline is written. Until then its file is reported as `pending`, not as unread (F08, F40). |
@@ -84,7 +84,7 @@ These are proposals for review. The ones marked *ambiguous* need a decision, and
 | P11 | *Assumption.* Top-level usage covers the main model. Iterations of another model are extra operations. Iterations of type `message` or of the main model are already included. |
 | P12 | Usage already counted stays counted when its transcript is rewritten or deleted. A rebuild can only count what is still on disk. |
 | P13 | A file whose content was replaced is read again from the start, and identity dedupe prevents double counting. |
-| P14 | A record belongs to the local day of its own timestamp. |
-| P15 | *Ambiguous.* The 5-hour window holds records at or after its start. |
-| P16 | Hours older than 32 days are dropped with their dedupe keys. The 30-day total starts at local midnight 29 days before today. |
+| P14 | A record belongs to the local day of its own timestamp, in every zone in use. *Fixed in #57:* buckets are 15-minute UTC slots, and every current offset is a multiple of 15 minutes, so each local midnight is a slot boundary (F21 +05:30, F46 +05:45, F47 −03:30/−02:30 across DST). `hours` expectations stay in UTC hours: the fixture accessor sums the slots. |
+| P15 | *Ambiguous.* The 5-hour window holds records at or after its start. Since #57 the start is rounded down to 15 minutes, not an hour, so it is exact when the provider's reset falls on a quarter hour (unverified, #7; F22). |
+| P16 | Time slots older than 32 days are dropped with their dedupe keys. The 30-day total starts at local midnight 29 days before today. |
 | P17 | A model without a price has an unknown cost, never $0 (R7). |

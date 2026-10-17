@@ -205,9 +205,9 @@ struct IdentityCoverage: Codable, Equatable, Sendable {
 /// `<synthetic>`, other types, an assistant record without usage) are ignored and never counted here.
 struct DataCompleteness: Decodable, Equatable, Sendable {
     /// Logged messages (identity groups) counted with at least one invalid counter left out: negative, fractional,
-    /// not a number, or too large. Their valid counters count. In the hour of the message, like its tokens.
+    /// not a number, or too large. Their valid counters count. In the 15-minute slot of the message, like its tokens.
     var flawed = 0
-    /// Records with a timestamp whose usage isn't an object. Not counted; in their own hour.
+    /// Records with a timestamp whose usage isn't an object. Not counted; in their own slot.
     var invalidUsage = 0
     /// Usage records whose timestamp is missing or can't be parsed. Not counted, and with no period: reported with
     /// every period, since they could belong to any.
@@ -632,44 +632,54 @@ enum LedgerClearFailure: Error, Equatable {
 
 /// Incremental token ledger over Claude Code transcripts and Grok session usage files.
 /// Claude: tail-reads ~/.claude/projects/**/*.jsonl by byte offset, dedupes on message id + request id
-/// (same rule as ccusage), and buckets per hour and model. State is cached on disk so relaunches are instant.
+/// (same rule as ccusage), and buckets per 15-minute UTC slot and model (#57). State is cached on disk so relaunches
+/// are instant.
 ///
 /// The cache (R8) holds no transcript paths, message ids or request ids: files and messages are keyed by opaque ids,
 /// a keyed hash (HMAC-SHA256, truncated to 128 bits) under a random per-install key kept in its own owner-only file.
 /// Paths are only held in memory to read the files.
 final class Ledger {
+    /// Buckets are 15-minute UTC slots (#57): every UTC offset in use is a multiple of 15 minutes, so every local
+    /// midnight is a slot boundary and a slot belongs to exactly one local day in any zone. Whole hours put part of
+    /// every day on the day before in zones such as +05:30, +05:45 and -03:30.
+    static let slotSeconds = 900
+    static func slot(of d: Date) -> Int { Int((d.timeIntervalSince1970 / Double(slotSeconds)).rounded(.down)) }
+    static func start(of slot: Int) -> Date { Date(timeIntervalSince1970: Double(slot) * Double(slotSeconds)) }
+
     private struct FileMark: Codable { var offset: UInt64 }
     /// What has been counted for one operation, per model, and how the operation was identified (#55). `flawed` is
     /// set (never cleared) once any of its records had an invalid counter (#58); left out of the cache when not.
     private struct Seen: Codable {
-        var hour: Int; var parts: [String: Agg]; var identity: IdentityCoverage.Kind; var flawed: Bool?
+        var slot: Int; var parts: [String: Agg]; var identity: IdentityCoverage.Kind; var flawed: Bool?
     }
     /// A record that couldn't be read (#58), keyed by an opaque id of its line so that reading the same bytes again
-    /// (a rescan, a rewrite, a rename or a copy) reports it once. `hour` is the record's own for `invalidUsage`; the
-    /// other kinds have no period, and theirs is the hour they were found, used only to prune them.
+    /// (a rescan, a rewrite, a rename or a copy) reports it once. `slot` is the record's own for `invalidUsage`; the
+    /// other kinds have no period, and theirs is the slot they were found in, used only to prune them.
     private struct Unread: Codable {
         enum Kind: String, Codable { case invalidUsage, undated, malformed }
-        var kind: Kind; var hour: Int
+        var kind: Kind; var slot: Int
     }
     /// Which operation carries a single message id or request id (#55): the one pair with it, or `ambiguous` once a
-    /// second pair has it too. `hour` is the newest of their hours, for pruning.
-    private struct Link: Codable { var target: String; var hour: Int }
-    /// Version 6 (#58): `unread` holds records that couldn't be read, and `flawed` counts operations per hour that
-    /// were counted with an invalid counter. Version 5 subtracted negative counters, dropped cache-write breakdowns
-    /// without a flat total and skipped `"usage": {`, and its offsets are past those lines, so its totals can't be
-    /// carried over. Version 5 (#55): `seen` also holds operations known by one id or by a fingerprint, `links` maps
+    /// second pair has it too. `slot` is the newest of their slots, for pruning.
+    private struct Link: Codable { var target: String; var slot: Int }
+    /// Version 7 (#57): `slots`, and every `slot`, are 15-minute UTC slots instead of whole UTC hours (`hours`,
+    /// `hour`). An hour that holds a local midnight can't be split without the timestamps, so a version 6 cache is
+    /// re-indexed rather than reinterpreted. Version 6 (#58): `unread` holds records that couldn't be read, and
+    /// `flawed` counts operations per hour that were counted with an invalid counter. Version 5 subtracted negative
+    /// counters, dropped cache-write breakdowns without a flat total and skipped `"usage": {`, and its offsets are past
+    /// those lines, so its totals can't be carried over. Version 5 (#55): `seen` also holds operations known by one id or by a fingerprint, `links` maps
     /// single ids to pairs, and `identity` counts operations per hour by how they were identified. Version 4 counted
     /// records without ids on every read and treated empty ids as an id. Version 4 (R8) keyed `files` and `seen` by
     /// opaque ids; version 3 by raw paths and ids.
     private struct State: Codable {
-        var version = 6
+        var version = 7
         /// An opaque id of a fixed input under the key the ids were made with, so a cache is only loaded with that key
         /// (a restored old cache next to a newer key would otherwise re-read and double count everything).
         var keyCheck = ""
         var files: [String: FileMark] = [:]
         var seen: [String: Seen] = [:]
         var links: [String: Link] = [:]
-        var hours: [Int: [String: Agg]] = [:]
+        var slots: [Int: [String: Agg]] = [:]
         var identity: [Int: IdentityCoverage] = [:]
         var flawed: [Int: Int] = [:]
         var unread: [String: Unread] = [:]
@@ -677,7 +687,7 @@ final class Ledger {
     private static let ambiguous = "ambiguous"
     static let cacheName = "claude-ledger.json"
     static let keyName = "claude-ledger.key"
-    struct GrokTurn { var key: String; var hour: Int; var model: String; var agg: Agg }
+    struct GrokTurn { var key: String; var slot: Int; var model: String; var agg: Agg }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
     static let retentionDays = 32
@@ -710,18 +720,19 @@ final class Ledger {
     private static let usageNeedle = Array(#""usage""#.utf8)
 
     /// The current time and the calendar for day boundaries. Injectable so accounting fixtures (#6) can pin "now" and
-    /// the time zone; by default the real clock and `Calendar.current`, read on every use as before.
+    /// the time zone, and tests can change the zone while the ledger runs (#57); by default the real clock and
+    /// `Calendar.current`, read on every use as before.
     private let now: @Sendable () -> Date
-    private let fixedCalendar: Calendar?
-    private var calendar: Calendar { fixedCalendar ?? .current }
+    private let currentCalendar: @Sendable () -> Calendar
+    private var calendar: Calendar { currentCalendar() }
 
     init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil,
-         now: @escaping @Sendable () -> Date = { Date() }, calendar: Calendar? = nil) {
+         now: @escaping @Sendable () -> Date = { Date() }, calendar: @escaping @Sendable () -> Calendar = { .current }) {
         self.home = home
         self.storage = storage ?? PrivateDirectory(url: appSupport)
         self.pricing = pricing
         self.now = now
-        self.fixedCalendar = calendar
+        self.currentCalendar = calendar
     }
 
     /// Why the cache isn't being saved, if it isn't; nil when it is (or nothing was tried yet).
@@ -781,12 +792,15 @@ final class Ledger {
                 saveCache()
             }
             progress(nil)
-            // Summaries only change with new data, a new window, a new day or new prices.
-            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(calendar.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
+            // Summaries only change with new data, a new window, a new day, a new time zone or new prices. Days are
+            // worked out from the UTC slots here, so a new zone needs nothing else (#57); two zones can share today's
+            // midnight and still differ on earlier days.
+            let cal = calendar
+            let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(cal.timeZone.identifier)|\(cal.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
-                cachedSummaries = (summarize(claudeHours(), identity: state.identity, completeness: claudeCompleteness(),
+                cachedSummaries = (summarize(claudeSlots(), identity: state.identity, completeness: claudeCompleteness(),
                                              windowStart: windowStart),
-                                   summarize(grokHours(), identity: [:], completeness: ([:], DataCompleteness()),
+                                   summarize(grokSlots(), identity: [:], completeness: ([:], DataCompleteness()),
                                              windowStart: nil))
                 lastSummaryKey = key
             }
@@ -880,15 +894,15 @@ final class Ledger {
         // Every other file was read to its end before (offset == size), or is gone: neither is pending.
         let read = Set(candidates.map(\.id))
         for id in pendingFiles where !read.contains(id) { setPending(id, false) }
-        let minHour = Int(cutoff.timeIntervalSince1970 / 3600)
-        if state.hours.keys.contains(where: { $0 < minHour }) || state.flawed.keys.contains(where: { $0 < minHour })
-            || state.unread.values.contains(where: { $0.hour < minHour }) {
-            state.hours = state.hours.filter { $0.key >= minHour }
-            state.seen = state.seen.filter { $0.value.hour >= minHour }
-            state.links = state.links.filter { $0.value.hour >= minHour }
-            state.identity = state.identity.filter { $0.key >= minHour }
-            state.flawed = state.flawed.filter { $0.key >= minHour }
-            state.unread = state.unread.filter { $0.value.hour >= minHour }
+        let minSlot = Self.slot(of: cutoff)
+        if state.slots.keys.contains(where: { $0 < minSlot }) || state.flawed.keys.contains(where: { $0 < minSlot })
+            || state.unread.values.contains(where: { $0.slot < minSlot }) {
+            state.slots = state.slots.filter { $0.key >= minSlot }
+            state.seen = state.seen.filter { $0.value.slot >= minSlot }
+            state.links = state.links.filter { $0.value.slot >= minSlot }
+            state.identity = state.identity.filter { $0.key >= minSlot }
+            state.flawed = state.flawed.filter { $0.key >= minSlot }
+            state.unread = state.unread.filter { $0.value.slot >= minSlot }
             changeCounter += 1
             dirty = true
         }
@@ -984,7 +998,7 @@ final class Ledger {
     /// instead of dropped, and counters that aren't valid are left out and flag the message.
     private func ingestClaudeLine(_ line: Data) {
         guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-            return unread(line, .malformed, hour: nil)
+            return unread(line, .malformed, slot: nil)
         }
         // Not usage: another record type, no message, no usage (or null), or a <synthetic> record. Checked before the
         // timestamp, so these are never reported as unread.
@@ -992,9 +1006,9 @@ final class Ledger {
         else { return }
         let model = msg.string("model") ?? "unknown"
         if model == "<synthetic>" { return }
-        guard let date = ISO.parse(obj.string("timestamp")) else { return unread(line, .undated, hour: nil) }
-        let hour = Int(date.timeIntervalSince1970 / 3600)
-        guard let usage = raw as? [String: Any] else { return unread(line, .invalidUsage, hour: hour) }
+        guard let date = ISO.parse(obj.string("timestamp")) else { return unread(line, .undated, slot: nil) }
+        let slot = Self.slot(of: date)
+        guard let usage = raw as? [String: Any] else { return unread(line, .invalidUsage, slot: slot) }
 
         var counters = CounterReader()
         var parts: [String: Agg] = [model: Self.agg(usage, &counters)]
@@ -1018,7 +1032,7 @@ final class Ledger {
             let key = messageID(id, req)
             let single = [messageOnlyID(id), requestOnlyID(req)]
             // Operations first seen with one id that no other pair carries are this pair's operation: the first keeps
-            // its hour and becomes the pair's, a second (the other id) is merged into it, and only growth is added.
+            // its slot and becomes the pair's, a second (the other id) is merged into it, and only growth is added.
             // Either way the operation stays incomplete.
             if state.seen[key] == nil {
                 for s in single where state.links[s] == nil {
@@ -1027,57 +1041,57 @@ final class Ledger {
                         state.seen[key] = partial
                     } else {
                         uncount(partial)
-                        count(partial.parts, hour: partial.hour, key: key, kind: .incomplete, flawed: partial.flawed == true)
+                        count(partial.parts, slot: partial.slot, key: key, kind: .incomplete, flawed: partial.flawed == true)
                     }
                 }
             }
-            count(parts, hour: hour, key: key, kind: .identified, flawed: flawed)
-            let at = state.seen[key]!.hour
+            count(parts, slot: slot, key: key, kind: .identified, flawed: flawed)
+            let at = state.seen[key]!.slot
             for s in single {
                 if let l = state.links[s], l.target != key {
-                    state.links[s] = Link(target: Self.ambiguous, hour: max(l.hour, at))
+                    state.links[s] = Link(target: Self.ambiguous, slot: max(l.slot, at))
                 } else {
-                    state.links[s] = Link(target: key, hour: max(state.links[s]?.hour ?? at, at))
+                    state.links[s] = Link(target: key, slot: max(state.links[s]?.slot ?? at, at))
                 }
             }
         case (let id?, nil), (nil, let id?):
             let single = req == nil ? messageOnlyID(id) : requestOnlyID(id)
             switch state.links[single]?.target {
-            case nil: count(parts, hour: hour, key: single, kind: .incomplete, flawed: flawed)
+            case nil: count(parts, slot: slot, key: single, kind: .incomplete, flawed: flawed)
             case Self.ambiguous?:
                 // More than one pair carries this id: joining either could merge two operations, so it stays apart.
-                count(parts, hour: hour, key: single, kind: .ambiguous, flawed: flawed)
+                count(parts, slot: slot, key: single, kind: .ambiguous, flawed: flawed)
                 reclassify(single, .ambiguous)
             case let pair?:
-                count(parts, hour: hour, key: pair, kind: .identified, flawed: flawed)
+                count(parts, slot: slot, key: pair, kind: .identified, flawed: flawed)
                 reclassify(pair, .incomplete)
             }
         case (nil, nil):
-            count(parts, hour: hour, key: fingerprint(date, msg, usage), kind: .fingerprinted, flawed: flawed)
+            count(parts, slot: slot, key: fingerprint(date, msg, usage), kind: .fingerprinted, flawed: flawed)
         }
     }
 
     /// Adds a record to the operation `key`: all of it if the operation is new, else only its growth, since streaming
     /// logs the same message several times with growing counts. A `flawed` record flags the operation for good.
-    private func count(_ parts: [String: Agg], hour: Int, key: String, kind: IdentityCoverage.Kind, flawed: Bool) {
+    private func count(_ parts: [String: Agg], slot: Int, key: String, kind: IdentityCoverage.Kind, flawed: Bool) {
         guard var old = state.seen[key] else {
-            for (m, a) in parts { state.hours[hour, default: [:]][m, default: Agg()].add(a) }
-            state.seen[key] = Seen(hour: hour, parts: parts, identity: kind, flawed: flawed ? true : nil)
-            state.identity[hour, default: IdentityCoverage()].add(kind)
-            if flawed { state.flawed[hour, default: 0] += 1 }
+            for (m, a) in parts { state.slots[slot, default: [:]][m, default: Agg()].add(a) }
+            state.seen[key] = Seen(slot: slot, parts: parts, identity: kind, flawed: flawed ? true : nil)
+            state.identity[slot, default: IdentityCoverage()].add(kind)
+            if flawed { state.flawed[slot, default: 0] += 1 }
             changeCounter += 1
             return
         }
         if flawed, old.flawed != true {
             old.flawed = true
-            state.flawed[old.hour, default: 0] += 1
+            state.flawed[old.slot, default: 0] += 1
             changeCounter += 1
         }
         var held: [String] = []
         for (m, a) in parts {
             let prev = old.parts[m] ?? Agg(calls: 0)
             // A record adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
-            // operation added to `hours` (needed to take it back when two operations turn out to be one).
+            // operation added to `slots` (needed to take it back when two operations turn out to be one).
             var merged = a.reconciled(with: prev)
             merged.calls = prev.calls
             guard merged != prev else { continue }
@@ -1085,55 +1099,55 @@ final class Ledger {
             // can't go below 0, since it is the sum of `parts` and each part's counters are. A held bucket has lost
             // its true value, so it's rebuilt rather than reduced.
             let delta = merged.difference(from: prev)
-            if delta.hasDecrease, state.hours[old.hour]?[m]?.isSaturated == true {
+            if delta.hasDecrease, state.slots[old.slot]?[m]?.isSaturated == true {
                 held.append(m)
             } else {
-                state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
+                state.slots[old.slot, default: [:]][m, default: Agg()].add(delta)
             }
             old.parts[m] = merged
             changeCounter += 1
         }
         state.seen[key] = old
-        for m in held { rebuild(hour: old.hour, model: m) }
+        for m in held { rebuild(slot: old.slot, model: m) }
     }
 
     /// Sets a bucket to the sum of the operations' `parts` counted in it, which `count` and `uncount` keep it equal
     /// to. For a held sum (#58): subtracting from one would show a wrong remainder as exact.
-    private func rebuild(hour: Int, model m: String) {
+    private func rebuild(slot: Int, model m: String) {
         var b = Agg()
-        for o in state.seen.values where o.hour == hour { if let p = o.parts[m] { b.add(p) } }
-        state.hours[hour, default: [:]][m] = b.calls == 0 && b.total == 0 ? nil : b
+        for o in state.seen.values where o.slot == slot { if let p = o.parts[m] { b.add(p) } }
+        state.slots[slot, default: [:]][m] = b.calls == 0 && b.total == 0 ? nil : b
     }
 
-    /// Takes back everything an operation added to `hours` and `identity`.
+    /// Takes back everything an operation added to `slots` and `identity`.
     /// `s` must already be gone from `seen`.
     private func uncount(_ s: Seen) {
         for (m, a) in s.parts {
-            guard var b = state.hours[s.hour]?[m] else { continue }
+            guard var b = state.slots[s.slot]?[m] else { continue }
             if b.isSaturated || a.isSaturated {
                 // A held sum has lost its true value (#58): rebuilt from the operations still counted there.
-                rebuild(hour: s.hour, model: m)
+                rebuild(slot: s.slot, model: m)
                 continue
             }
             b.subtract(a)
-            state.hours[s.hour]![m] = b.total == 0 && b.calls == 0 ? nil : b
+            state.slots[s.slot]![m] = b.total == 0 && b.calls == 0 ? nil : b
         }
-        if state.hours[s.hour]?.isEmpty == true { state.hours[s.hour] = nil }
-        state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
-        if state.identity[s.hour]?.groups == 0 { state.identity[s.hour] = nil }
+        if state.slots[s.slot]?.isEmpty == true { state.slots[s.slot] = nil }
+        state.identity[s.slot, default: IdentityCoverage()].add(s.identity, -1)
+        if state.identity[s.slot]?.groups == 0 { state.identity[s.slot] = nil }
         if s.flawed == true {
-            state.flawed[s.hour, default: 0] -= 1
-            if state.flawed[s.hour] == 0 { state.flawed[s.hour] = nil }
+            state.flawed[s.slot, default: 0] -= 1
+            if state.flawed[s.slot] == 0 { state.flawed[s.slot] = nil }
         }
         changeCounter += 1
     }
 
     /// Reports a record that couldn't be read, once per distinct line (#58). Only an opaque id of the line is kept,
-    /// never its text. Without `hour` (no timestamp) it has no period; the hour it was found is kept only for pruning.
-    private func unread(_ line: Data, _ kind: Unread.Kind, hour: Int?) {
+    /// never its text. Without `slot` (no timestamp) it has no period; the slot it was found in is kept only for pruning.
+    private func unread(_ line: Data, _ kind: Unread.Kind, slot: Int?) {
         let key = opaqueID("unread", data: [line])
         guard state.unread[key] == nil else { return }
-        state.unread[key] = Unread(kind: kind, hour: hour ?? Int(now().timeIntervalSince1970 / 3600))
+        state.unread[key] = Unread(kind: kind, slot: slot ?? Self.slot(of: now()))
         changeCounter += 1
     }
 
@@ -1141,8 +1155,8 @@ final class Ledger {
     private func reclassify(_ key: String, _ kind: IdentityCoverage.Kind) {
         guard var s = state.seen[key], s.identity != kind, s.identity != .ambiguous,
               !(s.identity == .incomplete && kind == .identified) else { return }
-        state.identity[s.hour, default: IdentityCoverage()].add(s.identity, -1)
-        state.identity[s.hour, default: IdentityCoverage()].add(kind)
+        state.identity[s.slot, default: IdentityCoverage()].add(s.identity, -1)
+        state.identity[s.slot, default: IdentityCoverage()].add(kind)
         s.identity = kind
         state.seen[key] = s
         changeCounter += 1
@@ -1256,26 +1270,34 @@ final class Ledger {
         return a
     }
 
-    private func claudeHours() -> [Int: [String: Agg]] { state.hours }
+    private func claudeSlots() -> [Int: [String: Agg]] { state.slots }
 
-    /// What couldn't be read, per hour where the hour is known, and what has no period (#58).
-    private func claudeCompleteness() -> (byHour: [Int: DataCompleteness], undated: DataCompleteness) {
-        var byHour = state.flawed.mapValues { DataCompleteness(flawed: $0) }
+    /// What couldn't be read, per slot where its time is known, and what has no period (#58).
+    private func claudeCompleteness() -> (bySlot: [Int: DataCompleteness], undated: DataCompleteness) {
+        var bySlot = state.flawed.mapValues { DataCompleteness(flawed: $0) }
         var undated = DataCompleteness(pending: pendingFiles.count)
         for u in state.unread.values {
             switch u.kind {
-            case .invalidUsage: byHour[u.hour, default: DataCompleteness()].invalidUsage += 1
+            case .invalidUsage: bySlot[u.slot, default: DataCompleteness()].invalidUsage += 1
             case .undated: undated.undated += 1
             case .malformed: undated.malformed += 1
             }
         }
-        return (byHour, undated)
+        return (bySlot, undated)
     }
 
-    /// Claude's hour buckets (hours since 1970 UTC, then model), read on the ledger queue. For accounting fixtures and
-    /// audits (#6); the app doesn't use it.
+    /// Claude's usage per whole UTC hour (hours since 1970, then model): the 15-minute slots summed, read on the ledger
+    /// queue. For accounting fixtures and audits (#6), whose expectations are in UTC hours; the app doesn't use it.
     func claudeHourlyUsage(completion: @escaping ([Int: [String: Agg]]) -> Void) {
-        queue.async { [self] in completion(state.hours) }
+        queue.async { [self] in
+            var hours: [Int: [String: Agg]] = [:]
+            let perHour = 3600 / Self.slotSeconds
+            for (slot, models) in state.slots {
+                let hour = Int((Double(slot) / Double(perHour)).rounded(.down))
+                for (m, a) in models { hours[hour, default: [:]][m, default: Agg()].add(a) }
+            }
+            completion(hours)
+        }
     }
 
     // MARK: Grok
@@ -1314,7 +1336,7 @@ final class Ledger {
             // a missing cost as 0, so a turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns`
             // decides which copy counts.
             let key = "\(ended)|\(t.int("totalTokens"))|\(t.int("costUsdTicks"))"
-            return GrokTurn(key: key, hour: Int(date.timeIntervalSince1970 / 3600),
+            return GrokTurn(key: key, slot: Self.slot(of: date),
                             model: t.string("primaryModelId") ?? "grok", agg: agg)
         }
     }
@@ -1334,37 +1356,37 @@ final class Ledger {
         return Array(best.values)
     }
 
-    private func grokHours() -> [Int: [String: Agg]] {
-        var hours: [Int: [String: Agg]] = [:]
+    private func grokSlots() -> [Int: [String: Agg]] {
+        var slots: [Int: [String: Agg]] = [:]
         for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
-            var a = hours[t.hour, default: [:]][t.model, default: Agg()]
+            var a = slots[t.slot, default: [:]][t.model, default: Agg()]
             a.add(t.agg)
             // A turn without a reported cost stays unknown after merging with turns that have one (R7).
             if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
-            hours[t.hour, default: [:]][t.model] = a
+            slots[t.slot, default: [:]][t.model] = a
         }
-        return hours
+        return slots
     }
 
     // MARK: Summaries
 
     /// Calendar-day windows like ccusage: today, the last 7 days and the last 30 days, all including today.
-    private func summarize(_ hours: [Int: [String: Agg]], identity: [Int: IdentityCoverage],
-                           completeness: (byHour: [Int: DataCompleteness], undated: DataCompleteness),
+    private func summarize(_ slots: [Int: [String: Agg]], identity: [Int: IdentityCoverage],
+                           completeness: (bySlot: [Int: DataCompleteness], undated: DataCompleteness),
                            windowStart: Date?) -> UsageSummary {
         let cal = calendar
         let today = cal.startOfDay(for: now())
         let weekStart = cal.date(byAdding: .day, value: -6, to: today)!
         let monthStart = cal.date(byAdding: .day, value: -29, to: today)!
-        let windowHour = windowStart.map { Int($0.timeIntervalSince1970 / 3600) }
+        let windowSlot = windowStart.map(Self.slot(of:))
 
         var s = UsageSummary(monthStart: monthStart)
-        if windowHour != nil { s.window = Totals() }
+        if windowSlot != nil { s.window = Totals() }
         var bars: [String: DayBar] = [:]
         var models: [String: (Int, CostEstimate)] = [:]
 
-        for (hour, byModel) in hours {
-            let date = Date(timeIntervalSince1970: Double(hour) * 3600)
+        for (slot, byModel) in slots {
+            let date = Self.start(of: slot)
             guard date >= monthStart else { continue }
             let day = cal.startOfDay(for: date)
             for (model, a) in byModel {
@@ -1375,7 +1397,7 @@ final class Ledger {
                 s.month.addTokens(t, saturated: held); s.month.cost += c; s.month.quantity += q
                 if date >= weekStart { s.week.addTokens(t, saturated: held); s.week.cost += c; s.week.quantity += q }
                 if date >= today { s.today.addTokens(t, saturated: held); s.today.cost += c; s.today.quantity += q }
-                if let wh = windowHour, hour >= wh {
+                if let wh = windowSlot, slot >= wh {
                     s.window!.addTokens(t, saturated: held); s.window!.cost += c; s.window!.quantity += q
                 }
 
@@ -1391,23 +1413,23 @@ final class Ledger {
                 models[model] = m
             }
         }
-        // How the operations were identified (#55), by the hour each operation was first read in, like its tokens.
-        for (hour, c) in identity {
-            let date = Date(timeIntervalSince1970: Double(hour) * 3600)
+        // How the operations were identified (#55), by the slot each operation was first read in, like its tokens.
+        for (slot, c) in identity {
+            let date = Self.start(of: slot)
             guard date >= monthStart else { continue }
             s.month.identity += c
             if date >= weekStart { s.week.identity += c }
             if date >= today { s.today.identity += c }
-            if let wh = windowHour, hour >= wh { s.window!.identity += c }
+            if let wh = windowSlot, slot >= wh { s.window!.identity += c }
         }
-        // What couldn't be read (#58): in its own periods when its hour is known, else in every period.
-        for (hour, c) in completeness.byHour {
-            let date = Date(timeIntervalSince1970: Double(hour) * 3600)
+        // What couldn't be read (#58): in its own periods when its time is known, else in every period.
+        for (slot, c) in completeness.bySlot {
+            let date = Self.start(of: slot)
             guard date >= monthStart else { continue }
             s.month.completeness += c
             if date >= weekStart { s.week.completeness += c }
             if date >= today { s.today.completeness += c }
-            if let wh = windowHour, hour >= wh { s.window!.completeness += c }
+            if let wh = windowSlot, slot >= wh { s.window!.completeness += c }
         }
         s.month.completeness += completeness.undated
         s.week.completeness += completeness.undated

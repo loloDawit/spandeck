@@ -1,0 +1,135 @@
+{
+  "title": "A time zone with a 45-minute offset (Kathmandu, UTC+05:45): midnight, the 7 days and the 30 days",
+  "matrix": [
+    "time zones and day boundaries",
+    "streaming growth",
+    "identity merges (#55)",
+    "cost coverage"
+  ],
+  "classification": "pass",
+  "followUp": "#57",
+  "policy": "P14: a record belongs to the local day of its own timestamp, in any zone in use (every current offset is a multiple of 15 minutes). Today, the 7 days and the 30 days start at local midnight.",
+  "timeZone": "Asia/Kathmandu",
+  "now": "2026-03-10T06:15:00Z",
+  "records": 11,
+  "duplicates": 2,
+  "derivation": "Local midnight is 18:15Z the day before. Today is Mar 10 (now 12:00 NPT); the 7 days start Mar 4 00:00 NPT = 18:15Z Mar 3, the 30 days Feb 9 00:00 NPT = 18:15Z Feb 8; retention starts 32 x 24 h before now, Feb 6 06:15Z, so everything is kept. r1 18:14:59Z = 23:59:59 NPT Mar 9 (1). r2 18:15:00Z = 00:00 NPT Mar 10 (2; streamed again in step 2 with output 3). r3 18:20Z, message id only (4; its pair arrives in step 2 and takes it over, #55, still incomplete). r4 18:30Z, Haiku, P9 flat 100 vs 200+100: [1, 1], 100 unresolved, 200 disputed = 302; known 1 + 5 = 6 micro-dollars, minimum 100 x 1.25 = 125 micro-dollars. r5 04:00Z Mar 10 (8). w1 18:14Z Mar 3 = 23:59 Mar 3 (16), w2 18:15Z = 00:00 Mar 4 (32). m1 18:14Z Feb 8 = 23:59 Feb 8 (64, kept but outside the 30 days), m2 18:15Z = 00:00 Feb 9 (128). Step 1: Mar 9 = 1; Mar 10 = 2 + 4 + 302 + 8 = 316 = today; Mar 3 = 16; Mar 4 = 32; Feb 9 = 128. Week 1 + 316 + 32 = 349; month 349 + 16 + 128 = 493. Identity in the 30 days: r1 r2 r4 r5 w1 w2 m2 identified, r3 incomplete (m1 is outside). Step 2: r2 grows by 3 output; r3's pair adds nothing. Mar 10 = today = 319, week 352, month 496. Whole UTC hours put the 18:00Z buckets (23:45 NPT) on the earlier day: r2 r3 r4 on Mar 9, w2 on Mar 3, m2 before the 30 days.",
+  "steps": [
+    {
+      "expect": {
+        "hours": {
+          "2026-03-09T18": {
+            "claude-test-1": [7, 0, 0, 0, 0, 3],
+            "claude-haiku-4-5-20251001": [1, 1, 0, 0, 0, 1]
+          },
+          "2026-03-10T04": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          },
+          "2026-03-03T18": {
+            "claude-test-1": [48, 0, 0, 0, 0, 2]
+          },
+          "2026-02-08T18": {
+            "claude-test-1": [192, 0, 0, 0, 0, 2]
+          }
+        },
+        "tiers": {
+          "2026-03-09T18": {
+            "claude-haiku-4-5-20251001": [100, 200]
+          }
+        },
+        "coverage": "partial",
+        "models": {
+          "claude-test-1": "unavailable",
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 6e-06,
+        "minimumCost": 0.000125,
+        "quantity": {
+          "disputedTokens": 200
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "operations": 9,
+        "days": {
+          "2026-03-09": 1,
+          "2026-03-10": 316,
+          "2026-03-03": 16,
+          "2026-03-04": 32,
+          "2026-02-09": 128
+        },
+        "today": 316,
+        "week": 349,
+        "month": 493
+      },
+      "ops": [
+        {
+          "op": "write",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1.jsonl"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "hours": {
+          "2026-03-09T18": {
+            "claude-test-1": [7, 3, 0, 0, 0, 3],
+            "claude-haiku-4-5-20251001": [1, 1, 0, 0, 0, 1]
+          },
+          "2026-03-10T04": {
+            "claude-test-1": [8, 0, 0, 0, 0, 1]
+          },
+          "2026-03-03T18": {
+            "claude-test-1": [48, 0, 0, 0, 0, 2]
+          },
+          "2026-02-08T18": {
+            "claude-test-1": [192, 0, 0, 0, 0, 2]
+          }
+        },
+        "tiers": {
+          "2026-03-09T18": {
+            "claude-haiku-4-5-20251001": [100, 200]
+          }
+        },
+        "coverage": "partial",
+        "models": {
+          "claude-test-1": "unavailable",
+          "claude-haiku-4-5-20251001": "partial"
+        },
+        "knownCost": 6e-06,
+        "minimumCost": 0.000125,
+        "quantity": {
+          "disputedTokens": 200
+        },
+        "identity": {
+          "identified": 7,
+          "incomplete": 1,
+          "fingerprinted": 0,
+          "ambiguous": 0
+        },
+        "operations": 9,
+        "days": {
+          "2026-03-09": 1,
+          "2026-03-10": 319,
+          "2026-03-03": 16,
+          "2026-03-04": 32,
+          "2026-02-09": 128
+        },
+        "today": 319,
+        "week": 352,
+        "month": 496
+      },
+      "ops": [
+        {
+          "op": "append",
+          "path": "-synthetic-p1/s1.jsonl",
+          "from": "s1b.jsonl"
+        }
+      ]
+    }
+  ]
+}
