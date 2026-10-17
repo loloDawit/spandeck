@@ -85,7 +85,7 @@ In every case:
 What this protects against: someone who gets only the cache file can't read your paths or ids from it. Without the key, they also can't confirm a guess such as "is this project in it?" Ids also can't be matched across installs.
 
 What it doesn't protect against:
-- The key sits next to the cache, so anyone who can read both (any process running as you, or a backup containing both) can test guesses. A path or id with little randomness can then be confirmed by trying candidates.
+- The key sits next to the cache, so anyone who can read both (any process running as you, or a backup containing both: one made before #70, or by a tool that ignores the backup-exclusion attribute) can test guesses. A path or id with little randomness can then be confirmed by trying candidates.
 - Time buckets (15-minute UTC slots since #57), models and token counts are stored in the clear. They show when, to the quarter hour, and how much you used each model over the last 32 days.
 - A fingerprint covers only a timestamp, a model name and token counts. Someone with the key who can guess all of those for a record can confirm it.
 - A file's anchor covers up to 18 windows of 4 KiB before its saved offset (#56). Someone with the key who can guess the exact bytes of all of them can confirm them. They learn nothing about bytes they can't guess.
@@ -200,6 +200,18 @@ The clear runs on the ledger's serial queue, so it can't interleave with a refre
 - **Not erased:** *Clear cached usage data* doesn't touch it, and this change deletes no log, including `Headroom-hover.log` and a `SpanDeck-hover.log` from an earlier build. Copies in backups and snapshots stay too (see below). Delete them yourself if they're yours.
 
 ## Backups and erasure
-`~/Library/Application Support` is part of your home folder, so Time Machine and other backups include these files unless you exclude them; SpanDeck doesn't. Deleting a file (by clearing, migrating or replacing it) removes it from the folder, but it is not secure erasure:
+**Excluded from backups (#70).** `claude-ledger.json` and `claude-ledger.key` are marked with Foundation's `isExcludedFromBackup`, the `com.apple.metadata:com_apple_backup_excludeItem` attribute that Time Machine reads (`tmutil isexcluded` shows `[Excluded]`).
+- **Every save** marks its temporary file before `rename(2)` puts it in place. A replacement doesn't inherit the old file's attribute but keeps its own, so the cache is never in place unmarked.
+- **Existing installs:** a key and cache written before #70 are marked when they're loaded. Nothing is rewritten, re-indexed or deleted.
+- **After *Clear cached usage data*,** the new key and cache are marked as they're written.
+- **If marking fails** (for example on a volume without extended attributes):
+  - a new cache or key isn't written at all, Settings shows *Usage cache not saved: the cache or its key couldn't be excluded from backups*, and totals stay in memory;
+  - an existing cache or key is kept and used, and Settings says it couldn't be excluded. The key is written once, so that message stays until the key is marked; each save tries again.
+- **Only future backups.** Backups, APFS snapshots and local Time Machine snapshots made before the upgrade keep their copies; this change doesn't erase them.
+- **Only tools that honour the attribute.** Time Machine does. A copy made with `cp`, `rsync`, cloud sync or another backup tool may ignore it, depending on the tool and its options.
+- **Not covered:** the price files, the folder itself and the hover debug log aren't marked.
+- **Trade-off:** after restoring a backup, the cache is rebuilt from the transcripts that are still there, so usage from transcripts deleted since is gone.
+
+Other backups of `~/Library/Application Support` include SpanDeck's other files. Deleting a file (by clearing, migrating or replacing it) removes it from the folder, but it is not secure erasure:
 - old contents can remain on the SSD until overwritten;
 - they can also remain in APFS snapshots, local Time Machine snapshots and backups.
