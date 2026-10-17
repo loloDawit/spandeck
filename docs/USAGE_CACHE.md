@@ -1,6 +1,6 @@
 # Local usage cache: what is stored, and why (R8, #33)
 
-SpanDeck counts Claude Code token usage by reading the transcripts in `~/.claude/projects` and `~/.config/claude/projects`. Re-reading every transcript on every launch would be slow, so it keeps an incremental index. This page describes that index as of R8, with schema version 6 (#55, #58). Storing data locally does not by itself make it private: any process running as your user can read your user's files.
+SpanDeck counts Claude Code token usage by reading the transcripts in `~/.claude/projects` and `~/.config/claude/projects`. Re-reading every transcript on every launch would be slow, so it keeps an incremental index. This page describes that index as of R8, with schema version 7 (#55, #58, #57). Storing data locally does not by itself make it private: any process running as your user can read your user's files.
 
 ## Files
 All in `~/Library/Application Support/Headroom/`. The folder and file names are inherited from Headroom and kept for compatibility.
@@ -8,7 +8,7 @@ All in `~/Library/Application Support/Headroom/`. The folder and file names are 
 | File | Contents | Mode |
 |---|---|---|
 | (folder) | — | `0700`, checked and tightened before every cache write. Parent folders are never changed. |
-| `claude-ledger.json` | Usage index, schema version 6 | `0600` |
+| `claude-ledger.json` | Usage index, schema version 7 | `0600` |
 | `claude-ledger.key` | 32 random bytes: the key for the opaque ids below | `0600` |
 | `.claude-ledger.*.tmp-*` | Only while a save is in progress | created `0600` |
 | `pricing-source.json`, `pricing.json` | Public price data (R6); not part of the usage cache | not changed by R8 |
@@ -22,13 +22,13 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 | Field | Persisted as | Why it's kept |
 |---|---|---|
 | `files` | opaque file id → byte offset | Read only what was appended to each transcript |
-| `seen` | opaque operation id → hour, token counts per model, how it was identified, and whether it was counted with an invalid counter (#58, only when it was) | Count a streamed message once as it grows, and a message repeated in a resumed session once |
-| `links` | opaque single id → opaque operation id (or `ambiguous`) + hour | Join a record that has only a message id or only a request id to the one pair that carries it (#55) |
-| `hours` | hour → model → token counts. Only where P9 applies (#58), also cache-write tokens whose tier is unresolved and tokens disputed between a flat total and its breakdown | Totals, windows and cost estimates. Each operation's counts in `seen` carry the same fields, so a #55 merge or a held (`Int.max`) sum can be rebuilt from them |
-| `identity` | hour → number of identity groups (logged messages with their streamed copies) identified by both ids, one id, a fingerprint, or an ambiguous id | The "Usage may be approximate" note (#55) |
-| `flawed` | hour → number of identity groups counted with an invalid counter left out | The "Some usage records couldn't be read" note (#58) |
-| `unread` | opaque line id → kind (`invalidUsage`, `undated` or `malformed`) + hour | Report a record that couldn't be read, once however often it is read again (#58). Identical broken lines, in one file or several, are one entry, so the count is of distinct lines, not of occurrences. The hour is the record's own for `invalidUsage`; for the others it is the hour the line was found, used only for pruning |
-| `version` | `6` | A different version is never loaded |
+| `seen` | opaque operation id → slot, token counts per model, how it was identified, and whether it was counted with an invalid counter (#58, only when it was) | Count a streamed message once as it grows, and a message repeated in a resumed session once |
+| `links` | opaque single id → opaque operation id (or `ambiguous`) + slot | Join a record that has only a message id or only a request id to the one pair that carries it (#55) |
+| `slots` | 15-minute UTC slot (#57) → model → token counts. Only where P9 applies (#58), also cache-write tokens whose tier is unresolved and tokens disputed between a flat total and its breakdown | Totals, windows and cost estimates. Each operation's counts in `seen` carry the same fields, so a #55 merge or a held (`Int.max`) sum can be rebuilt from them |
+| `identity` | slot → number of identity groups (logged messages with their streamed copies) identified by both ids, one id, a fingerprint, or an ambiguous id | The "Usage may be approximate" note (#55) |
+| `flawed` | slot → number of identity groups counted with an invalid counter left out | The "Some usage records couldn't be read" note (#58) |
+| `unread` | opaque line id → kind (`invalidUsage`, `undated` or `malformed`) + slot | Report a record that couldn't be read, once however often it is read again (#58). Identical broken lines, in one file or several, are one entry, so the count is of distinct lines, not of occurrences. The hour is the record's own for `invalidUsage`; for the others it is the hour the line was found, used only for pruning |
+| `version` | `7` | A different version is never loaded |
 | `keyCheck` | opaque id of a fixed input under the key | The cache is loaded only with the key it was written under. Otherwise, for example with an old cache restored from a backup after a clear made a new key, every id would miss and everything would be counted twice; such a cache is deleted and rebuilt |
 
 **Not stored:**
@@ -58,13 +58,13 @@ What this protects against: someone who gets only the cache file can't read your
 
 What it doesn't protect against:
 - The key sits next to the cache, so anyone who can read both (any process running as you, or a backup containing both) can test guesses. A path or id with little randomness can then be confirmed by trying candidates.
-- Hour buckets, models and token counts are stored in the clear. They show when and how much you used each model over the last 32 days.
+- Time buckets (15-minute UTC slots since #57), models and token counts are stored in the clear. They show when, to the quarter hour, and how much you used each model over the last 32 days.
 - A fingerprint covers only a timestamp, a model name and token counts. Someone with the key who can guess all of those for a record can confirm it.
 - An unread line's id covers the whole line. Someone with the key who can guess the exact bytes of a broken line can confirm it was in a transcript. They learn nothing about lines they can't guess.
 
 ## Retention
 - Transcripts last modified more than 32 days ago are skipped.
-- Hour buckets, operation ids, single-id links, identity counts, flaw counts and unread lines older than 32 days are pruned at each full scan (every 5 minutes while running). An unread line without a usable timestamp is pruned 32 days after it was found.
+- Time buckets, operation ids, single-id links, identity counts, flaw counts and unread lines older than 32 days are pruned at each full scan (every 5 minutes while running). An unread line without a usable timestamp is pruned 32 days after it was found.
 - Unread lines stay counted when their transcript is deleted or rewritten without them, like usage already counted: the totals still lack them. A cleared cache only reports what is still on disk.
 - A transcript that disappears is dropped from `files`.
 - The cache is saved at most every 10 minutes, and again on quit.
@@ -98,8 +98,21 @@ What users will notice:
 
 Interruptions behave as for version 4. No backup of the version 5 file is kept.
 
+## Upgrading from a version 6 cache (#57)
+Version 6 kept usage per whole UTC hour. In a time zone whose offset isn't a whole number of hours (+05:30, +05:45, −03:30 and others), local midnight falls inside an hour, and that hour's usage can't be split between the two days without the record times, which the cache doesn't hold. So version 6 hours are never reinterpreted as 15-minute slots: a version 6 cache is deleted when found, exactly as a version 4 or 5 cache is (above), and the transcripts still on disk are re-indexed under the existing key.
+
+Every current time zone's offset is a multiple of 15 minutes, so with 15-minute slots every local midnight is a slot boundary: days, today, the 7 and 30 days are exact in every zone in use, and days are worked out when the totals are, so a change of time zone needs no re-index. The 5-hour window's start is rounded down to 15 minutes instead of an hour.
+
+What users will notice:
+- **One-time re-index** on the first launch after the upgrade.
+- **Lost history:** as before, usage whose transcripts were deleted within the last 30 days, which the version 6 cache still counted, disappears from the totals, permanently. This is the third such re-index, after #55 and #58.
+- **Different days** only in time zones with a fractional offset: up to 45 minutes of usage around midnight moves to its correct day. Totals over 30 days only change at the first day's edge. Identity, completeness, quantity and cost coverage are recounted from the transcripts.
+- **A larger cache:** at most four buckets per active hour and model instead of one.
+
+Interruptions behave as for version 4. No backup of the version 6 file is kept.
+
 ## Downgrading
-Older builds ignore a version 6 cache (version check), delete it and re-index with their own rules, including the miscounting each fixed. They leave the key file in place and reuse it. A version 5 or older build can't show what couldn't be read, and a version 4 or older build can't show identity coverage.
+Older builds ignore a newer cache (version check), delete it and re-index with their own rules: a version 6 build goes back to whole UTC hours (and wrong days in fractional-offset zones), and older ones also bring back the miscounting each version fixed. Each such re-index loses usage whose transcripts are gone, as an upgrade does. They leave the key file in place and reuse it. A version 5 or older build can't show what couldn't be read, and a version 4 or older build can't show identity coverage.
 
 ## Clear cached usage data
 Settings ▸ Cached usage data ▸ *Clear cached usage data…* asks for confirmation, then deletes `claude-ledger.json`, its key and any temporary files.

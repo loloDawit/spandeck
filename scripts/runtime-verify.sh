@@ -291,7 +291,7 @@ function run(argv) {
         + (Object.keys(byKind).sort().map(k => k + '=' + byKind[k]).join(' ') || 'none'));
     out.push('flawed groups: ' + Object.values(c.flawed || {}).reduce((a, n) => a + Number(n), 0));
     let unresolved = 0, disputed = 0;
-    for (const h of Object.values(c.hours || {})) for (const a of Object.values(h)) {
+    for (const h of Object.values(c.slots || {})) for (const a of Object.values(h)) {
         unresolved += Number(a.cacheWriteUnresolved || 0); disputed += Number(a.cacheWriteDisputed || 0);
     }
     out.push('cache-write tokens: tier-unresolved=' + unresolved + ' disputed=' + disputed);
