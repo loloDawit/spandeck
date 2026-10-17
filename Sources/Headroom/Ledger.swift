@@ -1072,6 +1072,7 @@ final class Ledger {
         // timestamp, so these are never reported as unread.
         guard obj.string("type") == "assistant", let msg = obj.dict("message"), let raw = msg["usage"], !(raw is NSNull)
         else { return }
+        // Compared as written (`<synthetic>`, iterations); only the validated id is counted, kept and shown (#66).
         let model = msg.string("model") ?? "unknown"
         if model == "<synthetic>" { return }
         guard let date = ISO.parse(obj.string("timestamp")) else { return unread(line, .undated, slot: nil) }
@@ -1079,7 +1080,7 @@ final class Ledger {
         guard let usage = raw as? [String: Any] else { return unread(line, .invalidUsage, slot: slot) }
 
         var counters = CounterReader()
-        var parts: [String: Agg] = [model: Self.agg(usage, &counters)]
+        var parts: [String: Agg] = [Self.modelID(model): Self.agg(usage, &counters)]
         // Sub-calls made inside a turn (e.g. the advisor) are listed as extra iterations with their own
         // model; the top-level usage only covers the main model's iterations.
         switch usage["iterations"] {
@@ -1088,7 +1089,7 @@ final class Ledger {
             for item in list {
                 guard let it = item as? [String: Any] else { counters.flawed = true; continue }
                 guard let sub = it.string("model"), sub != model, it.string("type") != "message" else { continue }
-                parts[sub, default: Agg(calls: 0)].add(Self.agg(it, &counters))
+                parts[Self.modelID(sub), default: Agg(calls: 0)].add(Self.agg(it, &counters))
             }
         default: counters.flawed = true
         }
@@ -1228,6 +1229,39 @@ final class Ledger {
         s.identity = kind
         state.seen[key] = s
         changeCounter += 1
+    }
+
+    /// A model id as counted, kept and shown (#66, audit 0007 P1): the id as written when it has the shape of a
+    /// provider's, else `unknown` (its usage is still counted). The shape: 1 to 100 characters of `A-Z a-z 0-9 . : @ -`,
+    /// starting with a letter, with no run of letters and digits over 32 characters, and none of a few well-known
+    /// credential prefixes (`sk-`, `xai-`, `AKIA`, `ASIA`). That covers first-party, dated, Bedrock
+    /// (`us.anthropic.…-v1:0`) and Vertex (`…@20251101`) ids and Grok's. No `/` or `_`: no supported id has them, and
+    /// they let paths, ARNs and most token formats through. It bounds what can be stored; it can't tell a secret
+    /// shaped like a model id from one.
+    static func modelID(_ raw: String?) -> String {
+        guard let raw, isModelID(raw) else { return "unknown" }
+        return raw
+    }
+
+    static let maxModelIDLength = 100
+    static let maxModelIDRun = 32
+
+    private static func isModelID(_ s: String) -> Bool {
+        let bytes = s.utf8
+        guard (1...maxModelIDLength).contains(bytes.count), let first = bytes.first,
+              (0x41...0x5A).contains(first) || (0x61...0x7A).contains(first) else { return false }
+        var run = 0
+        for c in bytes {
+            switch c {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: // 0-9 A-Z a-z
+                run += 1
+                if run > maxModelIDRun { return false }
+            case 0x2D, 0x2E, 0x3A, 0x40: run = 0 // - . : @
+            default: return false
+            }
+        }
+        let lower = s.lowercased()
+        return !lower.hasPrefix("sk-") && !lower.hasPrefix("xai-") && !s.hasPrefix("AKIA") && !s.hasPrefix("ASIA")
     }
 
     /// An id the ledger can use: a string with something other than whitespace in it. Missing, empty, blank and
@@ -1411,7 +1445,7 @@ final class Ledger {
             // decides which copy counts.
             let key = "\(ended)|\(t.int("totalTokens"))|\(t.int("costUsdTicks"))"
             return GrokTurn(key: key, slot: Self.slot(of: date),
-                            model: t.string("primaryModelId") ?? "grok", agg: agg)
+                            model: t.string("primaryModelId").map(Self.modelID) ?? "grok", agg: agg)
         }
     }
 
@@ -1542,11 +1576,37 @@ final class Ledger {
         if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version,
            s.keyCheck == keyCheck {
             state = s
+            if normaliseModelIDs() { dirty = true; changeCounter += 1 }
             return
         }
         do { try storage.remove(Self.cacheName) } catch {
             setIssue(.legacyNotRemoved(error as? StorageFailure ?? .io(EIO)))
         }
+    }
+
+    /// A version 7 cache written before #66 can hold any model id, in `slots` and in each operation's `parts`. Ids that
+    /// `modelID` rejects are merged into `unknown` in both, so totals, deduplication and the buckets' sums are kept and
+    /// re-reading a transcript adds nothing (it now counts those records as `unknown` too). No version change: the
+    /// cache stays valid and is saved without the raw ids on the next refresh. Returns whether anything changed.
+    private func normaliseModelIDs() -> Bool {
+        func normalised(_ byModel: [String: Agg]) -> [String: Agg]? {
+            guard byModel.keys.contains(where: { Self.modelID($0) != $0 }) else { return nil }
+            var out: [String: Agg] = [:]
+            for (m, a) in byModel { out[Self.modelID(m), default: Agg()].add(a) }
+            return out
+        }
+        var changed = false
+        for (slot, byModel) in state.slots {
+            guard let n = normalised(byModel) else { continue }
+            state.slots[slot] = n
+            changed = true
+        }
+        for (key, op) in state.seen {
+            guard let n = normalised(op.parts) else { continue }
+            state.seen[key]!.parts = n
+            changed = true
+        }
+        return changed
     }
 
     /// Writes the key (once) and then the cache, both owner-only. On failure nothing is written elsewhere; the issue

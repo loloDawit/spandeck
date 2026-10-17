@@ -319,7 +319,7 @@ struct ModelIdentifierTests {
         Self.expectNoRaw(s, rig, [Self.badModel], "appended")
     }
 
-    /// An over-long raw id in an old cache is normalised too, and a cache with only valid ids is loaded as it was.
+    /// An over-long raw id in an old cache is normalised too.
     @Test func existingCacheWithLongIdIsNormalised() async throws {
         let rig = try Rig()
         let long = "claude-" + String(repeating: "y", count: 2000) + "-CANARY-LONG"
