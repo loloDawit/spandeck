@@ -22,7 +22,7 @@ struct PrivacyCanaryTests {
         "CANARY-PARTIAL", "CANARY-APPENDED", "CANARY-REWRITTEN", "CANARYGROKPROJ", "CANARYGROKSESSION",
         "CANARY-PLANTED", "canary_session_file", "CANARYCWD",
     ]
-    /// Permitted model ids. A transcript's model id is kept as written (see the report's finding on #5).
+    /// Permitted model ids: shaped like a provider's, so kept as written (#66).
     static let claudeModel = "claude-CANARYMODEL-1"
     static let grokModel = "grok-CANARYGROKMODEL"
 
@@ -251,20 +251,23 @@ struct PrivacyCanaryTests {
         try Self.check(rig, s, ledger, "unsecured", cacheExpected: false)
     }
 
-    /// Finding P1 in docs/audits/0007-privacy-verification.md, recorded rather than fixed (#5): a transcript's model id
-    /// is kept as written, at any length and with any characters, in the cache and the model list. It's permitted
-    /// metadata, but a record whose model field held something else would have it stored in the clear. Changing this
-    /// (for example a length and character bound) should be a deliberate decision; this test then changes with it.
-    @Test func modelIdIsKeptAsWritten() async throws {
+    /// Finding P1 in docs/audits/0007-privacy-verification.md (#66): a model id that isn't shaped like a provider's
+    /// (here 2,000 characters with spaces and slashes) is counted as `unknown`, with its tokens, and the raw text is
+    /// neither cached nor shown. `ModelIdentifierTests` covers the policy itself.
+    @Test func invalidModelIdIsNotKept() async throws {
         let rig = try Rig()
         let model = "claude-" + String(repeating: "x", count: 2000) + "-CANARY-IN-MODEL id with spaces/and slashes"
         try rig.box.write("\(Self.projectDir)/m.jsonl", Self.session("M", model: model).joined(separator: "\n") + "\n")
         let ledger = rig.ledger()
         let s = await Self.refresh(ledger)
         ledger.flush()
-        #expect(s.claude.models.map(\.model).contains(model))
+        #expect(Set(s.claude.models.map(\.model)) == ["unknown", "claude-haiku-4-5-20251001"])
+        #expect(s.claude.models.first { $0.model == "unknown" }?.tokens == 185)
         let cache = String(decoding: try Data(contentsOf: rig.cacheURL), as: UTF8.self)
-        #expect(cache.contains("-CANARY-IN-MODEL id with spaces"))
+        #expect(!cache.contains("CANARY-IN-MODEL") && !cache.contains("xxxxxxxx"))
+        for text in Self.shown(s, issue: ledger.cacheIssue) + s.claude.models.map(\.model) {
+            #expect(!text.contains("CANARY-IN-MODEL") && !text.contains("xxxxxxxx"), "\(text)")
+        }
         // Nothing else from the record is kept.
         for c in Self.forbidden { #expect(!cache.contains(c), "\(c)") }
     }
