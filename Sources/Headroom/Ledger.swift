@@ -782,6 +782,28 @@ final class Ledger {
     private func messageOnlyID(_ id: String) -> String { opaqueID("message-only", id) }
     private func requestOnlyID(_ request: String) -> String { opaqueID("request-only", request) }
 
+    /// The key a Claude model's counts are kept under in `seen` and `slots` (#66): the id itself when `modelID` keeps
+    /// it, else `unknown#` and an opaque id of it. Each rejected id keeps its own counts, so streamed copies are
+    /// reconciled per model as before #66 (merging them first would keep only the largest of their sums); they are
+    /// shown together as `unknown` (`displayModel`). `#` never passes `modelID`, so no transcript id has this form.
+    private func modelKey(_ raw: String) -> String {
+        Self.modelID(raw) == raw ? raw : Self.rejectedModelPrefix + opaqueID("model", raw)
+    }
+    static let rejectedModelPrefix = "unknown#"
+
+    /// What a model key is shown and priced as: every rejected id is `unknown`.
+    static func displayModel(_ key: String) -> String { key.hasPrefix(rejectedModelPrefix) ? "unknown" : key }
+
+    /// Buckets with the rejected models' keys merged into `unknown`, for totals and display.
+    static func displayed(_ slots: [Int: [String: Agg]]) -> [Int: [String: Agg]] {
+        slots.mapValues { byModel in
+            guard byModel.keys.contains(where: { $0.hasPrefix(rejectedModelPrefix) }) else { return byModel }
+            var out: [String: Agg] = [:]
+            for (m, a) in byModel { out[displayModel(m), default: Agg()].add(a) }
+            return out
+        }
+    }
+
     private var claudeRoots: [URL] {
         [home.appendingPathComponent(".claude/projects"), home.appendingPathComponent(".config/claude/projects")]
     }
@@ -1080,7 +1102,7 @@ final class Ledger {
         guard let usage = raw as? [String: Any] else { return unread(line, .invalidUsage, slot: slot) }
 
         var counters = CounterReader()
-        var parts: [String: Agg] = [Self.modelID(model): Self.agg(usage, &counters)]
+        var parts: [String: Agg] = [modelKey(model): Self.agg(usage, &counters)]
         // Sub-calls made inside a turn (e.g. the advisor) are listed as extra iterations with their own
         // model; the top-level usage only covers the main model's iterations.
         switch usage["iterations"] {
@@ -1089,7 +1111,7 @@ final class Ledger {
             for item in list {
                 guard let it = item as? [String: Any] else { counters.flawed = true; continue }
                 guard let sub = it.string("model"), sub != model, it.string("type") != "message" else { continue }
-                parts[Self.modelID(sub), default: Agg(calls: 0)].add(Self.agg(it, &counters))
+                parts[modelKey(sub), default: Agg(calls: 0)].add(Self.agg(it, &counters))
             }
         default: counters.flawed = true
         }
@@ -1372,7 +1394,7 @@ final class Ledger {
         return a
     }
 
-    private func claudeSlots() -> [Int: [String: Agg]] { state.slots }
+    private func claudeSlots() -> [Int: [String: Agg]] { Self.displayed(state.slots) }
 
     /// What couldn't be read, per slot where its time is known, and what has no period (#58).
     private func claudeCompleteness() -> (bySlot: [Int: DataCompleteness], undated: DataCompleteness) {
@@ -1400,7 +1422,7 @@ final class Ledger {
         queue.async { [self] in
             var hours: [Int: [String: Agg]] = [:]
             let perHour = 3600 / Self.slotSeconds
-            for (slot, models) in state.slots {
+            for (slot, models) in Self.displayed(state.slots) {
                 let hour = Int((Double(slot) / Double(perHour)).rounded(.down))
                 for (m, a) in models { hours[hour, default: [:]][m, default: Agg()].add(a) }
             }
@@ -1584,15 +1606,23 @@ final class Ledger {
         }
     }
 
-    /// A version 7 cache written before #66 can hold any model id, in `slots` and in each operation's `parts`. Ids that
-    /// `modelID` rejects are merged into `unknown` in both, so totals, deduplication and the buckets' sums are kept and
-    /// re-reading a transcript adds nothing (it now counts those records as `unknown` too). No version change: the
-    /// cache stays valid and is saved without the raw ids on the next refresh. Returns whether anything changed.
+    /// A version 7 cache written before #66 can hold any model id, in `slots` and in each operation's `parts`. Each
+    /// id that `modelID` rejects is moved to its `modelKey` (`unknown#` and an opaque id of it), the key the same
+    /// records get when they are read now. Each rejected id keeps its own counts, so totals, buckets, deduplication and
+    /// per-model reconciliation of later streamed copies are as before, and re-reading a transcript adds nothing. No
+    /// version change: the cache stays valid and is saved without the raw ids on the next refresh. A key already of
+    /// that form is kept only when the rest is an opaque id; anything else after `unknown#` is treated as a raw id.
+    /// Returns whether anything changed.
     private func normaliseModelIDs() -> Bool {
+        func kept(_ k: String) -> Bool {
+            guard k.hasPrefix(Self.rejectedModelPrefix) else { return Self.modelID(k) == k }
+            let id = k.utf8.dropFirst(Self.rejectedModelPrefix.utf8.count)
+            return id.count == 32 && id.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+        }
         func normalised(_ byModel: [String: Agg]) -> [String: Agg]? {
-            guard byModel.keys.contains(where: { Self.modelID($0) != $0 }) else { return nil }
+            guard !byModel.keys.allSatisfy(kept) else { return nil }
             var out: [String: Agg] = [:]
-            for (m, a) in byModel { out[Self.modelID(m), default: Agg()].add(a) }
+            for (m, a) in byModel { out[kept(m) ? m : modelKey(m), default: Agg()].add(a) }
             return out
         }
         var changed = false

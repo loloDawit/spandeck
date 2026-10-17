@@ -331,6 +331,24 @@ struct ModelIdentifierTests {
         #expect(try FileManager.default.attributesOfItem(atPath: rig.cacheURL.path)[.modificationDate] as? Date == modified)
     }
 
+    /// A key that only looks like a rejected model's (`unknown#` but not followed by an opaque id) is treated as a raw
+    /// id: its text doesn't survive a load.
+    @Test func forgedRejectedKeyIsNormalised() async throws {
+        let rig = try Rig()
+        try rig.transcript([Self.line(model: Self.badModel, id: "a")])
+        do {
+            let ledger = rig.ledger()
+            _ = await refreshLedger(ledger)
+            ledger.flush()
+        }
+        #expect(try Self.plant(rig.cacheURL, raw: "unknown#CANARY-FORGED text") == 2)
+        let ledger = rig.ledger()
+        let s = await refreshLedger(ledger)
+        ledger.flush()
+        #expect(Self.tokens(s.claude) == ["unknown": 150])
+        #expect(!rig.cache.contains("CANARY-FORGED"))
+    }
+
     /// An over-long raw id in an old cache is normalised too.
     @Test func existingCacheWithLongIdIsNormalised() async throws {
         let rig = try Rig()
