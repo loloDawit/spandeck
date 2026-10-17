@@ -324,7 +324,7 @@ The index time ranges overlap. The pre-filter adds about 0.01 s per 150 MB and p
   | Price coverage | `cost` | Exact `known`, `minimum` for unresolved tiers, and unknown tokens: `unknownTokens` without a price, `disputedTokens` in conflict |
 
   - **Card:** one line per dimension that applies. *"Some token counts are provisional. Totals may be over- or understated."* sits between the completeness and identity notes.
-  - **Costs:** `≥` amounts add the minimum to the known part. The cost note names "cache writes of uncertain tier or amount" apart from "no price".
+  - **Costs:** `≥` amounts add the minimum to the known part. The cost note names "cache writes of uncertain tier or amount" apart from "no price". §9.5 narrows `≥` to totals without disputed tokens.
 - **[code] Recoverable overflow:**
   - `CostEstimate` sums saturate.
   - A sum held at `Int.max` sets `quantity.saturated`. The flag is derived from the stored buckets, so it survives a relaunch.
@@ -341,3 +341,37 @@ The index time ranges overlap. The pre-filter adds about 0.01 s per 150 MB and p
   - the old P9 rule fails F11, F37 and F42.
 
   Six more mutations each fail a test: the minimum taken as known, disputed tokens dropped, an invalid tier matching, `subtract` ignoring tiers, disputes not summarized, and a minimum at the 1-hour rate.
+
+### 9.5 Follow-up: streamed reclassification, invalid tiers and provisional costs
+The owner's re-review of `e48ab95` found three P9 gaps; the corrections follow the policy approved on #61.
+- **[code] One cache-write quantity per operation.** `Agg.growth`/`maxed` took the maximum of each cache-write field apart, so a record whose cache writes moved from tiered to tier-unresolved counted them twice (flat 100: 50+50 then 30+30 gave 200). `Agg.reconciled` replaces both:
+  - other counters keep their largest value (P2);
+  - the larger cache-write quantity wins with its classification, so a reclassification alone adds nothing;
+  - at equal quantity the less certain wins (disputed > tier-unresolved > tiered), and two tier splits that disagree leave the whole quantity tier-unresolved instead of pricing whichever arrived first;
+  - the rule is commutative and associative, so arrival order, rescans and #55 merges reach the same operation, cost coverage included.
+
+  `count` adds the signed difference to the bucket. It can't take a bucket below 0, because a bucket is the sum of its operations' parts and each part's counters are non-negative. A held (`Int.max`) bucket is rebuilt from `seen` instead of reduced, through the helper `uncount` now shares.
+- **[code] Invalid tier without a flat total.** The valid tiers still count but are tier-unresolved (a minimum), and the message is flagged. Before, `{5m: "x", 1h: 25}` priced 25 exact 1-hour writes, and the cost read as complete.
+- **[code] Provisional costs.** A total with disputed tokens has no defensible lower bound: the flat totals behind its minimum are themselves in conflict. It is shown as `~$x`, rounded rather than truncated and kept to one significant digit below a cent (F42 reads `~$0.0008`, not `<$0.01`). Its detail starts "Provisional estimate, not a lower bound", and calls the minimum "$y more … if the logged cache-write totals are right". The chart marks such days "~" instead of "?". VoiceOver reads "about $x, provisional" and "at least $x", not the symbols, for tiles, provider rows, the 5-hour window, models and chart marks. The cost legend and the pricing rule define `~`. `≥` stays for tier-unresolved minimums alone (F11).
+- **[test]**
+  - **F43, F44 (new):** the same streamed records in opposite orders. They cover:
+    - tiered ↔ tier-unresolved, tiered ↔ disputed and tier-unresolved ↔ disputed;
+    - two splits of one quantity;
+    - growth across a class change (disputed 300 → tiered 350 adds 50);
+    - an invalid tier priced with and without a flat total;
+    - a #55 join of partials with different classes.
+
+    Both end on identical expectations (tokens, tiers, known and minimum cost, coverage, quantity, flaws, identity) in tail, full-scan, relaunch and rebuild modes.
+  - **Unit tests:**
+    - every order and grouping of six records reconciles to one result;
+    - each transition both ways;
+    - a reclassification inside a bucket held at `Int.max` followed by a #55 join, which is exact again afterwards;
+    - the visible and spoken cost strings, the legend and the chart marks.
+  - **F11, F37, F42:** unchanged and passing.
+- **[test] Against the old behaviour:** six mutations, each caught:
+  - field-wise max of cache writes;
+  - an invalid tier priced without a flat total;
+  - `≥` while disputed;
+  - a held bucket reduced instead of rebuilt;
+  - the first tier split kept;
+  - the first record kept at equal quantity.

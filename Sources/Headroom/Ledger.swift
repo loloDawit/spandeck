@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: - Aggregates
 
-struct Agg: Codable {
+struct Agg: Codable, Equatable {
     var input = 0
     var output = 0
     var cacheWrite5m = 0
@@ -34,29 +34,57 @@ struct Agg: Codable {
 
     private static func optional(_ n: Int) -> Int? { n == 0 ? nil : n }
 
-    /// Field-wise growth from `old` to self (never negative); used when a streamed message is logged again.
-    func growth(from old: Agg) -> Agg {
-        Agg(input: max(input - old.input, 0), output: max(output - old.output, 0),
-            cacheWrite5m: max(cacheWrite5m - old.cacheWrite5m, 0), cacheWrite1h: max(cacheWrite1h - old.cacheWrite1h, 0),
-            cacheRead: max(cacheRead - old.cacheRead, 0), calls: 0,
-            cacheWriteUnresolved: Self.optional(max(unresolved - old.unresolved, 0)),
-            cacheWriteDisputed: Self.optional(max(disputed - old.disputed, 0)))
+    /// The cache writes' quantity, however they are classified: tiered, tier-unresolved and disputed together.
+    var cacheWrites: Int {
+        cacheWrite5m.saturatingAdd(cacheWrite1h).saturatingAdd(unresolved).saturatingAdd(disputed)
     }
 
-    func maxed(with o: Agg) -> Agg {
-        Agg(input: max(input, o.input), output: max(output, o.output), cacheWrite5m: max(cacheWrite5m, o.cacheWrite5m),
-            cacheWrite1h: max(cacheWrite1h, o.cacheWrite1h), cacheRead: max(cacheRead, o.cacheRead), calls: max(calls, o.calls),
-            cacheWriteUnresolved: Self.optional(max(unresolved, o.unresolved)),
-            cacheWriteDisputed: Self.optional(max(disputed, o.disputed)))
+    /// What one operation reported, from two of its records (#58): streaming logs a message several times with growing
+    /// counts. Other counters keep their largest value. Cache writes are one quantity whose classification can change
+    /// between records, so their fields are never maxed one by one (a reclassification would count twice): the larger
+    /// quantity wins with its classification. At equal quantity the less certain wins (disputed, then tier-unresolved,
+    /// then tiered), and two tier splits that disagree make the tier unknown rather than picking one. The result
+    /// doesn't depend on which record came first, nor on how records are grouped (it's commutative and associative),
+    /// so arrival order, rescans and #55 merges all reach the same operation.
+    func reconciled(with o: Agg) -> Agg {
+        var r = Agg(input: max(input, o.input), output: max(output, o.output), cacheRead: max(cacheRead, o.cacheRead),
+                    calls: max(calls, o.calls))
+        let q = cacheWrites, oq = o.cacheWrites
+        if q != oq {
+            let w = q > oq ? self : o
+            r.cacheWrite5m = w.cacheWrite5m; r.cacheWrite1h = w.cacheWrite1h
+            r.cacheWriteUnresolved = w.cacheWriteUnresolved; r.cacheWriteDisputed = w.cacheWriteDisputed
+            return r
+        }
+        let d = max(disputed, o.disputed)
+        if cacheWrite5m == o.cacheWrite5m && cacheWrite1h == o.cacheWrite1h {
+            r.cacheWrite5m = cacheWrite5m; r.cacheWrite1h = cacheWrite1h
+        }
+        r.cacheWriteDisputed = Self.optional(d)
+        // Never negative: when the splits agree, the record with the larger disputed part leaves exactly its own rest.
+        r.cacheWriteUnresolved = Self.optional(max(q - d - r.cacheWrite5m - r.cacheWrite1h, 0))
+        return r
     }
+
+    /// `self - o` field by field, and possibly negative: what to add to a bucket that holds `o` so it holds `self`
+    /// instead. Adds no calls.
+    func difference(from o: Agg) -> Agg {
+        Agg(input: input - o.input, output: output - o.output, cacheWrite5m: cacheWrite5m - o.cacheWrite5m,
+            cacheWrite1h: cacheWrite1h - o.cacheWrite1h, cacheRead: cacheRead - o.cacheRead, calls: 0,
+            cacheWriteUnresolved: Self.optional(unresolved - o.unresolved),
+            cacheWriteDisputed: Self.optional(disputed - o.disputed))
+    }
+
+    /// Some counter goes down, as in a reclassification's difference.
+    var hasDecrease: Bool { [input, output, cacheWrite5m, cacheWrite1h, cacheRead, unresolved, disputed].contains { $0 < 0 } }
 
     mutating func add(_ o: Agg) {
         input = input.saturatingAdd(o.input); output = output.saturatingAdd(o.output)
         cacheWrite5m = cacheWrite5m.saturatingAdd(o.cacheWrite5m); cacheWrite1h = cacheWrite1h.saturatingAdd(o.cacheWrite1h)
         cacheRead = cacheRead.saturatingAdd(o.cacheRead); calls += o.calls
         if let t = o.costTicks { costTicks = (costTicks ?? 0) + t }
-        if o.unresolved != 0 { cacheWriteUnresolved = unresolved.saturatingAdd(o.unresolved) }
-        if o.disputed != 0 { cacheWriteDisputed = disputed.saturatingAdd(o.disputed) }
+        if o.unresolved != 0 { cacheWriteUnresolved = Self.optional(unresolved.saturatingAdd(o.unresolved)) }
+        if o.disputed != 0 { cacheWriteDisputed = Self.optional(disputed.saturatingAdd(o.disputed)) }
     }
 
     /// Takes back `o`, which was added before. Only for sums that aren't held (`isSaturated`).
@@ -110,9 +138,12 @@ struct CostEstimate: Equatable, Sendable {
 
     /// The amount when complete; nil when any of it is unknown.
     var value: Double? { coverage == .complete ? known : nil }
-    /// What the cost is at least: the exact part plus the minimum for tier-unresolved writes. With disputed or unpriced
-    /// tokens the true cost may be higher; never lower, assuming the flat cache-write totals are right.
-    var lowerBound: Double { known + minimum }
+    /// P9 (#58): some cache-write quantities disagree between the logs' sources, so even the flat totals behind
+    /// `minimum` aren't verified, and no lower bound is claimed: the cost is a provisional estimate.
+    var isProvisional: Bool { disputedTokens > 0 }
+    /// The amount shown for a partial cost: the exact part plus the minimum for tier-unresolved writes. A lower bound
+    /// unless `isProvisional`; with unpriced tokens the true cost may be higher, never lower.
+    var amount: Double { known + minimum }
 
     static func + (a: CostEstimate, b: CostEstimate) -> CostEstimate {
         CostEstimate(known: a.known + b.known, knownTokens: a.knownTokens.saturatingAdd(b.knownTokens),
@@ -318,10 +349,10 @@ extension UsageSummary {
 
     /// Days whose cost isn't fully known, with the known part, so the chart can mark them instead of drawing what
     /// looks like a complete (or zero) cost.
-    var incompleteCostDays: [(day: Date, known: Double)] {
+    var incompleteCostDays: [(day: Date, cost: CostEstimate)] {
         var days: [Date: CostEstimate] = [:]
         for b in bars { days[b.day, default: .zero] += b.cost }
-        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value.lowerBound) }.sorted { $0.day < $1.day }
+        return days.filter { $0.value.coverage != .complete }.map { ($0.key, $0.value) }.sorted { $0.day < $1.day }
     }
 }
 
@@ -1031,19 +1062,36 @@ final class Ledger {
             state.flawed[old.hour, default: 0] += 1
             changeCounter += 1
         }
+        var held: [String] = []
         for (m, a) in parts {
             let prev = old.parts[m] ?? Agg(calls: 0)
-            let delta = a.growth(from: prev)
-            guard delta.total > 0 else { continue }
-            state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
-            // Growth adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
+            // A record adds no calls, so `parts` keeps the calls that were counted and stays exactly what this
             // operation added to `hours` (needed to take it back when two operations turn out to be one).
-            var merged = a.maxed(with: prev)
+            var merged = a.reconciled(with: prev)
             merged.calls = prev.calls
+            guard merged != prev else { continue }
+            // The difference can be negative in some fields when cache writes are reclassified (#58); the bucket
+            // can't go below 0, since it is the sum of `parts` and each part's counters are. A held bucket has lost
+            // its true value, so it's rebuilt rather than reduced.
+            let delta = merged.difference(from: prev)
+            if delta.hasDecrease, state.hours[old.hour]?[m]?.isSaturated == true {
+                held.append(m)
+            } else {
+                state.hours[old.hour, default: [:]][m, default: Agg()].add(delta)
+            }
             old.parts[m] = merged
             changeCounter += 1
         }
         state.seen[key] = old
+        for m in held { rebuild(hour: old.hour, model: m) }
+    }
+
+    /// Sets a bucket to the sum of the operations' `parts` counted in it, which `count` and `uncount` keep it equal
+    /// to. For a held sum (#58): subtracting from one would show a wrong remainder as exact.
+    private func rebuild(hour: Int, model m: String) {
+        var b = Agg()
+        for o in state.seen.values where o.hour == hour { if let p = o.parts[m] { b.add(p) } }
+        state.hours[hour, default: [:]][m] = b.calls == 0 && b.total == 0 ? nil : b
     }
 
     /// Takes back everything an operation added to `hours` and `identity`.
@@ -1052,12 +1100,8 @@ final class Ledger {
         for (m, a) in s.parts {
             guard var b = state.hours[s.hour]?[m] else { continue }
             if b.isSaturated || a.isSaturated {
-                // A held sum has lost its true value, so subtracting from it would show a wrong remainder as exact
-                // (#58). Rebuild it from the operations still counted there: `count` keeps `hours` equal to the sum
-                // of their `parts`.
-                b = Agg()
-                for o in state.seen.values where o.hour == s.hour { if let p = o.parts[m] { b.add(p) } }
-                state.hours[s.hour]![m] = b.calls == 0 && b.total == 0 ? nil : b
+                // A held sum has lost its true value (#58): rebuilt from the operations still counted there.
+                rebuild(hour: s.hour, model: m)
                 continue
             }
             b.subtract(a)
@@ -1176,8 +1220,9 @@ final class Ledger {
             let t5 = r.read(cc, "ephemeral_5m_input_tokens") ?? 0, t1 = r.read(cc, "ephemeral_1h_input_tokens") ?? 0
             let sum = t5 + t1
             guard let flat else {
-                // P8: without a valid flat total the breakdown is all there is.
-                a.cacheWrite5m = t5; a.cacheWrite1h = t1
+                // P8: without a valid flat total the breakdown is all there is. With an invalid tier its valid tiers
+                // still count, but the split is unknown, so their tier is unresolved (P9).
+                if tierInvalid { a.cacheWriteUnresolved = sum == 0 ? nil : sum } else { a.cacheWrite5m = t5; a.cacheWrite1h = t1 }
                 break
             }
             // P9 (decided on #58): matching sources give the tiers. Otherwise the flat total is the quantity and its

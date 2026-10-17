@@ -93,16 +93,17 @@ struct QuantityTests {
     /// is never called known; disputed tokens are unpriced and claim no bound.
     @Test func minimumsAndDisputesStayApart() {
         let known = CostEstimate(known: 4.25, knownTokens: 10)
-        #expect(known.coverage == .complete && known.value == 4.25 && known.lowerBound == 4.25)
+        #expect(known.coverage == .complete && known.value == 4.25 && known.amount == 4.25)
 
         let minimum = CostEstimate(known: 1, knownTokens: 10, minimum: 0.5, minimumTokens: 300)
-        #expect(minimum.coverage == .partial && minimum.value == nil && minimum.lowerBound == 1.5)
+        #expect(minimum.coverage == .partial && minimum.value == nil && minimum.amount == 1.5 && !minimum.isProvisional)
         #expect(Fmt.cost(minimum) == "≥$1.50")
         #expect(Fmt.costDetail(minimum) == "Partial estimate: $1.00 known; at least $0.50 for 300 cache-write tokens of unknown tier")
 
         let disputed = CostEstimate(known: 1, knownTokens: 10, disputedTokens: 200)
-        #expect(disputed.coverage == .partial && disputed.lowerBound == 1)
-        #expect(Fmt.costDetail(disputed) == "Partial estimate: $1.00 known; cost unknown for 200 provisional cache-write tokens")
+        #expect(disputed.coverage == .partial && disputed.amount == 1 && disputed.isProvisional)
+        #expect(Fmt.cost(disputed) == "~$1.00") // never ≥: no bound is claimed when quantities disagree
+        #expect(Fmt.costDetail(disputed) == "Provisional estimate, not a lower bound: $1.00 known; cost unknown for 200 provisional cache-write tokens")
 
         let onlyMinimum = CostEstimate(minimum: 0.5, minimumTokens: 300)
         #expect(onlyMinimum.coverage == .partial) // something is known: at least the minimum
@@ -111,7 +112,144 @@ struct QuantityTests {
         let sum = minimum + disputed + CostEstimate(unknownTokens: 7)
         #expect(sum.known == 2 && sum.minimum == 0.5 && sum.minimumTokens == 300 && sum.disputedTokens == 200
                 && sum.unknownTokens == 7 && sum.knownTokens == 20)
-        #expect(Fmt.costDetail(sum) == "Partial estimate: $2.00 known; at least $0.50 for 300 cache-write tokens of unknown tier; cost unknown for 7 tokens; cost unknown for 200 provisional cache-write tokens")
+        // A minimum next to disputed tokens is conditional, so it's no longer called "at least".
+        #expect(sum.isProvisional && Fmt.cost(sum) == "~$2.50")
+        #expect(Fmt.costDetail(sum) == "Provisional estimate, not a lower bound: $2.00 known; $0.50 more for 300 cache-write tokens of unknown tier, if the logged cache-write totals are right; cost unknown for 7 tokens; cost unknown for 200 provisional cache-write tokens")
+        #expect(Fmt.costDetail(CostEstimate(disputedTokens: 5)) == "Cost unavailable: cost unknown for 5 tokens")
+    }
+
+    /// What VoiceOver reads for each kind of cost, and the legend and chart marks that explain ~ next to ≥ and n/a.
+    @Test func provisionalCostCopy() throws {
+        let complete = CostEstimate(known: 4.25, knownTokens: 10)
+        let minimum = CostEstimate(known: 1, knownTokens: 10, minimum: 0.5, minimumTokens: 300) // F11: flat > breakdown
+        let provisional = CostEstimate(known: 1, knownTokens: 10, minimum: 0.5, minimumTokens: 300, disputedTokens: 200)
+        #expect(Fmt.spokenCost(complete) == "$4.25" && Fmt.spokenCost(minimum) == "at least $1.50")
+        #expect(Fmt.spokenCost(provisional) == "about $1.50, provisional")
+        #expect(Fmt.spokenCost(CostEstimate(unknownTokens: 3)) == "cost not available")
+        #expect(Fmt.cost(minimum) == "≥$1.50" && Fmt.cost(provisional) == "~$1.50")
+        // At P9's real scale: F42's 30 days after step 2 (Haiku known, minimum and disputed; claude-test-1 unpriced).
+        let f42 = CostEstimate(known: 0.0002685, knownTokens: 144, unknownTokens: 44, minimum: 0.000525, minimumTokens: 420,
+                               disputedTokens: 280)
+        #expect(Fmt.cost(f42) == "~$0.0008" && Fmt.spokenCost(f42) == "about $0.0008, provisional")
+        #expect(Fmt.costDetail(f42) == "Provisional estimate, not a lower bound: $0.0002 known; $0.0005 more for 420 cache-write tokens of unknown tier, if the logged cache-write totals are right; cost unknown for 44 tokens; cost unknown for 280 provisional cache-write tokens")
+        // F11 has a minimum and no dispute: a lower bound, rounded down.
+        let f11 = CostEstimate(known: 0.000991, knownTokens: 1517, minimum: 0.000375, minimumTokens: 300)
+        #expect(Fmt.cost(f11) == "≥$0.001" && Fmt.spokenCost(f11) == "at least $0.001")
+        #expect(Fmt.approximate(0.0007935) == "$0.0008" && Fmt.approximate(1.005) == "$1.01" && Fmt.approximate(0.15) == "$0.15")
+        #expect(PricingText.unpricedRule.contains("costs show ~ (provisional, not a lower bound)"))
+
+        var s = UsageSummary()
+        s.models = [ModelRow(model: "claude-haiku", tokens: 520, cost: minimum)]
+        s.month = Totals(tokens: 520, cost: minimum)
+        let partial = try #require(PricingText.coverageNote(claude: s, grok: nil))
+        #expect(partial.hasPrefix("≥ partial estimate, n/a no estimate: ") && !partial.contains("~"))
+        #expect(partial.hasSuffix("On the chart, \"?\" marks days whose cost isn't fully known."))
+
+        s.models = [ModelRow(model: "claude-haiku", tokens: 510, cost: provisional)]
+        s.month = Totals(tokens: 510, cost: provisional, quantity: QuantityUncertainty(disputedTokens: 200))
+        let note = try #require(PricingText.coverageNote(claude: s, grok: nil))
+        #expect(note.hasPrefix("≥ partial estimate, ~ provisional estimate, n/a no estimate: "))
+        #expect(note.contains("Provisional estimate, not a lower bound: $1.00 known; $0.50 more for 300 cache-write tokens"))
+        #expect(note.hasSuffix("\"?\" marks days whose cost isn't fully known and \"~\" days whose cost is provisional."))
+        #expect(QuantityText.note(s)?.detail.contains("200 cache-write tokens are counted provisionally") == true)
+
+        // The chart marks a day by its own coverage.
+        let day = Calendar.current.startOfDay(for: Date())
+        s.bars = [DayBar(day: day, family: "Haiku", tokens: 510, cost: provisional),
+                  DayBar(day: day.addingTimeInterval(-86400), family: "Haiku", tokens: 520, cost: minimum)]
+        #expect(s.incompleteCostDays.map(\.cost.isProvisional) == [false, true])
+        #expect(s.incompleteCostDays.map(\.cost.amount) == [1.5, 1.5])
+    }
+
+    // MARK: Streamed cache writes (P9 re-review)
+
+    private static func cw(_ t5: Int, _ t1: Int, u: Int = 0, d: Int = 0) -> Agg {
+        Agg(input: 1, output: 1, cacheWrite5m: t5, cacheWrite1h: t1, calls: 1,
+            cacheWriteUnresolved: u == 0 ? nil : u, cacheWriteDisputed: d == 0 ? nil : d)
+    }
+
+    /// An operation's records reconcile to the same result in every order and grouping, and a reclassification never
+    /// adds tokens: the cache-write quantity is the largest any record reported.
+    @Test func reconcileIsOrderIndependent() {
+        let records = [Self.cw(50, 50), Self.cw(0, 0, u: 100), Self.cw(30, 70), Self.cw(0, 0, u: 40, d: 60),
+                       Self.cw(0, 0, u: 20, d: 80), Self.cw(100, 0)]
+        func permutations(_ a: [Agg]) -> [[Agg]] {
+            a.count <= 1 ? [a] : a.indices.flatMap { i in
+                permutations(Array(a[..<i] + a[(i + 1)...])).map { [a[i]] + $0 }
+            }
+        }
+        var results: [Agg] = []
+        for order in permutations(records) {
+            // Folded one record at a time, as streaming does, and as two halves joined, as a #55 merge does.
+            let folded = order.dropFirst().reduce(order[0]) { $0.reconciled(with: $1) }
+            let halves = order[..<3].dropFirst().reduce(order[0]) { $0.reconciled(with: $1) }
+                .reconciled(with: order[4...].reduce(order[3]) { $0.reconciled(with: $1) })
+            results += [folded, halves]
+        }
+        #expect(Set(results.map { "\($0)" }).count == 1)
+        // All six report 100: the most disputed record's split wins, and no tier is priced as exact.
+        #expect(results[0] == Self.cw(0, 0, u: 20, d: 80) && results[0].cacheWrites == 100)
+
+        // Each transition, both ways: at equal quantity the less certain wins.
+        let pairs: [(Agg, Agg, Agg)] = [
+            (Self.cw(50, 50), Self.cw(0, 0, u: 100), Self.cw(0, 0, u: 100)),              // tiered <-> unresolved
+            (Self.cw(60, 40), Self.cw(0, 0, u: 40, d: 60), Self.cw(0, 0, u: 40, d: 60)),  // tiered <-> disputed
+            (Self.cw(0, 0, u: 100), Self.cw(0, 0, u: 20, d: 80), Self.cw(0, 0, u: 20, d: 80)), // unresolved <-> disputed
+            (Self.cw(50, 50), Self.cw(30, 70), Self.cw(0, 0, u: 100)),                    // two splits of 100
+            (Self.cw(50, 50), Self.cw(50, 50), Self.cw(50, 50)),                          // the same record again
+            (Self.cw(0, 0, u: 100, d: 200), Self.cw(350, 0), Self.cw(350, 0)),            // more wins, whatever its class
+        ]
+        for (a, b, want) in pairs {
+            #expect(a.reconciled(with: b) == want && b.reconciled(with: a) == want, "\(a) / \(b)")
+            #expect(a.reconciled(with: b).total == max(a.total, b.total))
+        }
+        // Reclassifying moves tokens between fields; the bucket's difference adds nothing.
+        let d = Self.cw(0, 0, u: 100).difference(from: Self.cw(50, 50))
+        #expect(d.hasDecrease && d.total == 0 && d.cacheWrite5m == -50 && d.unresolved == 100)
+    }
+
+    /// A reclassification in a bucket held at `Int.max`, then a #55 join: the bucket is rebuilt, not reduced, so it
+    /// becomes exact again instead of showing `Int.max` minus the moved tokens as exact.
+    @Test func heldBucketReclassifiedThenMerged() async throws {
+        let box = try Sandbox()
+        func line(_ id: String?, _ req: String?, t5: Int, t1: Int = 0) -> String {
+            let ts = ISO8601DateFormatter().string(from: Date())
+            let r = req.map { #""requestId":"\#($0)","# } ?? "", m = id.map { #""id":"\#($0)","# } ?? ""
+            return #"{"type":"assistant","timestamp":"\#(ts)",\#(r)"message":{\#(m)"model":"claude-test-1","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":\#(Self.big),"cache_creation":{"ephemeral_5m_input_tokens":\#(t5),"ephemeral_1h_input_tokens":\#(t1)}}}}"#
+        }
+        // 1023 pairs + one message-only + one request-only record, each `big` 5-minute writes: more than Int holds.
+        var lines = (0..<1023).map { line("msg_\($0)", "req_\($0)", t5: Self.big) }
+        lines += [line("msg_P", nil, t5: Self.big), line(nil, "req_P", t5: Self.big)]
+        let file = try box.write(".claude/projects/-p/s1.jsonl", lines.joined(separator: "\n") + "\n")
+        let ledger = Self.ledger(box)
+        func bucket() async -> Agg {
+            await withCheckedContinuation { c in ledger.claudeHourlyUsage { c.resume(returning: $0) } }
+                .values.compactMap { $0["claude-test-1"] }.first ?? Agg()
+        }
+        func append(_ l: String) throws {
+            let h = try FileHandle(forWritingTo: file)
+            try h.seekToEnd()
+            try h.write(contentsOf: Data((l + "\n").utf8))
+            try h.close()
+        }
+        _ = await refreshLedger(ledger)
+        #expect(await bucket().cacheWrite5m == .max)
+
+        // msg_0 is logged again with the same quantity split differently: its tier becomes unresolved.
+        try append(line("msg_0", "req_0", t5: Self.big - 1, t1: 1))
+        let s = await refreshLedger(ledger).claude
+        let b = await bucket()
+        #expect(b.cacheWrite5m == 1024 * Self.big && b.cacheWrite1h == 0 && b.unresolved == Self.big)
+        #expect(s.month.tokens == .max && s.month.quantity.saturated) // 1025 big is still more than Int holds
+
+        // The pair joins the two partials: one big operation goes, and every sum is exact again.
+        try append(line("msg_P", "req_P", t5: Self.big))
+        let after = await refreshLedger(ledger).claude
+        let exact = await bucket()
+        #expect(exact.cacheWrite5m == 1023 * Self.big && exact.unresolved == Self.big && !exact.isSaturated)
+        #expect(after.month.tokens == 1024 * Self.big && after.month.quantity.isExact)
+        ledger.flush()
+        #expect(await refreshLedger(Self.ledger(box)).claude.month.tokens == 1024 * Self.big)
     }
 
     /// The cost note names a missing price and an uncertain cache-write tier as different causes.

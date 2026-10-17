@@ -15,11 +15,13 @@ struct UsageTests {
         var a = Agg(input: 10, output: 5, cacheWrite5m: 2, cacheWrite1h: 1, cacheRead: 100, calls: 1)
         #expect(a.total == 118)
 
-        let grown = Agg(input: 12, output: 9, cacheWrite5m: 2, cacheWrite1h: 1, cacheRead: 90, calls: 3).growth(from: a)
-        #expect(grown.input == 2 && grown.output == 4 && grown.cacheRead == 0 && grown.calls == 0)
+        // A streamed record: counters keep their largest value; the difference is what the bucket gains.
+        let next = Agg(input: 12, output: 9, cacheWrite5m: 2, cacheWrite1h: 1, cacheRead: 90, calls: 3)
+        let grown = next.reconciled(with: a).difference(from: a)
+        #expect(grown.input == 2 && grown.output == 4 && grown.cacheRead == 0 && grown.calls == 0 && !grown.hasDecrease)
 
-        let maxed = a.maxed(with: Agg(input: 3, output: 50))
-        #expect(maxed.input == 10 && maxed.output == 50)
+        let maxed = a.reconciled(with: Agg(input: 3, output: 50))
+        #expect(maxed.input == 10 && maxed.output == 50 && maxed.cacheWrite5m == 2 && maxed.cacheWrite1h == 1)
 
         a.add(Agg(input: 1, costTicks: 7))
         a.add(Agg(input: 1, costTicks: 3))
