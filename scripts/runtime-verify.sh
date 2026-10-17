@@ -638,8 +638,9 @@ cmd_clean() {
 # ---------------------------------------------------------------------------------------------------------------
 # #11 coexistence. Fingerprints hold names, modes, sizes, modification times and SHA-256 hashes, never contents; for
 # preferences, the key names and a hash of the exported domain.
-fp_files() { # root
+fp_files() { # a folder, or a single file
     [ -e "$1" ] || { echo "  absent"; return; }
+    if [ -f "$1" ]; then echo "  ./$(basename "$1") $(stat -f '%Sp %z %m' "$1") $(shasum -a 256 "$1" | cut -d' ' -f1)"; return; fi
     (cd "$1" 2>/dev/null && find . -print | sort | while read -r f; do
         if [ -f "$f" ]; then echo "  $f $(stat -f '%Sp %z %m' "$f") $(shasum -a 256 "$f" | cut -d' ' -f1)"
         else echo "  $f $(stat -f '%Sp' "$f")"; fi
