@@ -79,8 +79,18 @@ SpanDeck never opens, reads, imports, renames or deletes Headroom's folder, pref
 1. `scripts/runtime-verify.sh stage` on this PR's head.
 2. `scripts/runtime-verify.sh stage-legacy 226a7d6`: the last build with Headroom's identity, built in a temporary worktree, never installed.
 
-**`spandecktest`**, with `RV=/Users/Shared/spandeck-rv/$(cat /Users/Shared/spandeck-rv/current)/runtime-verify.sh`:
-1. **`$RV preflight`.** It must pass: no SpanDeck app, process, folder or preferences, and no leftover transcripts. If transcripts from Run 3 are still there, it lists them: run `$RV clean` (fixtures and SpanDeck state only) or remove them by hand, then preflight again. Legacy state is recorded, not failed.
+**`spandecktest` still holds Run 3's state.** Run 3 used `c68b108`, built with Headroom's identity, so the account holds:
+- `Application Support/Headroom/` with a v7 cache and key;
+- `dev.headroom.Headroom` preferences;
+- Run 3's transcripts.
+
+Handle it like this, before step 1:
+- **Stage first.** Until `stage` moves `current`, `$RV` still resolves to `c68b108`'s script, whose `clean` deletes the Headroom-named state.
+- **Keep Run 3's Headroom state as the pre-existing legacy state** for Order A. It's the realistic case, and `226a7d6` loads that v7 cache. Step 2's `0-start` fingerprint records it. If you'd rather start from nothing, run `$RV clean-legacy` instead; it asks first.
+- **Remove Run 3's transcripts** with the new script's `$RV clean`. It removes the fixtures and SpanDeck state only, never Headroom's.
+
+**`spandecktest`**, with `RV=/Users/Shared/spandeck-rv/$(cat /Users/Shared/spandeck-rv/current)/runtime-verify.sh`, after checking that `current` names this PR's head:
+1. **`$RV preflight`.** It must pass: no SpanDeck app, process, folder or preferences, and no leftover transcripts. If transcripts remain, it lists them by name and deletes nothing: run `$RV clean` and preflight again. Legacy state is recorded, not failed.
 2. **Fixtures:** `$RV fixtures 0`, `identity`, `completeness`, `privacy`. Then `$RV fingerprint 0-start`.
 3. **Order A, legacy first.**
    - `$RV legacy-launch 90`, quit it from its menu, `$RV quit-legacy`, then `$RV fingerprint 1-legacy`.
