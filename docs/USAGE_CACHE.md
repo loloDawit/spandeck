@@ -39,9 +39,30 @@ Writes create a temporary file `0600` before writing any data to it (`O_CREAT|O_
 
 Which transcripts end in an unfinished line (#58) is kept in memory only. Every such file is read again on the first full scan after a launch, because its saved offset is short of its size.
 
-Only lines with a `"usage"` key (with any JSON whitespace before its colon) are parsed. The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are listed every refresh, read again when they change, and never cached; their model ids are shown in the UI and never written. Model names and token counts are shown in the UI. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error. One more file can be written outside this folder: with the hidden preference `debugHover` set (release builds included), `~/Library/Logs/Headroom-hover.log` records hover-panel geometry and timestamps, no usage data; *Clear cached usage data* doesn't remove it (#5, audit 0007 finding P2).
+Only lines with a `"usage"` key (with any JSON whitespace before its colon) are parsed. The parser reads each assistant line's `message.model`, `message.usage`, `message.id`, `requestId` and `timestamp`. The line is parsed as a whole, but nothing else from it is kept. Paths stay in memory only, for opening the files. Grok session files are listed every refresh, read again when they change, and never cached; their model ids are shown in the UI and never written. Model names and token counts are shown in the UI. Model ids are validated first (#66, below): one that isn't shaped like a provider's is counted, cached and shown as `unknown`. Nothing from transcripts is logged: the app's only `NSLog` reports a login-item error. One more file can be written outside this folder: with the hidden preference `debugHover` set (release builds included), `~/Library/Logs/Headroom-hover.log` records hover-panel geometry and timestamps, no usage data; *Clear cached usage data* doesn't remove it (#5, audit 0007 finding P2).
 
 A field-level inventory of everything read, kept in memory, written and shown, and a check of each statement on this page against the code, is in [audit 0007](audits/0007-privacy-verification.md).
+
+## Model ids (#66)
+Model ids come from files SpanDeck doesn't control: Claude's `message.model` and `usage.iterations[].model`, and Grok's `primaryModelId`. An id is kept as written only when all of these hold:
+- 1 to 100 characters, each `A-Z`, `a-z`, `0-9`, `.`, `:`, `@` or `-`;
+- it starts with a letter;
+- no run of letters and digits is longer than 32 characters;
+- it doesn't start with `sk-` or `xai-` (in any case), `AKIA` or `ASIA`.
+
+That covers every id SpanDeck prices or has fixtures for: first-party ids (`claude-sonnet-4-5`), dated ids (`claude-haiku-4-5-20251001`), Bedrock ids (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`), Vertex ids (`claude-opus-4-5@20251101`) and Grok's (`grok-4.6-build`). `/` and `_` aren't allowed. No supported id uses them, and they would let paths, ARNs (`…/profile-id`) and most token formats (`ghp_…`, `github_pat_…`) through.
+
+Any other id (text with spaces, control or non-ASCII characters, a path, an over-long string, a credential-shaped value) is counted as `unknown`, with all its tokens. Its cost is unknown, as for any unpriced model. A missing Claude id is `unknown` and a missing Grok id is `grok`, as before. Before validation:
+- a `<synthetic>` record is still recognised and skipped;
+- an iteration is still compared with its message's model as written. A sub-call of another rejected id is still an extra operation, both under `unknown`.
+
+A fingerprint still hashes the id as written (keyed, never stored), so dedupe keys don't change.
+
+**Limits:**
+- This bounds the shape of what is stored and shown. It can't tell a secret that looks like a model id (letters, digits and hyphens, short runs) from a real id, so it doesn't guarantee that no sensitive string is ever stored.
+- Ids that Claude Code might write with other characters (for example a `[1m]` suffix) would show as `unknown`. [assumption: the API's response model, which transcripts record, never carries that suffix; not verified against real transcripts]
+
+**Caches written before #66** (still version 7) can hold any id, in `slots` and in each operation's counts in `seen`. At load, every rejected id in either is merged into `unknown`, adding the counts. The cache is saved without them on the next refresh, which is the first one after launch. Totals, buckets, deduplication and identity counts are unchanged. A transcript read again later (a rewrite, a re-scan, an append) counts those records as `unknown` too, so nothing is counted twice. There is no version change, no re-index and no history lost. The raw ids can remain in earlier copies of the file, as for anything else (see *Backups and erasure*).
 
 ## Opaque ids and their limits
 Each id is one of:
@@ -145,7 +166,7 @@ What users will notice:
 Interruptions behave as for version 4. No backup of the version 6 file is kept.
 
 ## Downgrading
-Older builds ignore a newer cache (version check), delete it and re-index with their own rules: a version 6 build goes back to whole UTC hours (and wrong days in fractional-offset zones), and older ones also bring back the miscounting each version fixed. Each such re-index loses usage whose transcripts are gone, as an upgrade does. They leave the key file in place and reuse it. A version 5 or older build can't show what couldn't be read, and a version 4 or older build can't show identity coverage.
+Older builds ignore a newer cache (version check), delete it and re-index with their own rules: a version 6 build goes back to whole UTC hours (and wrong days in fractional-offset zones), and older ones also bring back the miscounting each version fixed. Each such re-index loses usage whose transcripts are gone, as an upgrade does. They leave the key file in place and reuse it. A version 7 build from before #66 loads a cache written after it as it is. If that build then reads a transcript again from the start (after a rewrite), records with a rejected model id are counted a second time under the raw id, until they age out after 32 days or the cache is cleared. A version 5 or older build can't show what couldn't be read, and a version 4 or older build can't show identity coverage.
 
 ## Clear cached usage data
 Settings ▸ Cached usage data ▸ *Clear cached usage data…* asks for confirmation, then deletes `claude-ledger.json`, its key and any temporary files.

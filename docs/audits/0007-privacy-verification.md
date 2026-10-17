@@ -24,14 +24,14 @@ Same scheme as [audit 0003](0003-security-inventory.md):
 | **Read** | Each file is memory-mapped. Only lines containing a `"usage"` key are parsed. | [code] `readClaudeFile` 999, `ingestLines` 1032, `hasUsageKey` 1052 |
 | **Parsed, kept transiently** | The whole line is parsed by `JSONSerialization` into Foundation objects, then dropped after the line. Fields **used:** `type`, `timestamp`, `requestId`, `message.id`, `message.model`, `message.usage`, and in usage the token counters, `cache_creation` tiers and `iterations[].type/model` plus their counters. Everything else in the line (prompts, replies, thinking, tool inputs and results, `cwd`, `gitBranch`, `sessionId`, `uuid`, other usage fields such as `service_tier`) is parsed but never read. | [code] `ingestClaudeLine` (1067), `agg`, `fingerprint` (1244); [test] `PrivacyCanaryTests` |
 | **In memory only** | Transcript paths (`hotFiles`, scan candidates, `pendingFiles` keyed by opaque id); the summaries shown. | [code] |
-| **Persisted** (`claude-ledger.json`, see §1.5) | See §1.5 for the field list. Keyed: file ids, operation ids, single-id links, unread-line ids, the change stamp and anchor. In the clear: byte offsets and sizes, 15-minute UTC slots, model ids, token counts, identity, flaw and unread counts. | [code] `State` (685); [test] `PrivacyCanaryTests`, `LedgerCacheTests.cacheHoldsNoPathsIdsOrContent` |
+| **Persisted** (`claude-ledger.json`, see §1.5) | See §1.5 for the field list. Keyed: file ids, operation ids, single-id links, unread-line ids, the change stamp and anchor. In the clear: byte offsets and sizes, 15-minute UTC slots, model ids (validated since #66: anything else is `unknown`), token counts, identity, flaw and unread counts. | [code] `State` (685); [test] `PrivacyCanaryTests`, `LedgerCacheTests.cacheHoldsNoPathsIdsOrContent` |
 | **Shown** | Model ids, token counts, costs, day bars, and the completeness, quantity, identity and cost notes. The notes give counts and fixed wording only. | [code] `PopoverView.swift`; [test] `PrivacyCanaryTests` scans every note, tooltip, cost string and VoiceOver label |
 | **Logged** | Nothing. | [code] the only `NSLog` is the login-item error (`PopoverView.swift:1034`) |
 
 ### 1.2 Grok sessions (`~/.grok/sessions/*/*/usage.json`)
 - **[code] Read:** each file is re-parsed when its modification time changes (`scanGrok` 1379). Fields used: `endedAt`, the token counters, `modelCalls`, `costUsdTicks`, `primaryModelId` (`parseGrokUsage` 1399).
 - **[code] In memory only:** paths and turns (`grokFiles`). **Never persisted:** Grok usage has no place in `State`.
-- **[test] Shown:** `primaryModelId` verbatim in the model list. `PrivacyCanaryTests` asserts that the Grok model id is in no file.
+- **[test] Shown:** `primaryModelId` in the model list, verbatim when it passes the model id policy (#66), else as `unknown` (`ModelIdentifierTests`). `PrivacyCanaryTests` asserts that the Grok model id is in no file.
 
 ### 1.3 Credentials (consent-gated, default off)
 - **[code]** The Claude Code OAuth token is read from the Keychain (`/usr/bin/security`) only with `claude.limits.enabled`. The Grok key is read from `~/.grok/auth.json`, and `grok models` run, only with `grok.enabled`. Both are off by default (`Store.swift` `Prefs`), held in memory, and sent only to their provider's endpoint over ephemeral `URLSession`s (`Dependencies.swift:108–122`).
@@ -94,7 +94,7 @@ Same scheme as [audit 0003](0003-security-inventory.md):
 | C4 | Unsecured cache folder: nothing written, reason names no path | ✔ | ✔ `unsecuredFolderWritesNothingAndSaysNothingSensitive`, `failureTextsNameNoPath` | ✘ | — |
 | C5 | Shown strings (notes, tooltips, cost text, VoiceOver, chart labels, cache issue) carry no canary | ✔ | ✔ `PrivacyCanaryTests` | ✔ V11 on `227015c` | Run 3 screenshots |
 | C6 | Permitted metadata only: model ids (Claude in the cache and the UI, Grok in the UI only), counts, slots | ✔ | ✔ asserted present, and only there | ✔ V10 (model canary) | — |
-| C7 | Model ids stored verbatim, any length | ✔ | ✔ `modelIdIsKeptAsWritten` records it | — | Owner decision (P1) |
+| C7 | Model ids validated before they are counted, stored or shown; others are `unknown` with their tokens (#66) | ✔ | ✔ `ModelIdentifierTests` (policy, Claude main and iteration ids, Grok, planted pre-#66 v7 caches), `PrivacyCanaryTests.invalidModelIdIsNotKept` | — | Run 3 is unaffected: its fixture ids pass |
 | C8 | Leak detection works | — | ✔ three planted leaks (raw path ids, unread line text, branch appended to the model) each fail the suite | — | — |
 | C9 | Cache and key `0600`, folder `0700`, temp files cleaned | ✔ | ✔ `LedgerCacheTests` | ✔ V8, V12 on `227015c` | Run 3 |
 | C10 | Credentials and network off by default; consent persists | ✔ | ✔ `GrokConsentTests`, `QuotaVisibilityTests`, default-launch tests | ✔ V2–V4, V14 (run 2, kernel-reported forks) | Smoke check in Run 3. Code unchanged since `227015c` |
@@ -136,7 +136,7 @@ No **verified defect** exposes transcript content, paths or ids. All checks in �
 
 | ID | Kind | Severity | Source | Reproduction | Exposure | Likelihood | Recommendation |
 |---|---|---|---|---|---|---|---|
-| **P1** | Accepted limitation, with a hardening proposal | Low | `Ledger.swift:1075` (`model`), `State.slots`; Grok `parseGrokUsage` | `PrivacyCanaryTests.modelIdIsKeptAsWritten`: a 2,000-character model id with spaces and slashes is stored and shown verbatim | Whatever a record's `model` field holds is persisted in the clear (Claude) and shown (Claude, Grok) | Low: Claude Code writes model ids there. A corrupted or crafted transcript would be needed | **Owner decision:** bound model ids (for example ≤ 100 characters of `[A-Za-z0-9._:@/-]`) and count anything else as `unknown`. Not implemented here |
+| **P1** | Hardening, **implemented in #66** | Low | `Ledger.modelID`; `ingestClaudeLine`, `parseGrokUsage`, `normaliseModelIDs` (cache load) | Before #66: `PrivacyCanaryTests.modelIdIsKeptAsWritten`, a 2,000-character model id with spaces and slashes was stored and shown verbatim. Now `invalidModelIdIsNotKept` asserts the opposite | Before #66: whatever a record's `model` field held was persisted in the clear (Claude) and shown (Claude, Grok). Now only ids of 1–100 characters of `[A-Za-z0-9.:@-]`, starting with a letter, with no letter/digit run over 32 and no `sk-`/`xai-`/`AKIA`/`ASIA` prefix. Anything else is `unknown`, with its tokens. Pre-#66 caches are normalised at load ([USAGE_CACHE.md](../USAGE_CACHE.md#model-ids-66)) | Low: Claude Code writes model ids there. A corrupted or crafted transcript would be needed | **Residual:** a secret shaped like a model id (letters, digits and hyphens in short runs) still passes. The policy bounds shape and length; it is no guarantee |
 | **P2** | Hygiene | Low | `Hover.swift:39–48` | `defaults write dev.headroom.Headroom debugHover -bool true`, then hover the menu bar | UI geometry and timestamps only; the file is world-readable under the default umask, never pruned, and not removed by Clear | Needs a hidden preference | **Owner decision:** compile the hover log out of release builds, or document it. Not implemented here |
 | **P3** | Collision verified by code; upstream behavior an [assumption] | Medium for the trial | `Resources/Info.plist:12`, `Util.swift:148` (`Application Support/Headroom`), `Ledger.cacheName` | Install upstream Headroom on the same account. *Status: identity isolation implemented in #11 ([audit 0008](0008-identity-isolation.md)); runtime coexistence run passed on 2026-10-17 within recorded limits ([audit 0008 §5.1](0008-identity-isolation.md#51-results-run-20261017t165341z-build-b57dea6)). The owner found an existing `Application Support/Headroom/` on the main account; it stays untouched* | **Verified:** both apps would use the same Application Support folder, `claude-ledger.json` and `dev.headroom.Headroom` preferences domain. SpanDeck deletes any cache that isn't its own version at load and re-indexes. **[assumption]**, upstream's current code not read: upstream writes its own cache there, a version 3 cache with raw paths and ids in the version SpanDeck forked from, so the two apps would keep replacing each other's file and upstream's would hold paths and ids | Only if upstream Headroom is installed on the trial account | **Trial gate:** confirm no Headroom install or `dev.headroom.Headroom` domain on the main account. Identity change to [#11](https://github.com/loloDawit/spandeck/issues/11) (comment, no new issue) |
 | **P4** | Accepted limitation, with a hardening proposal | Low | no `isExcludedFromBackup` | — | Backups hold the cache and its key | Depends on the user's backups | **Owner decision:** mark the cache and key excluded from backup. Not implemented here |
@@ -144,7 +144,7 @@ No **verified defect** exposes transcript content, paths or ids. All checks in �
 | P6 | Accepted limitation | — | in-memory parsing | — | Whole lines are parsed into memory transiently; paths are held in memory | — | Inherent to reading transcripts. Crash-report content not verified (C14) |
 | P7 | Documentation defect | — | `USAGE_CACHE.md` | §2 | — | — | **Fixed in this PR:** Grok re-read rule, hover log |
 
-No new issue is filed: no verified defect qualifies. P3 goes to #11 as a comment. P1, P2 and P4 are proposals for the owner.
+No new issue is filed: no verified defect qualifies. P3 goes to #11 as a comment. P1, P2 and P4 are proposals for the owner. *Update: the owner approved P1, implemented in #66.*
 
 ## 6. Synthetic canary tests (`Tests/HeadroomTests/PrivacyCanaryTests.swift`)
 
@@ -162,7 +162,7 @@ No new issue is filed: no verified defect qualifies. P3 goes to #11 as a comment
 - a subagent file;
 - Grok project and session folder names, a Grok prompt field, and a Grok CLI key.
 
-**Permitted:** the Claude model id (asserted present in the cache and the model list) and the Grok model id (asserted present in the UI, absent from every file). Counts and times are also permitted.
+**Permitted:** the Claude model id (asserted present in the cache and the model list) and the Grok model id (asserted present in the UI, absent from every file). Both pass the model id policy (#66). An id that doesn't is asserted absent from the cache and every shown string. Counts and times are also permitted.
 
 **Scanned:** every file under the sandbox outside the fixtures, as raw bytes and JSON-escaped, plus every shown string: notes and their details, the cost note, cost text, details and VoiceOver labels for each period and the window, chart family labels, model rows, and the cache issue.
 
@@ -221,10 +221,10 @@ The credential, network, consent, storage and snapshot sources are unchanged sin
 **Open (must close before a GO):**
 1. **Run 3** on `226a7d6` or this PR's head passes §7, including the new `privacy` fixture and screenshots.
 2. **P3:** the owner confirms the main account has no Headroom install, no `~/Library/Application Support/Headroom/` and no `dev.headroom.Headroom` preferences domain. If it has any of them, decide what to do with that data first.
-3. The owner **accepts or schedules P1, P2 and P4** (none blocks by itself).
+3. The owner **accepts or schedules P2 and P4** (neither blocks by itself). P1 is implemented in #66.
 4. The owner **accepts the residual limits:**
    - the key sits beside the cache, including in backups;
-   - model ids and 15-minute activity per model are in the clear;
+   - model ids (validated, #66) and 15-minute activity per model are in the clear;
    - no secure erase;
    - crash-report and Spotlight content are unverified.
 
