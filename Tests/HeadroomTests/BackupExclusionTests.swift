@@ -231,7 +231,11 @@ struct BackupExclusionTests {
         ledger.flush()
         #expect(!marker.calls.isEmpty)
         #expect(marker.calls.allSatisfy { $0.hasPrefix(".") && $0.contains(".tmp-") }, "\(marker.calls)")
-        #expect(Set(marker.calls.map { String($0.dropFirst().prefix { $0 != "." }) }) == ["claude-ledger"])
+        // Typed in steps so older compilers (Xcode 16.4 on CI) type-check it quickly.
+        let stems: Set<String> = Set(marker.calls.map { (name: String) -> String in
+            String(name.dropFirst().prefix { $0 != "." })
+        })
+        #expect(stems == ["claude-ledger"])
     }
 
     /// Fail closed: a new cache or key that can't be marked is never moved into place. Nothing is written anywhere,
