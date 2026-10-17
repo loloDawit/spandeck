@@ -493,7 +493,7 @@ The re-review of `5f48f65` found that a model without a price returned all of it
 The review of `1a7669c` found the middle-edit gap above, and the owner [recorded a policy on #56](https://github.com/loloDawit/spandeck/issues/56). It is implemented as follows.
 - **[code] Same size:** when the stamp moved and the size equals the size seen last time, the file is read again from the start, whatever the anchor says. `FileMark.size` keeps that size, because the offset is short of it when the last line is incomplete. Comparing with the offset would miss a same-size rewrite of such a file.
   - A metadata-only change now costs one full read of that file. A restart marks the cache for saving, so it isn't repeated after a relaunch.
-  - A changed stamp or size alone, such as an incomplete line growing, still isn't saved.
+  - A changed stamp or size alone, such as an incomplete line growing, still wasn't saved at `bf374de`. §11.6 fixes that.
 - **[code] Sampled anchors:** the anchor covers the first and last 4 KiB before the offset and 16 windows evenly spaced between them: 18 windows, at most 72 KiB hashed per check.
   - **Accepted, deterministic limit:** a larger rewrite changing only bytes outside all of them isn't detected.
   - **Larger windows were rejected:** exact detection would hash the whole prefix on every append.
@@ -516,3 +516,19 @@ The review of `1a7669c` found the middle-edit gap above, and the owner [recorded
   - head and tail only;
   - a restart not saved;
   - no anchor check.
+
+### 11.6 Follow-up: the size seen last must survive a quit
+- **[code] The gap** (review of `bf374de`): `readClaudeFile` kept a new `size` in memory but only marked the cache for saving on a restart or a new offset or anchor. An incomplete line that made the file grow was therefore lost at quit. A same-size rewrite outside every window, made while the app was closed, then looked like growth since the saved size. The anchors matched, and the rewritten record was missed.
+- **[code] Fix:** any change to a file's mark marks the cache for saving. Saves keep their cadence: at most one every 10 minutes, plus one on quit.
+- **[test] `sizeSeenOnlyBeforeAQuitSurvivesTheRelaunch`** goes through the whole sequence:
+  - append an incomplete line, refresh, quit;
+  - rewrite a middle record outside every window at that size, relaunch: counted once, still pending, one restart;
+  - relaunch again: nothing read.
+
+  It failed at `bf374de`. The old save rule, and a rule that saves no size, stamp or restart change, are each caught.
+- **[measure] Saves:** an hour of refreshes every 5 s on an 18 MB hot transcript gives 5 saves on `main`, 0 at `bf374de` (the gap) and 5 with this fix, both with an incomplete line that never completes and with one completing every minute. There are no more saves than on `main`, whose candidates always marked the cache dirty. Refresh medians are 0.30–0.35 ms on `main` and 0.41–0.51 ms here.
+- **[test] Parallel failures** seen earlier on Grok, quota and pricing timing tests didn't reproduce:
+  - those four suites alone: 10 of 10 runs passed on both `main` and the branch;
+  - the full parallel suite: 5 of 5 passed on each, at load 23–53.
+
+  `concurrentDownloadsDontOverlap` had also failed once at `5f48f65`, before #56. They are not attributed to this change, nor confirmed as #46.

@@ -1021,10 +1021,10 @@ final class Ledger {
         if restarted { readStats.restarts += 1 }
         readStats.bytes += end - start
         let next = FileMark(offset: UInt64(end), size: size, stamp: stamp, anchor: anchor)
-        // A new stamp or size alone (a metadata change, an incomplete line growing) isn't worth a save: unsaved, it
-        // costs one more check after a relaunch. A restart is, or the file would be read again after every relaunch.
-        if next != mark { state.files[id] = next }
-        if restarted || next.offset != mark?.offset || next.anchor != mark?.anchor { dirty = true }
+        // Any change to the mark is saved (at the usual cadence, and on quit): the size seen last is what tells a
+        // same-size rewrite after a relaunch, also when only an incomplete line made the file grow (review of
+        // `bf374de`), and a restart saved with its stamp isn't repeated after every relaunch.
+        if next != mark { state.files[id] = next; dirty = true }
         setPending(id, UInt64(end) < size)
     }
 
