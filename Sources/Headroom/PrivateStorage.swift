@@ -8,6 +8,9 @@ enum StorageFailure: Error, Equatable {
     case notOwned
     /// The folder or file couldn't be made owner-only.
     case permissions
+    /// The cache or key couldn't be marked excluded from backup (audit 0007, P4). Foundation's error names the path, so
+    /// it isn't kept.
+    case backupExclusion
     case io(Int32)
 
     var text: String {
@@ -15,6 +18,7 @@ enum StorageFailure: Error, Equatable {
         case .unsafeLocation: return "the cache folder or file is a link or not a regular folder or file"
         case .notOwned: return "the cache folder or file belongs to another user"
         case .permissions: return "the cache couldn't be made readable by you only"
+        case .backupExclusion: return "the cache or its key couldn't be excluded from backups"
         case .io(let code): return String(cString: strerror(code))
         }
     }
@@ -28,6 +32,19 @@ struct PrivateDirectory {
     let url: URL
     /// chmod(2); a test seam for a folder whose mode can't be changed.
     var setMode: (String, mode_t) -> Int32 = { chmod($0, $1) }
+    /// Marks a file excluded from backup; a test seam for a volume that can't hold the attribute.
+    var markExcluded: (URL) throws -> Void = PrivateDirectory.setExcludedFromBackup
+
+    /// Sets `isExcludedFromBackup` (audit 0007, P4), the attribute Time Machine reads, and reads it back through a new
+    /// URL so a value Foundation cached for the old one can't stand in for the file's own.
+    static func setExcludedFromBackup(_ file: URL) throws {
+        var url = file
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+        guard try URL(fileURLWithPath: file.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+                == true else { throw StorageFailure.backupExclusion }
+    }
 
     private static let tempMarker = ".tmp-"
 
@@ -69,8 +86,10 @@ struct PrivateDirectory {
     }
 
     /// Replaces the file atomically. The temporary file is created 0600 (O_EXCL, O_NOFOLLOW) before anything is
-    /// written to it, and removed if the write fails.
-    func write(_ data: Data, to name: String) throws {
+    /// written to it, and removed if the write fails. With `excludedFromBackup`, it is marked before rename(2) moves it
+    /// into place: a replacement doesn't inherit the old file's attribute, but keeps its own. If it can't be marked,
+    /// nothing is moved into place.
+    func write(_ data: Data, to name: String, excludedFromBackup: Bool) throws {
         try prepare()
         let temp = url.appendingPathComponent("." + name + Self.tempMarker + UUID().uuidString).path
         let fd = open(temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -95,9 +114,27 @@ struct PrivateDirectory {
         }
         if failure == nil, fsync(fd) != 0 { failure = .io(errno) }
         close(fd)
+        if failure == nil, excludedFromBackup {
+            do { try markExcluded(URL(fileURLWithPath: temp)) } catch { failure = .backupExclusion }
+        }
         if let failure { throw failure }
         guard rename(temp, url.appendingPathComponent(name).path) == 0 else { throw StorageFailure.io(errno) }
         moved = true
+    }
+
+    /// Marks a file already in the folder excluded from backup, without changing its bytes. A missing file or folder
+    /// is fine; a symlink, or anything but a regular file of the user's, is refused and never followed.
+    func excludeFromBackup(_ name: String) throws {
+        guard try checkExistingFolder() else { return }
+        let file = url.appendingPathComponent(name)
+        var st = stat()
+        if lstat(file.path, &st) != 0 {
+            if errno == ENOENT { return }
+            throw StorageFailure.io(errno)
+        }
+        guard st.st_mode & S_IFMT == S_IFREG else { throw StorageFailure.unsafeLocation }
+        guard st.st_uid == getuid() else { throw StorageFailure.notOwned }
+        do { try markExcluded(file) } catch { throw StorageFailure.backupExclusion }
     }
 
     /// Removes the file; a symlink is removed itself, never its target. A missing file or folder is fine.
