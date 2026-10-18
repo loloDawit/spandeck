@@ -13,7 +13,8 @@ enum ProviderRequest {
 struct LimitEntry: Identifiable {
     var id: String
     var name: String
-    var percent: Double
+    /// nil when the provider didn't report a usable percent (F-2, #4): unavailable, never 0%.
+    var percent: Double?
     var resetsAt: Date?
     /// Length of the window, used to draw the pace marker.
     var window: TimeInterval?
@@ -107,7 +108,7 @@ final class ClaudeLimitsClient {
             let kind = l.string("kind") ?? "limit"
             let scopeName = l.dict("scope")?.dict("model")?.string("display_name")
                 ?? l.dict("scope")?.dict("surface")?.string("display_name")
-            var entry = LimitEntry(id: "\(kind)-\(i)", name: kind, percent: l.double("percent") ?? 0,
+            var entry = LimitEntry(id: "\(kind)-\(i)", name: kind, percent: l.percent("percent"),
                                    resetsAt: ISO.parse(l.string("resets_at")))
             switch kind {
             case "session":
@@ -121,8 +122,8 @@ final class ClaudeLimitsClient {
             default:
                 entry.name = "Weekly " + (scopeName ?? kind.replacingOccurrences(of: "_", with: " "))
                 entry.window = kind.hasPrefix("weekly") ? 7 * 86400 : nil
-                if let share = shares.first(where: { $0.int("limit_index") == i }),
-                   let used = share.double("used_percent_of_weekly"), let allow = share.double("allowance_percent_of_weekly") {
+                if let share = shares.first(where: { $0.optionalInt("limit_index") == i }),
+                   let used = share.percent("used_percent_of_weekly"), let allow = share.percent("allowance_percent_of_weekly") {
                     entry.note = "\(Int(used))% of weekly used, \(Int(allow))% allowed"
                 }
                 if result.model == nil || scopeName?.localizedCaseInsensitiveContains("fable") == true {
@@ -134,13 +135,13 @@ final class ClaudeLimitsClient {
 
         // Older response shape without the `limits` array.
         if result.session == nil, let fh = json.dict("five_hour") {
-            let e = LimitEntry(id: "five_hour", name: "Session (5h)", percent: fh.double("utilization") ?? 0,
+            let e = LimitEntry(id: "five_hour", name: "Session (5h)", percent: fh.percent("utilization"),
                                resetsAt: ISO.parse(fh.string("resets_at")), window: 5 * 3600)
             result.session = e
             result.all.insert(e, at: 0)
         }
         if result.weekly == nil, let sd = json.dict("seven_day") {
-            let e = LimitEntry(id: "seven_day", name: "Weekly", percent: sd.double("utilization") ?? 0,
+            let e = LimitEntry(id: "seven_day", name: "Weekly", percent: sd.percent("utilization"),
                                resetsAt: ISO.parse(sd.string("resets_at")), window: 7 * 86400)
             result.weekly = e
             result.all.append(e)
@@ -156,7 +157,8 @@ struct GrokPlan {
     var periodStart: Date?
     var periodEnd: Date?
     var periodName: String
-    var products: [(name: String, percent: Double)]
+    /// A product's percent is nil when it wasn't reported usably (F-2, #4).
+    var products: [(name: String, percent: Double?)]
     var fetchedAt: Date
 }
 
@@ -363,17 +365,15 @@ final class GrokClient {
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let c = json.dict("config") else { throw GrokError.unexpectedResponse }
-        // A missing or non-numeric usage figure is a malformed answer, not 0% used (#21). JSON booleans are NSNumbers too.
-        guard let used = c["creditUsagePercent"] as? NSNumber, CFGetTypeID(used) != CFBooleanGetTypeID() else {
-            throw GrokError.unexpectedResponse
-        }
+        // A missing, non-numeric or out-of-range usage figure is a malformed answer, not 0% used (#21, F-2).
+        guard let used = c.percent("creditUsagePercent") else { throw GrokError.unexpectedResponse }
         let period = c.dict("currentPeriod")
         let type = (period?.string("type") ?? "").replacingOccurrences(of: "USAGE_PERIOD_TYPE_", with: "").lowercased()
-        let products = (c["productUsage"] as? [[String: Any]] ?? []).compactMap { p -> (String, Double)? in
+        let products = (c["productUsage"] as? [[String: Any]] ?? []).compactMap { p -> (String, Double?)? in
             guard let n = p.string("product") else { return nil }
-            return (n, p.double("usagePercent") ?? 0)
+            return (n, p.percent("usagePercent"))
         }
-        return GrokPlan(percent: used.doubleValue,
+        return GrokPlan(percent: used,
                         periodStart: ISO.parse(period?.string("start") ?? c.string("billingPeriodStart")),
                         periodEnd: ISO.parse(period?.string("end") ?? c.string("billingPeriodEnd")),
                         periodName: type.isEmpty ? "period" : type,

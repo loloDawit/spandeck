@@ -9,8 +9,9 @@ extension Color {
     static let claude = Color(nsColor: Palette.claude)
     static let grok = Color(nsColor: Palette.grok)
 
-    static func severity(_ pct: Double, base: Color) -> Color {
-        pct >= 90 ? .red : pct >= 75 ? .orange : base
+    static func severity(_ pct: Double?, base: Color) -> Color {
+        guard let pct else { return base }
+        return pct >= 90 ? .red : pct >= 75 ? .orange : base
     }
 }
 
@@ -138,9 +139,10 @@ struct LiveChart: View {
     }
 }
 
-/// Capsule progress bar with an optional pace marker showing where usage would be if spread evenly.
+/// Capsule progress bar with an optional pace marker showing where usage would be if spread evenly. Without a percent
+/// (unavailable, F-2) only the empty track is drawn, never a bar at 0%.
 struct UsageBar: View {
-    let percent: Double
+    let percent: Double?
     let tint: Color
     var pace: Double?
 
@@ -148,9 +150,11 @@ struct UsageBar: View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.09))
-                Capsule()
-                    .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(4, g.size.width * min(percent, 100) / 100))
+                if let percent {
+                    Capsule()
+                        .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(4, g.size.width * min(percent, 100) / 100))
+                }
                 if let pace {
                     Rectangle().fill(Color.primary.opacity(0.65))
                         .frame(width: 1.5, height: g.size.height + 4)
@@ -162,12 +166,29 @@ struct UsageBar: View {
     }
 }
 
+/// Copy for a quota limit (F-2, #4), kept apart from the views so tests can check it. Provisional wording until #7
+/// settles the qualifier text.
+enum LimitText {
+    static let unavailable = "Usage not reported"
+
+    /// The row's note: the reason first when the percent is unavailable, then any note the limit has.
+    static func note(_ e: LimitEntry) -> String? {
+        e.percent == nil ? ([unavailable] + [e.note].compactMap { $0 }).joined(separator: " · ") : e.note
+    }
+
+    /// Each product's percent when Grok reports more than one; an unavailable one shows "--", never 0%.
+    static func products(_ p: GrokPlan) -> String? {
+        p.products.count > 1 ? p.products.map { "\($0.name) \(Fmt.pct($0.percent))" }.joined(separator: "  ") : nil
+    }
+}
+
 struct LimitRow: View {
     let entry: LimitEntry
     let tint: Color
 
-    private var pace: Double? {
-        guard let w = entry.window, let r = entry.resetsAt else { return nil }
+    /// Where usage would be if spread evenly over the window. None without a percent: there's no bar to compare it with.
+    static func pace(_ entry: LimitEntry) -> Double? {
+        guard entry.percent != nil, let w = entry.window, let r = entry.resetsAt else { return nil }
         return (1 - r.timeIntervalSinceNow / w) * 100
     }
 
@@ -179,9 +200,9 @@ struct LimitRow: View {
                 Text(Fmt.pct(entry.percent)).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(Color.severity(entry.percent, base: .primary))
             }
-            UsageBar(percent: entry.percent, tint: Color.severity(entry.percent, base: tint), pace: pace)
+            UsageBar(percent: entry.percent, tint: Color.severity(entry.percent, base: tint), pace: Self.pace(entry))
             HStack {
-                if let note = entry.note { Text(note) }
+                if let note = LimitText.note(entry) { Text(note) }
                 Spacer()
                 if let r = entry.resetsAt { Text("resets in \(Fmt.until(r))") }
             }
@@ -483,7 +504,7 @@ struct LimitsCard: View {
                                trailing: view.staleBecause == nil ? p.periodName.capitalized + " credits" : "Stale")
                     LimitRow(entry: LimitEntry(id: "grok", name: "Credits used", percent: p.percent, resetsAt: p.periodEnd,
                                                window: window(p),
-                                               note: p.products.count > 1 ? p.products.map { "\($0.name) \(Fmt.pct($0.percent))" }.joined(separator: "  ") : nil),
+                                               note: LimitText.products(p)),
                              tint: .grok)
                     if let failure = view.staleBecause {
                         Text("\(failure.title). Not current: last updated \(Fmt.ago(p.fetchedAt)). \(failure.guidance)")
