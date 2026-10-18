@@ -46,14 +46,14 @@ The ledger's clock is injected (`BenchClock`) to force a 5-minute full scan, an 
 
 | # | Scenario | Stands for | n |
 |---|---|---|---|
-| 1 | First scan with no cache, a new `Ledger` each time | cold launch, first run | 5 (small) / 3 |
+| 1 | First scan with no cache, a new `Ledger` each time (it includes the first cache save) | cold launch, first run | 5 (small) / 3 |
 | 2 | A new `Ledger` on the saved cache, then its first refresh | warm launch: relaunch, login | 5 |
 | 3 | `refresh` with nothing new | the 10-second usage tick | 30 |
-| 4 | 10 new messages (30 lines) appended to the hot file, then `refresh` | the tick while a session runs | 30 |
+| 4 | 10 new messages (40 lines) appended to the hot file, then `refresh` | the tick while a session runs | 30 |
 | 4b | `flush()` after a change | the cache save: every 10 min while running, and on quit | 10 |
 | 5 | Clock +301 s, then `refresh` | the 5-minute full scan, nothing new | 10 |
 | 6 | A new 5-hour window start | summary recomputation alone | 10 |
-| 7 | Clock +8 h, 3 files grown, then `refresh` | wake from sleep (`didWakeNotification` → `refreshUsage`) | 5 |
+| 7 | Clock +8 h, the three newest files grown, then `refresh` (it also saves the cache, as the app's would) | wake from sleep (`didWakeNotification` → `refreshUsage`) | 5 |
 | 8 | *Clear cached usage data*, then `refresh` | cache rebuild: also what a version bump costs | 5 (small) / 3 |
 | 9 | 10 `refresh` calls at once on the ledger | backpressure at the ledger queue | 1 |
 | 9b | `flush()` 50 ms into a cold scan | quit during a scan (`applicationWillTerminate`) | 1 |
@@ -85,20 +85,20 @@ The ledger's clock is injected (`BenchClock`) to force a 5-minute full scan, an 
 
 ## 4. Results: 2026-10-18, Apple M2 Pro
 
-**About this run:**
-- Raw results: [`perf/2026-10-18-m2pro/`](perf/2026-10-18-m2pro/), rendered with `scripts/bench-report.py`. A first run (same machine, same day, before the quit and hover scenarios were added) agreed within 13 % on every shared median of 40 ms or more (the largest gap: medium warm launch, 463 → 405 ms). Sub-millisecond scenarios differed by up to 19 % (0.61 → 0.50 ms).
-- `commit` is the base: the harness was uncommitted at run time and is committed unchanged in this PR, hence `dirty`.
-- **Load:** other work was running on the machine (load average about 3 on 12 cores, shown per dataset). Treat single-digit-millisecond differences as noise.
+**About this run (run 3):**
+- Raw results: [`perf/2026-10-18-m2pro/`](perf/2026-10-18-m2pro/), produced by the committed harness (`a824c88`, no local changes) and rendered with `scripts/bench-report.py`.
+- Two earlier runs the same day, on a harness the review of #85 corrected, are not committed. Where they differ by more than about 15 %, the range is given in §4.4.
+- **Load:** other work was running on the machine (load average about 3.5 on 12 cores, shown per dataset). Treat single-digit-millisecond differences as noise.
 
 ### 4.1 Environment and datasets
 
-**Environment:** model `Mac14,10`, cpu `Apple M2 Pro`, cores `12`, memory_bytes `17179869184`, macos `26.5`, macos_build `25F71`, swift `Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)`, xcode `Xcode 26.6 Build version 17F113`, commit `f63fd169a2edcdf72778f095ac6d94e8ebb517aa`, build `swift test -c release -Xswiftc -enable-testing -Xswiftc -DDEBUG`, power `Now drawing from 'AC Power'`
+**Environment:** model `Mac14,10`, cpu `Apple M2 Pro`, cores `12`, memory_bytes `17179869184`, macos `26.5`, macos_build `25F71`, swift `Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)`, xcode `Xcode 26.6 Build version 17F113`, commit `a824c88406536791a00ad7577669941a3750bd8c`, build `swift test -c release -Xswiftc -enable-testing -Xswiftc -DDEBUG`, power `Now drawing from 'AC Power'`
 
 | Dataset | Transcripts | Messages | Lines | Bytes on disk | Grok turns | Load avg before → after |
 |---|---|---|---|---|---|---|
-| small | 10 | 2,000 | 8,000 | 10.2 MB | 100 | { 4.31 4.18 3.86 } → { 2.97 3.57 3.65 } |
-| medium | 100 | 30,000 | 120,000 | 152.7 MB | 1,000 | { 2.97 3.57 3.65 } → { 3.28 3.36 3.54 } |
-| large | 301 | 120,000 | 479,600 | 610.8 MB | 5,000 | { 3.28 3.36 3.54 } → { 2.63 3.34 3.48 } |
+| small | 10 | 2,000 | 8,000 | 10.2 MB | 100 | { 3.56 3.39 3.45 } → { 3.11 3.38 3.44 } |
+| medium | 100 | 30,000 | 120,000 | 152.7 MB | 1,000 | { 3.11 3.38 3.44 } → { 3.29 3.43 3.45 } |
+| large | 301 | 120,000 | 480,000 | 611.4 MB | 5,000 | { 3.29 3.43 3.45 } → { 3.75 3.72 3.67 } |
 
 
 ### 4.2 Latency
@@ -107,83 +107,97 @@ Wall time in ms: median / p95 / worst (n). CPU is the median, in ms.
 
 | Scenario | small | medium | large |
 |---|---|---|---|
-| Cold launch: first scan, no cache | 293.6 / 335.2 / 335.2 (5); CPU 292.9 | 4196.1 / 4226.7 / 4226.7 (3); CPU 4182.3 | 18,388 / 19,044 / 19,044 (3); CPU 17,005 |
-| Warm launch: cache load + first refresh | 44.4 / 45.0 / 45.0 (5); CPU 44.3 | 404.9 / 433.9 / 433.9 (5); CPU 404.7 | 1523.7 / 1589.0 / 1589.0 (5); CPU 1520.3 |
-| 10 s tick, nothing new | 0.4 / 0.5 / 0.7 (30); CPU 0.5 | 1.1 / 1.2 / 1.7 (30); CPU 1.1 | 2.5 / 3.4 / 3.7 (30); CPU 2.6 |
-| 10 s tick, 10 new messages | 11.0 / 12.6 / 36.2 (30); CPU 11.0 | 36.6 / 43.2 / 322.6 (30); CPU 36.6 | 49.3 / 54.5 / 1259.1 (30); CPU 48.9 |
-| Cache save (`flush`) | 27.7 / 30.9 / 30.9 (10); CPU 27.5 | 294.2 / 325.0 / 325.0 (10); CPU 290.3 | 1167.4 / 1206.8 / 1206.8 (10); CPU 1143.5 |
-| 5 min full scan, nothing new | 0.5 / 0.7 / 0.7 (10); CPU 0.5 | 2.1 / 2.5 / 2.5 (10); CPU 2.1 | 5.6 / 6.9 / 6.9 (10); CPU 5.6 |
-| Summary only (window change) | 10.3 / 11.2 / 11.2 (10); CPU 10.2 | 35.5 / 41.3 / 41.3 (10); CPU 35.5 | 47.1 / 48.3 / 48.3 (10); CPU 47.1 |
-| Wake after 8 h (full scan, 3 files grew) | 48.0 / 64.3 / 64.3 (5); CPU 43.0 | 320.8 / 357.5 / 357.5 (5); CPU 319.5 | 1271.0 / 1296.4 / 1296.4 (5); CPU 1239.1 |
-| Rebuild after Clear cached usage data | 354.1 / 367.6 / 367.6 (5); CPU 353.4 | 4284.8 / 4606.4 / 4606.4 (3); CPU 4276.5 | 18,264 / 18,696 / 18,696 (3); CPU 16,970 |
+| Cold launch: first scan, no cache | 313.5 / 355.3 / 355.3 (5); CPU 311.2 | 4,206.6 / 4,262.7 / 4,262.7 (3); CPU 4,196.9 | 24,046.2 / 26,680.0 / 26,680.0 (3); CPU 18,554.5 |
+| Warm launch: cache load + first refresh | 47.4 / 48.5 / 48.5 (5); CPU 47.2 | 403.6 / 435.6 / 435.6 (5); CPU 403.5 | 1,799.8 / 1,901.7 / 1,901.7 (5); CPU 1,783.7 |
+| 10 s tick, nothing new | 0.4 / 0.6 / 0.7 (30); CPU 0.4 | 1.1 / 1.3 / 1.6 (30); CPU 1.2 | 2.7 / 3.4 / 5.9 (30); CPU 2.8 |
+| 10 s tick, 10 new messages | 12.0 / 13.0 / 72.2 (30); CPU 12.0 | 36.8 / 38.1 / 341.6 (30); CPU 36.8 | 54.0 / 86.1 / 1,333.3 (30); CPU 52.4 |
+| Cache save (`flush`) | 27.7 / 31.6 / 31.6 (10); CPU 27.4 | 289.4 / 312.6 / 312.6 (10); CPU 288.0 | 1,233.3 / 1,328.0 / 1,328.0 (10); CPU 1,222.8 |
+| 5 min full scan, nothing new | 0.5 / 0.7 / 0.7 (10); CPU 0.5 | 2.1 / 2.5 / 2.5 (10); CPU 2.1 | 6.5 / 7.2 / 7.2 (10); CPU 6.5 |
+| Summary only (window change) | 9.7 / 9.8 / 9.8 (10); CPU 9.7 | 35.3 / 35.7 / 35.7 (10); CPU 35.3 | 50.7 / 55.5 / 55.5 (10); CPU 50.7 |
+| Wake after 8 h (full scan, 3 files grew, cache save) | 42.1 / 46.7 / 46.7 (5); CPU 41.7 | 321.2 / 337.7 / 337.7 (5); CPU 319.6 | 1,307.9 / 1,398.9 / 1,398.9 (5); CPU 1,272.1 |
+| Rebuild after Clear cached usage data | 357.9 / 365.4 / 365.4 (5); CPU 357.1 | 4,306.6 / 4,597.2 / 4,597.2 (3); CPU 4,289.5 | 19,006.1 / 26,600.7 / 26,600.7 (3); CPU 17,646.2 |
 
 ### 4.3 Memory, I/O, main thread, rendering, idle
 
 | Measure | small | medium | large |
 |---|---|---|---|
-| Bytes scanned, first scan | 10.2 MB | 152.5 MB | 609.8 MB |
+| Bytes scanned, first scan | 10.2 MB | 152.5 MB | 610.3 MB |
 | Cache file | 1.2 MB | 13.1 MB | 47.9 MB |
 | Disk written, first scan (median) | 1.2 MB | 13.1 MB | 47.9 MB |
+| Disk written, wake (median) | 1.3 MB | 13.3 MB | 48.1 MB |
 | Disk written, one cache save (median) | 1.3 MB | 13.2 MB | 48.0 MB |
-| Disk read, first scan (median; file cache warm) | 0.0 MB | 0.0 MB | 611.8 MB |
-| All-scenario process: footprint peak (incl. generator, several ledgers) | 65.2 MB | 237.4 MB | 950.6 MB |
-| 10 refreshes at once (ledger queue) | 14.3 ms | 48.3 ms | 61.1 ms |
-| Quit (`flush`) 50 ms into a cold scan: main thread blocked | 311.5 ms | 4211.5 ms | 18,038 ms |
-| Hover top consumers, cpu / memory (median) | 0.91 / 0.97 ms | 0.80 / 0.84 ms | 0.89 / 0.94 ms |
+| Disk read, first scan (median; file cache warm) | 0.0 MB | 0.0 MB | 612.2 MB |
+| All-scenario process: footprint peak (incl. generator, several ledgers) | 72.7 MB | 238.8 MB | 948.9 MB |
+| 10 refreshes at once (ledger queue) | 15.2 ms | 43.9 ms | 64.7 ms |
+| Quit (`flush`) 50 ms into a cold scan: main thread blocked | 323.9 ms | 4,158.9 ms | 18,233.8 ms |
+| Hover top consumers, cpu / memory (median) | 0.81 / 0.87 ms | 0.83 / 0.87 ms | 0.80 / 0.87 ms |
 | App refreshes dropped while one runs | 10 of 10 | 10 of 10 | 10 of 10 |
-| Main-actor lateness during a cold scan, p95 / worst | 1.3 / 1.3 ms | 1.3 / 1.4 ms | 2.6 / 3.4 ms |
-| Menu-bar strip render, median / worst | 0.008 / 35.5 ms | 0.009 / 25.8 ms | 0.008 / 72.2 ms |
-| Popover full render, median / worst (first) | 26.8 / 82.1 ms | 25.1 / 94.4 ms | 25.3 / 301.0 ms |
-| Sampler cpu / memory / gpu / battery (median) | 0.005 / 0.003 / 0.020 / 0.665 ms | 0.005 / 0.003 / 0.019 / 0.649 ms | 0.005 / 0.003 / 0.020 / 0.657 ms |
-| Idle at app cadence, CPU share of one core | 0.14% over 60 s | 0.12% over 60 s | 0.15% over 60 s |
+| Main-actor lateness during a cold scan, p95 / worst | 1.3 / 1.4 ms | 1.3 / 2.6 ms | 1.3 / 2.2 ms |
+| Menu-bar strip render, median / worst | 0.008 / 43.3 ms | 0.008 / 52.6 ms | 0.008 / 73.8 ms |
+| Popover full render, median / worst (first) | 26.4 / 106.5 ms | 25.3 / 93.9 ms | 27.9 / 419.1 ms |
+| Sampler cpu / memory / gpu / battery (median) | 0.005 / 0.003 / 0.019 / 0.649 ms | 0.005 / 0.003 / 0.019 / 0.651 ms | 0.005 / 0.003 / 0.020 / 0.655 ms |
+| Idle at app cadence, CPU share of one core | 0.13% over 60 s | 0.11% over 60 s | 0.13% over 60 s |
 
 One ledger per process (memory runs):
 
 | Dataset | Run | Wall | Footprint before | After the scan | Steady (next tick) | Peak | Max RSS |
 |---|---|---|---|---|---|---|---|
-| large | cold | 19,572 ms | 6.5 MB | 289.1 MB | 289.4 MB | 587.4 MB | 607.6 MB |
-| large | warm | 1657.1 ms | 6.4 MB | 379.3 MB | 379.6 MB | 379.6 MB | 406.3 MB |
-| medium | cold | 4391.2 ms | 6.3 MB | 103.0 MB | 103.1 MB | 164.6 MB | 189.7 MB |
-| medium | warm | 465.2 ms | 6.4 MB | 108.5 MB | 108.6 MB | 108.6 MB | 135.5 MB |
-| small | cold | 315.9 ms | 6.6 MB | 24.9 MB | 25.0 MB | 25.0 MB | 52.0 MB |
-| small | warm | 56.0 ms | 6.4 MB | 16.7 MB | 16.7 MB | 16.7 MB | 43.6 MB |
+| large | cold | 21,591.8 ms | 6.5 MB | 281.4 MB | 281.5 MB | 585.9 MB | 609.2 MB |
+| large | warm | 1,893.2 ms | 6.3 MB | 544.8 MB | 545.0 MB | 545.0 MB | 571.8 MB |
+| medium | cold | 5,933.6 ms | 6.4 MB | 100.7 MB | 100.8 MB | 165.5 MB | 187.6 MB |
+| medium | warm | 598.7 ms | 6.5 MB | 150.6 MB | 150.6 MB | 150.6 MB | 168.6 MB |
+| small | cold | 342.9 ms | 6.5 MB | 24.9 MB | 24.9 MB | 24.9 MB | 52.0 MB |
+| small | warm | 62.4 ms | 6.4 MB | 16.5 MB | 16.6 MB | 16.6 MB | 43.5 MB |
 
 ### 4.4 What the numbers say
 
 - **Idle is cheap.** At the app's cadence with nothing new:
-  - 0.12–0.15 % of one core, the same for every dataset;
+  - 0.11–0.13 % of one core, for every dataset;
   - no disk writes;
-  - a 10-second tick costs 0.4–2.5 ms (median) and the hardware probes microseconds; battery is the costliest at about 0.66 ms every 5 s.
-- **The main thread isn't held during scans.**
-  - Scanning runs on the ledger's serial queue. The main actor was never late by more than 3.4 ms during an 18-second cold scan.
+  - a 10-second tick costs 0.4–2.7 ms (median) and the hardware probes microseconds; battery is the costliest at about 0.65 ms every 5 s.
+- **Background scans don't hold the main thread.**
+  - Scanning runs on the ledger's serial queue. During a cold scan, the main actor was never late by more than 2.6 ms.
   - `ProviderServices.refreshUsage` **drops** a refresh requested while one runs (10 of 10 dropped), so ticks can't pile up.
   - The ledger queue itself doesn't coalesce: 10 direct calls run one after another. The app-level guard is the only backpressure.
+  - **Not measured on the main thread:** the store publish after a refresh, and the popover update. The popover's *first* full render is 94–419 ms (below) and runs on the main thread.
 - **Quit is held for a whole scan.**
   - `applicationWillTerminate` calls `Ledger.flush()`, a `queue.sync` behind any scan in flight.
   - 50 ms into a cold scan, quitting held the main thread **0.3 s (small), 4.2 s (medium) and 18 s (large)**.
   - Nothing cancels a scan.
 - **New data costs a full summary.**
-  - A tick with 10 new messages costs 11–49 ms, almost all of it summary recomputation: 10–47 ms alone, scenario 6.
+  - A tick with 10 new messages costs 12–54 ms (median), almost all of it summary recomputation: 10–51 ms alone, scenario 6.
   - The summary prices every 15-minute slot × model on any change (the #57 note on #8).
-- **The JSON cache dominates launch and saves.**
+- **The JSON cache dominates launch, saves and wake.**
 
   | Dataset | Cache file | Warm launch (decode + refresh) | One save |
   |---|---|---|---|
   | medium | 13 MB | 0.40 s | 0.29 s |
-  | large | 48 MB | 1.5 s | 1.2 s |
+  | large | 48 MB | 1.8 s | 1.2 s |
 
-  - A save runs every 10 minutes while data changes, and on quit, **on the ledger queue**. A tick that lands on a save waits for it: that's every dataset's worst incremental tick, which wrote one cache's worth (36 ms, 0.32 s and 1.26 s).
-- **First scan and rebuild are CPU-bound** at about 33 MB/s of transcript (18 s for 610 MB). A rebuild (clear, lost key, or a cache version bump) costs the same as a first scan.
-- **Memory grows with history: about 3.3 KB resident per logged message.**
-  - One ledger holds 25 MB (small), 103 MB (medium) and 289 MB (large) after a cold scan.
-  - A warm launch on large settles **higher**, at 380 MB, than a cold scan does; decoding the cache costs more than building the state.
-  - The cold scan's peak on large is 587 MB.
+  - A save runs every 10 minutes while data changes, and on quit, **on the ledger queue**, so a tick that lands on a save waits for it.
+  - That is every dataset's worst incremental tick: it wrote one cache's worth (72 ms, 0.34 s and 1.33 s).
+  - **Wake** (1.3 s on large) is mostly that save. After 8 hours with new data, the wake refresh saves the cache (48 MB written). The full scan and summary are a small part of it; compare scenarios 5 and 6.
+- **First scan and rebuild:**
+  - **CPU-bound** on small and medium: about 36–39 MB/s of transcript, excluding the first cache save that the first refresh includes.
+  - **I/O-sensitive** on large: 24.0 s of wall time for 18.6 s of CPU in this run, with the 610 MB read from disk (612 MB of disk reads). An earlier run, with the files still cached, took 18.4 s.
+  - **Range: 18–24 s**, about 27–35 MB/s.
+  - A rebuild (clear, lost key, or a cache version bump) costs the same as a first scan.
+- **Memory grows with history, and a warm launch holds more than a cold scan.**
+
+  | Dataset | Steady after a cold scan | Steady after a warm launch (this run) |
+  |---|---|---|
+  | medium | 101 MB, 3.4 KB per message | 151 MB, 5.0 KB per message |
+  | large | 281 MB, 2.3 KB per message | 545 MB, 4.5 KB per message |
+
+  - **Warm memory varied between runs:** 109–151 MB on medium, 380–545 MB on large. Cold memory was steady (281–289 MB on large).
+  - The cold scan's peak on large is 586 MB, 2.08× its steady state.
   - The cache file is about 400–440 bytes per message.
+  - Small is dominated by fixed costs (25 MB cold), so per-message figures there mean nothing.
 - **The popover:**
   - Closed: only the strip is drawn, at 8 µs median.
-  - Open: a full render (layout and draw) takes about 25 ms. The first one is 82–301 ms, which is SwiftUI's first-use cost.
-  - This is an upper bound for one update. An open popover redraws on each store change (every 1 s sample).
-- **Hover:** the top-consumer list takes about 0.9 ms per refresh.
+  - Open: a full render (layout and draw) takes about 26 ms. The first one takes 94–419 ms, which is SwiftUI's first-use cost.
+  - An open popover redraws on each store change (every 1 s sample). A full render is an upper bound for one update.
+- **Hover:** the top-consumer list takes about 0.85 ms per refresh.
 
 ## 5. Proposed budgets (for the owner's decision)
 
@@ -193,49 +207,51 @@ One ledger per process (memory runs):
 - They're **not enforced in CI**: a 3-core shared runner can't time reliably.
 - **Proposed rule:** rerun `scripts/bench.sh` on the reference Mac before merging a change to `Ledger`, the cache, the summary or the samplers. Flag a breach, or a regression above 25 % in a median.
 
-| # | Budget | Measured | Why this number |
-|---|---|---|---|
-| B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.12–0.15 % | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
-| B2 | Main thread held ≤ **16 ms** during any refresh, scan or save | ≤ 3.4 ms | one 60 Hz frame: no visible hitch |
-| B3 | Quit holds the main thread ≤ **1 s** | **0.3 / 4.2 / 18 s: fails at medium and large** | a quit that takes seconds looks hung |
-| B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | it runs 360 times an hour |
-| B5 | Tick with new data, without a save: p95 ≤ **100 ms** | 54.5 ms | runs every 10 s during active use |
-| B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.29 / 1.2 s | it blocks the ledger queue: ticks wait behind it |
-| B7 | Warm launch, ledger part, ≤ **1 s** (medium) / ≤ **3 s** (large) | 0.40 / 1.5 s | totals should appear shortly after login |
-| B8 | First scan or rebuild ≥ **20 MB/s** of transcript | about 33 MB/s | 30 days of heavy use indexed in under a minute |
-| B9 | Resident memory ≤ **5 KB per logged message**, and peak ≤ 2× steady | about 3.3 KB; cold peak 2.0× on large | the in-memory state is per operation; keeps 120,000 messages under about 600 MB |
-| B10 | Cache file ≤ **500 B per logged message** | 400–440 B | the #55 growth (about 2.4×) left little room |
-| B11 | Popover full render: median ≤ **50 ms** | about 25 ms | redrawn while open, on each store change |
-
-**B3 fails today.** B9's ceiling is generous on purpose: the absolute figure (290–380 MB for 30 heavy days) is the real concern, and §6 ranks it second.
+| # | Budget | Measured (run 3) | Status | Why this number |
+|---|---|---|---|---|
+| B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.13 % | met | a menu-bar monitor must not show up in Activity Monitor; about 4× headroom |
+| B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 2.6 ms (cold scan only) | met for scans; **not measured** for the post-refresh publish and popover update | one 60 Hz frame. The first popover render is a UI action under B11, not B2 |
+| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 18 s | **fails** at medium and large | a quit that takes seconds looks hung |
+| B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
+| B5 | Tick with new data, without a save: p95 ≤ **100 ms** | 86 ms | met, narrowly | runs every 10 s during active use |
+| B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.29 / 1.2 s | met | it blocks the ledger queue: ticks wait behind it |
+| B7 | Warm launch, ledger part, ≤ **1 s** (medium) / ≤ **3 s** (large) | 0.40 / 1.8 s | met | totals should appear shortly after login |
+| B8 | First scan or rebuild ≥ **20 MB/s** of transcript, excluding the first save | 27–39 MB/s | met | 30 days of heavy use indexed in under a minute |
+| B9 | Resident memory ≤ **5 KB per logged message** (medium and large), and peak ≤ **2×** steady | 2.3–5.0 KB; cold peak **2.08×** on large; warm varies by run | **at the limit** (warm medium 5.0 KB) and **fails** on peak | in-memory state is per operation; this keeps 120,000 messages under about 600 MB |
+| B10 | Cache file ≤ **500 B per logged message** | 400–440 B | met | the #55 growth (about 2.4×) left little room |
+| B11 | Popover full render: median ≤ **50 ms**; first render ≤ **250 ms** | 26 ms; first 94–419 ms | median met; **first render fails** on large | redrawn while open; the first open should feel immediate |
 
 ## 6. Bottlenecks, ranked
 
-1. **Quit waits for a scan in flight (B3 fails).**
+1. **Quit waits for an in-flight scan (B3 fails).**
    - The main thread is held for the rest of the scan: up to 18 s on large.
    - It is worst on the first launch, after a clear, and after a version bump, which is exactly when a user is most likely to quit an app that looks busy.
    - [code] `main.swift` `applicationWillTerminate` → `Ledger.flush()` → `queue.sync`.
-2. **Memory per message.**
-   - 290–380 MB resident on large, and higher after a warm launch than after a cold scan.
-   - The cause isn't located yet: `Seen` per operation, links, slot maps or decoder overhead. It needs an allocation profile (Instruments) on the synthetic set before any change.
-3. **JSON cache encode and decode:** 1.2–1.5 s per save or launch on large, run on the ledger queue, so ticks wait.
+2. **Memory per message, and its warm-launch variance (B9).**
+   - 281 MB resident after a cold scan on large, and 380–545 MB after a warm launch.
+   - The cause isn't located yet: `Seen` per operation, links, slot maps, decoder overhead, or allocator behaviour after decoding a 48 MB JSON. It needs an allocation profile (Instruments) on the synthetic set before any change.
+3. **JSON cache encode and decode:** 1.2–1.8 s per save, warm launch or wake on large, run on the ledger queue, so ticks wait.
    - This is ADR 0001 D6's revisit trigger 1: "#8 measures encode or decode cost above a budget the owner sets".
    - **Proposed budget:** B6 and B7. Both are met today, so this is a watch item, not a format change.
-4. **A full summary on every change:** 35–47 ms per tick with new data on medium and large. It is the bulk of the active-use tick, but within B5.
-5. **First-scan throughput:** about 33 MB/s, CPU-bound, single queue. It meets B8.
+4. **A full summary on every change:** 35–51 ms per tick with new data on medium and large. It is the bulk of the active-use tick, and leaves B5 with little headroom.
+5. **The first popover render on large (B11):** up to 419 ms on the main thread. It has been measured once per process, so it's noisy, and it needs confirming in the real app.
+6. **First-scan throughput:** 27–39 MB/s, CPU-bound and I/O-sensitive on large. It meets B8.
 
-**Not bottlenecks:** idle CPU, the no-change tick, full scans with nothing new, the hardware probes, the menu-bar strip, the hover list, and wake (a full scan plus summary: 0.3 s medium, 1.3 s large).
+**Not bottlenecks:** idle CPU, the no-change tick, full scans with nothing new, the hardware probes, the menu-bar strip and the hover list.
 
 ## 7. Proposed follow-up issues (none created; owner approval first)
 
 Each has its own failing benchmark scenario to show the change.
 
 1. **Quit must not wait for an in-flight scan.** Let a scan stop between files or lines when quit begins, and save what's counted. **Acceptance:** scenario 9b ≤ 1 s on large, the cache stays consistent, and the next launch resumes from saved marks (no double count, F-fixtures unchanged).
-2. **Profile and explain ledger memory.** An allocation profile of the large set (cold and warm), and a breakdown per structure. **No code change** until the owner picks a target. **Acceptance:** a documented breakdown, and a B9 decision.
+2. **Profile and explain ledger memory.** An allocation profile of the large set (cold and warm), a breakdown per structure, and why warm varies by run. **No code change** until the owner picks a target. **Acceptance:** a documented breakdown, and a B9 decision.
 3. **Summary cost independent of slot count** (the #57 note). Sum per local day × model × window before pricing. **Acceptance:** scenario 6 ≤ 15 ms on large, and totals identical on every fixture.
-4. **Saves off the tick path, or cheaper** (watch item, after 1–2). Only if B6 or B7 is breached, or a save is shown to delay ticks for users.
+4. **Saves off the tick path, or cheaper** (watch item, after 1–3). Only if B6 or B7 is breached, or a save is shown to delay ticks for users.
+5. **The benchmark itself** (small):
+   - a main-thread heartbeat around the post-refresh publish with an open popover (B2's gap);
+   - several popover first renders, each in a fresh process (B11's noise).
 
-**Not proposed:** no change to scanning (it meets B8), idle work or rendering.
+**Not proposed:** no change to scanning (it meets B8) or idle work.
 
 ## 8. Offline, sleep and wake, cancellation (summary)
 
@@ -243,7 +259,7 @@ Each has its own failing benchmark scenario to show the change.
   - The usage path makes no network request in any scenario. Every request would have failed; the transports have no responses.
   - Quota polling is opt-in and outside this benchmark (§3).
 - **Sleep and wake:**
-  - Modelled (clock +8 h, files grown): the wake refresh is a full scan plus a summary, 0.3 s (medium) and 1.3 s (large).
+  - Modelled (clock +8 h, the three newest files grown): the wake refresh is a full scan, a summary and, with new data after more than 10 minutes, a cache save. That's 0.3 s (medium) and 1.3 s (large), most of it the save.
   - The OS transition and network recovery aren't measured.
 - **Cancellation:**
   - Ledger scans can't be cancelled.
