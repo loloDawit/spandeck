@@ -97,6 +97,12 @@ What it doesn't protect against:
 - Unread lines stay counted when their transcript is deleted or rewritten without them, like usage already counted: the totals still lack them. A cleared cache only reports what is still on disk.
 - A transcript that disappears is dropped from `files`.
 - The cache is saved at most every 10 minutes, and again on quit.
+- **Claude Code's own cleanup [doc, not runtime-verified]:**
+  - Claude Code deletes transcripts, and their subagent transcripts, once they're older than its `cleanupPeriodDays` setting, **30 days by default**. Claude Desktop and Cowork transcripts follow their own rule (`desktopSessionCleanupPeriodDays`).
+  - Sources: Claude Code docs, *sessions › Where transcripts are stored* and *.claude directory › cleaned up automatically*, retrieved 2026-10-18 ([audit 0010](audits/0010-claude-observability-surfaces.md) §2.1). The docs don't say whether "older" means last modified or created.
+  - **While the cache is intact,** usage SpanDeck already counted stays for the full 32 days, even after Claude Code deletes the transcript.
+  - **After a rebuild** (a version change, a cleared cache, a lost key or a restored backup), only transcripts still on disk are re-read. With the default setting, the oldest days of the 32-day window, roughly days 31–32, can come back lower than before or empty. Days 31–32 can come back complete only if `cleanupPeriodDays` is above 32. A lower setting makes the gap larger.
+  - This is the history loss P12 already accepts. SpanDeck never reads or changes Claude Code's settings to work around it.
 
 ## Upgrading from a version 3 cache
 Version 3 stored raw paths and ids, and SpanDeck doesn't try to convert them. When it finds a version 3 cache, it deletes it before reading anything else and re-indexes the transcripts still on disk. That's a one-time full read, after which totals and deduplication are the same as before. The same happens to:
