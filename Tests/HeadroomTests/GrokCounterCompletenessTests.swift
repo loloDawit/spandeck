@@ -176,5 +176,48 @@ struct GrokCounterCompletenessTests {
         let combined = try #require(UsageSummary.combine(claude, grok))
         #expect(combined.month.completeness == DataCompleteness(flawed: 1))
     }
+
+    /// The usage card says a Grok total may be incomplete, in Grok's own words.
+    @Test func noteCarriesGrokFlaws() async throws {
+        let rig = try Rig()
+        try rig.grok([Self.turn("inputTokens", nil)])
+        let (claude, grok) = await rig.summaries()
+        let note = try #require(CompletenessText.note(claude, grok: grok))
+        #expect(note.text == CompletenessText.incomplete)
+        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a token count that is "
+                                     + "missing or isn't a valid number"))
+        #expect(!note.detail.contains("Claude Code's logs"))
+        #expect(UsageNotes.notes(claude, grok: grok).map(\.text) == [CompletenessText.incomplete])
+    }
 }
 
+/// The note's copy for Grok, without a ledger: counts only, and Claude's wording unchanged when Grok is complete.
+struct GrokCompletenessTextTests {
+    private func summary(_ c: DataCompleteness) -> UsageSummary {
+        var s = UsageSummary()
+        s.month = Totals(tokens: 10, cost: CostEstimate(known: 1, knownTokens: 10), completeness: c)
+        return s
+    }
+
+    @Test func grokOnly() throws {
+        #expect(CompletenessText.note(nil, grok: summary(DataCompleteness())) == nil)
+        let two = try #require(CompletenessText.note(nil, grok: summary(DataCompleteness(flawed: 2))))
+        #expect(two.detail.contains("2 turns had a token count that is missing or isn't a valid number; it was left out "
+                                    + "and the rest counted."))
+        #expect(two.detail.contains("token totals may be low"))
+    }
+
+    @Test func claudeWordingUnchangedWhenGrokIsComplete() throws {
+        let claude = summary(DataCompleteness(flawed: 1))
+        let alone = try #require(CompletenessText.note(claude))
+        let withGrok = try #require(CompletenessText.note(claude, grok: summary(DataCompleteness())))
+        #expect(alone == withGrok)
+    }
+
+    @Test func both() throws {
+        let note = try #require(CompletenessText.note(summary(DataCompleteness(malformed: 1)),
+                                                      grok: summary(DataCompleteness(flawed: 1))))
+        #expect(note.detail.contains("In Claude Code's logs for the last 30 days, 1 record couldn't be read"))
+        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a token count"))
+    }
+}
