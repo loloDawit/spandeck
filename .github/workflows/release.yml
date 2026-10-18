@@ -66,8 +66,10 @@ jobs:
       - name: Build DMG
         run: ./build.sh dmg
 
-      # The gate: the exact file uploaded below must pass. No `if:`, `continue-on-error` or `|| true` (check-workflows.py).
+      # The gate, in the one form check-workflows.py accepts: no `if:`, `continue-on-error`, `shell:`, wrapper or
+      # trailing command. On a pass it outputs the DMG's sha256; the upload step checks it is uploading those bytes.
       - name: Verify release artifact
+        id: verify
         env:
           SPANDECK_TEAM_ID: ${{ vars.SPANDECK_TEAM_ID }}
         run: scripts/verify-release.sh "build/SpanDeck-${TAG#v}.dmg"
@@ -91,13 +93,18 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          DMG_SHA256: ${{ steps.verify.outputs.sha256 }}
         run: |
+          # Upload a private copy, checked against the hash the gate verified; nothing can swap it after the check.
+          art="$(mktemp -d)/SpanDeck-${TAG#v}.dmg"
+          cp "build/SpanDeck-${TAG#v}.dmg" "$art"
+          echo "$DMG_SHA256  $art" | shasum -a 256 -c -
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "build/SpanDeck-${TAG#v}.dmg" --clobber
+            gh release upload "$TAG" "$art" --clobber
             # Keep notes written when publishing; a manual run regenerates them.
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -z "$(gh release view "$TAG" --json body -q .body)" ]; then
               gh release edit "$TAG" --notes-file build/notes.md
             fi
           else
-            gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg" --title "SpanDeck ${TAG#v}" --notes-file build/notes.md
+            gh release create "$TAG" "$art" --title "SpanDeck ${TAG#v}" --notes-file build/notes.md
           fi

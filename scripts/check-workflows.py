@@ -13,9 +13,15 @@ Fails (exit 1, one line per problem) when:
   - `github.token` or `secrets.` appears outside a step (a workflow- or job-level `env:` hands it to every step);
   - a workflow uses `pull_request_target`;
   - a workflow file isn't listed in POLICY (new workflows need a reviewed entry);
-  - a step publishes a release (`gh release create|upload|edit`, since `edit --draft=false` publishes a draft; `gh api …/releases`; or a release action) before an
-    earlier step of the same job ran `scripts/verify-release.sh <dmg>` (#11; `--preflight` doesn't count), the gate step
-    has `if:`, `continue-on-error:` or `|| true`, or a step between the gate and the publish rebuilds or re-signs;
+  - release safety (#11), in a job that can write: a step that is given the token or a secret, uses an action other
+    than actions/checkout, or publishes (`gh release create|upload|edit`, `gh api …/releases`, the uploads API) comes
+    before the release gate; the gate isn't exactly `run: scripts/verify-release.sh "build/<name>.dmg"` with only
+    `name`, `id` and a `SPANDECK_TEAM_ID` env (no `if:`, `continue-on-error:`, `shell:`, `working-directory:`, wrapper
+    or trailing command); a step after it isn't the upload of the verified bytes (`shasum -a 256 -c` against
+    `steps.<gate id>.outputs.sha256`); a step runs after a failure (`always()`, `failure()`, `cancelled()`); or
+    something rebuilds or re-signs between the gate and the upload;
+  - a publishing command sits where this checker can't see it as a step, or a workflow uses YAML anchors/aliases or
+    `defaults:` (which could change how every step, the gate included, runs);
   - any workflow tells users to bypass Gatekeeper (Open Anyway, removing the quarantine attribute, disabling spctl).
 
 It reads only the YAML subset these workflows use (block mappings, `- ` lists, `|` scripts); it is a policy
@@ -33,9 +39,17 @@ POLICY = {
     "release.yml": {WORKFLOW: {}, "release": {"contents": "write"}},
 }
 
-# An invocation with a DMG argument (a path ending .dmg, or a variable); `--preflight` or a mention in text isn't one.
-GATE = re.compile(r'(^|[\s;&|(])(\./)?scripts/verify-release\.sh\s+"?(\$|[^\s"]*\.dmg\b)')
-PUBLISH = re.compile(r"\bgh\s+release\s+(create|upload|edit)\b|\bgh\s+api\b.*/releases\b|^\s*(-\s+)?uses:\s*[\w.-]+/[\w.-]*release")
+# Any attempt to run the gate on an artifact (`--preflight` or a mention in quoted text isn't one) ...
+GATE = re.compile(r'(^|[\s;&|(!])(\./)?scripts/verify-release\.sh\s+(?!--preflight\b)[^\s"]*"?(\$|[^\s"]*\.dmg\b)')
+# ... and its one accepted form: the script itself, one quoted DMG under build/, nothing before or after it.
+GATE_RUN = re.compile(r'^run:\s+(\./)?scripts/verify-release\.sh\s+"build/[\w.${}#-]+\.dmg"$')
+GATE_KEYS, GATE_ENV = {"name", "id", "env", "run"}, {"SPANDECK_TEAM_ID"}
+PUBLISH = re.compile(r"\bgh\s+release\s+(create|upload|edit)\b|\bgh\s+api\b.*/releases\b|uploads\.github\.com|"
+                     r"api\.github\.com/repos/\S*/releases\b")
+PRIVILEGED = re.compile(r"github\.token|secrets\.|GITHUB_TOKEN")
+AFTER_FAILURE = re.compile(r"\b(always|failure|cancelled)\s*\(")
+HASH_CHECK = re.compile(r"\bshasum\s+-a\s+256\s+-c\b")
+ANCHOR = re.compile(r"(^|[\s\[{,])&[\w-]+(\s|$)|(^|[\s\[{,:-])\*[\w-]+\s*$|<<\s*:")
 REBUILD = re.compile(r"\bbuild\.sh\b|\bcodesign\b|\bhdiutil\b|\bswift\s+build\b")
 # Removing an attribute (-d) or all of them (-c) with xattr; reading one (-p, -l, -r alone) is fine.
 BYPASS = re.compile(r"open anyway|\bxattr\s+(-[a-z]*\s+)*-[a-z]*[dc]|spctl\s+--(master|global)-disable", re.I)
@@ -102,7 +116,7 @@ def permissions_at(lines, i):
 
 
 def job_steps(lines):
-    """{job: [(first line index, [step lines])]} for each job's `steps:` list."""
+    """{job: [(first line index, [line indices])]} for each job's `steps:` list (items two spaces deeper than the key)."""
     out = {}
     for i, line in enumerate(lines):
         if indent(line) == 0 and line.startswith("jobs:"):
@@ -111,31 +125,87 @@ def job_steps(lines):
                     steps = out.setdefault(lines[j].strip()[:-1], [])
                     for k in block(lines, j, 2):
                         if lines[k].strip() == "steps:":
-                            items = [m for m in block(lines, k, indent(lines[k])) if lines[m].lstrip().startswith("- ")
+                            inner = block(lines, k, indent(lines[k]))
+                            items = [m for m in inner if lines[m].lstrip().startswith("- ")
                                      and indent(lines[m]) == indent(lines[k]) + 2]
                             for n, m in enumerate(items):
-                                end = items[n + 1] if n + 1 < len(items) else (block(lines, k, indent(lines[k])) or [m])[-1] + 1
-                                steps.append((m, [s for s in lines[m:end] if s.strip()]))
+                                end = items[n + 1] if n + 1 < len(items) else inner[-1] + 1
+                                steps.append((m, [x for x in range(m, end) if lines[x].strip()]))
     return out
 
 
-def release_safety(lines, bad):
-    """#11: publish only after the release gate in the same job, with nothing rebuilt in between."""
+def step_keys(lines, start, idx):
+    """The step's keys, the env names it sets, and its key lines, for the step whose `- ` item is lines[start]."""
+    level = indent(lines[start]) + 2
+    keys, env, key_lines = [], [], {}
+    for x in idx:
+        text = lines[x].strip()
+        if x == start:
+            text = text[2:].strip()
+        elif indent(lines[x]) != level or text.startswith("#"):
+            continue
+        m = re.match(r"^([\w-]+):", text)
+        if m:
+            keys.append(m.group(1))
+            key_lines[m.group(1)] = text
+    if "env" in key_lines:
+        env_line = next(x for x in idx if re.match(r"^(-\s+)?env:", lines[x].strip()))
+        env = [lines[x].strip().split(":", 1)[0] for x in block(lines, env_line, indent(lines[env_line]))]
+    return keys, env, key_lines
+
+
+def release_safety(lines, bad, writers):
+    """#11: in a job that can write, nothing gets the token or publishes before the gate passed, the gate has its one
+    fixed form, and what follows it uploads the verified bytes. Publishing outside a parsable step is refused too."""
+    covered = set()
     for job, steps in job_steps(lines).items():
-        gated_at = None
-        for idx, (start, body) in enumerate(steps):
+        writer = job in writers
+        gate_id, gated = None, False
+        for n, (start, idx) in enumerate(steps):
+            covered.update(idx)
+            body = [lines[x] for x in idx if not lines[x].strip().startswith("#")]
             text = "\n".join(body)
+            keys, env, key_lines = step_keys(lines, start, idx)
+            uses = key_lines.get("uses", "")
+            if writer and AFTER_FAILURE.search(key_lines.get("if", "")):
+                bad(start + 1, f"job {job}: a step runs after a failed step; a failed release gate must stop the job")
             if GATE.search(text):
-                weak = [w for w in ("if:", "continue-on-error:") if any(s.strip().startswith(w) for s in body)]
-                if "|| true" in text or "|| :" in text:
-                    weak.append("|| true")
-                if weak:
-                    bad(start + 1, f"release gate step must not have {', '.join(weak)}")
-                gated_at = idx
-            elif gated_at is not None and REBUILD.search(text) and any(PUBLISH.search(s) for _, b in steps[idx:] for s in b):
+                problems = [k for k in keys if k not in GATE_KEYS] + [f"env {e}" for e in env if e not in GATE_ENV]
+                if "id" not in keys:
+                    problems.append("no id")
+                if not GATE_RUN.match(key_lines.get("run", "")):
+                    problems.append("a run: other than the script and one quoted build/*.dmg")
+                if problems:
+                    bad(start + 1, "release gate step must be exactly `run: scripts/verify-release.sh \"build/<name>.dmg\"` "
+                                   f"with only name, id and env SPANDECK_TEAM_ID; found {', '.join(problems)}")
+                else:
+                    gate_id, gated = key_lines["id"].split(":", 1)[1].strip(), True
+                continue
+            publishes = any(PUBLISH.search(b) for b in body)
+            action = bool(uses) and not re.match(r"^uses:\s*actions/checkout@", uses)
+            privileged = publishes or (writer and (action or PRIVILEGED.search(text)))
+            if privileged and not gated:
+                bad(start + 1, f"job {job}: a step that publishes or holds the token runs before passing scripts/verify-release.sh")
+            elif privileged and (not HASH_CHECK.search(text) or f"steps.{gate_id}.outputs.sha256" not in text):
+                bad(start + 1, f"job {job}: a step after the gate publishes without checking the verified hash "
+                               f"(shasum -a 256 -c against steps.{gate_id}.outputs.sha256)")
+            elif gated and REBUILD.search(text) and any(
+                    PUBLISH.search(lines[x]) or PRIVILEGED.search(lines[x]) for _, later in steps[n + 1:] for x in later):
                 bad(start + 1, f"job {job} changes the build after the release gate and before publishing")
-            if any(PUBLISH.search(s) for s in body) and gated_at is None:
-                bad(start + 1, f"job {job} publishes without passing scripts/verify-release.sh first")
+    for i, line in enumerate(lines):
+        if i not in covered and not line.strip().startswith("#") and PUBLISH.search(line):
+            bad(i + 1, "publishing command outside a step this checker can parse")
+
+
+def run_bodies(lines):
+    """Line indices that are `run:` values or inside `run: |` scripts (shell text, not YAML)."""
+    out = set()
+    for i, line in enumerate(lines):
+        r = re.match(r"^(\s*)(-\s+)?run:", line)
+        if r:
+            out.add(i)
+            out.update(block(lines, i, len(r.group(1)) + (2 if r.group(2) else 0)))
+    return out
 
 
 def check(path, policy):
@@ -170,8 +240,11 @@ def check(path, policy):
         bad(0, "no top-level permissions: block")
     elif workflow_perms != expected[WORKFLOW]:
         bad(0, f"top-level permissions {workflow_perms!r}, policy is {expected[WORKFLOW]!r}")
+    writers = set()
     for job, perms in jobs.items():
         effective = perms if perms is not None else workflow_perms
+        if isinstance(effective, str) or any(v != "read" for v in (effective or {}).values()):
+            writers.add(job)
         if job not in expected:
             bad(0, f"job {job} is not in the workflow policy")
         elif effective != expected[job]:
@@ -210,7 +283,15 @@ def check(path, policy):
                 bad(i + 1, "${{ }} inside a run: script; pass it through env: instead")
         if BYPASS.search(line):
             bad(i + 1, "Gatekeeper bypass instruction; ship a notarized build instead (#11)")
-    release_safety(lines, bad)
+    shell = run_bodies(lines)
+    for i, line in enumerate(lines):
+        if line.strip().startswith("#") or i in shell:
+            continue
+        if ANCHOR.search(line):
+            bad(i + 1, "YAML anchors and aliases aren't allowed: this checker can't follow them")
+        if indent(line) in (0, 4) and line.strip().startswith("defaults:"):
+            bad(i + 1, "defaults: isn't allowed: it changes the shell or directory of every step, the release gate included")
+    release_safety(lines, bad, writers)
     return problems
 
 
