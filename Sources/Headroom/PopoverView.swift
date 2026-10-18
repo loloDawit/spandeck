@@ -827,10 +827,22 @@ enum IdentityText {
     static let approximate = "Usage may be approximate: some records lack identifiers."
 
     /// The note and its detail when any Claude message in the 30 days wasn't identified by both a message id and a
-    /// request id; nil when all were. Counts identity groups (logged messages with their streamed copies), not model
-    /// calls. Counts only, never an id.
-    static func note(_ claude: UsageSummary?) -> (text: String, detail: String)? {
-        guard let c = claude?.month.identity, !c.isExact else { return nil }
+    /// request id, or any Grok turn without a total was merged into a turn it may not duplicate (F-1, #7); nil
+    /// otherwise. Counts identity groups (logged messages with their streamed copies), not model calls. Counts only,
+    /// never an id.
+    static func note(_ claude: UsageSummary?, grok: UsageSummary? = nil) -> (text: String, detail: String)? {
+        var details: [String] = []
+        if let c = claude?.month.identity, !c.isExact { details.append(claudeDetail(c)) }
+        // Grok counts only uncertain turns (`ambiguous`), never certain ones, so no "of N" here.
+        if let g = grok?.month.identity.ambiguous, g > 0 {
+            details.append("In Grok's usage files for the last 30 days, \(g) " + (g == 1 ? "turn" : "turns") + " without a "
+                           + "total couldn't be told apart from another turn and " + (g == 1 ? "was" : "were")
+                           + " counted with it, so token totals may be low.")
+        }
+        return details.isEmpty ? nil : (approximate, details.joined(separator: " "))
+    }
+
+    private static func claudeDetail(_ c: IdentityCoverage) -> String {
         var kinds: [String] = []
         if c.incomplete > 0 { kinds.append("\(c.incomplete) by one id") }
         if c.fingerprinted > 0 {
@@ -838,10 +850,9 @@ enum IdentityText {
         }
         if c.ambiguous > 0 { kinds.append("\(c.ambiguous) by an id that more than one message shares") }
         let noun = c.groups == 1 ? "logged message" : "logged messages", were = c.uncertain == 1 ? "was" : "were"
-        return (approximate, "Of \(c.groups) \(noun) from Claude in the last 30 days, \(c.uncertain) \(were) told apart "
-                    + "without both a message id and a request id: " + kinds.joined(separator: ", ") + ". These may be "
-                    + "counted twice or merged, so token totals and cost estimates may be off. Costs are still estimates, "
-                    + "not your bill.")
+        return "Of \(c.groups) \(noun) from Claude in the last 30 days, \(c.uncertain) \(were) told apart without both a "
+            + "message id and a request id: " + kinds.joined(separator: ", ") + ". These may be counted twice or merged, "
+            + "so token totals and cost estimates may be off. Costs are still estimates, not your bill."
     }
 }
 
@@ -926,9 +937,10 @@ enum QuantityText {
 struct UsageNotes: View {
     let notes: [(text: String, detail: String)]
 
-    /// Grok counts only toward completeness; quantity and identity notes are Claude only.
+    /// Grok counts toward completeness and identity; the quantity note is Claude only.
     nonisolated static func notes(_ claude: UsageSummary?, grok: UsageSummary? = nil) -> [(text: String, detail: String)] {
-        [CompletenessText.note(claude, grok: grok), QuantityText.note(claude), IdentityText.note(claude)].compactMap { $0 }
+        [CompletenessText.note(claude, grok: grok), QuantityText.note(claude), IdentityText.note(claude, grok: grok)]
+            .compactMap { $0 }
     }
 
     var body: some View {
