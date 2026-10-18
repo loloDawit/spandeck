@@ -19,6 +19,10 @@ jobs:
           persist-credentials: false
       - name: Check workflow hardening
         run: python3 -I scripts/check-workflows.py && python3 -I scripts/test_check_workflows.py
+      # The release gate refuses every artifact short of a notarized Developer ID build (#11). Fake tools, plus a real
+      # ad-hoc DMG as the control; nothing is signed with a real identity.
+      - name: Check release gate
+        run: scripts/test-verify-release.sh
       # Serial: some test fakes block a thread for up to 2 s, which starves Swift's thread pool on the
       # runner's 3 cores. Reproduce locally with LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test.
       - name: Run tests

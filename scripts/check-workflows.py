@@ -12,7 +12,11 @@ Fails (exit 1, one line per problem) when:
   - a `run:` script contains `${{ ... }}` (pass values through `env:` instead, to avoid script injection);
   - `github.token` or `secrets.` appears outside a step (a workflow- or job-level `env:` hands it to every step);
   - a workflow uses `pull_request_target`;
-  - a workflow file isn't listed in POLICY (new workflows need a reviewed entry).
+  - a workflow file isn't listed in POLICY (new workflows need a reviewed entry);
+  - a step publishes a release (`gh release create|upload`, `gh api …/releases`, or a release action) before an
+    earlier step of the same job ran `scripts/verify-release.sh <dmg>` (#11; `--preflight` doesn't count), the gate step
+    has `if:`, `continue-on-error:` or `|| true`, or a step between the gate and the publish rebuilds or re-signs;
+  - any workflow tells users to bypass Gatekeeper (Open Anyway, removing the quarantine attribute, disabling spctl).
 
 It reads only the YAML subset these workflows use (block mappings, `- ` lists, `|` scripts); it is a policy
 check, not a YAML parser. `scripts/test_check_workflows.py` tests it. actionlint checks general correctness.
@@ -29,6 +33,12 @@ POLICY = {
     "release.yml": {WORKFLOW: {}, "release": {"contents": "write"}},
 }
 
+# An invocation with a DMG argument (a path ending .dmg, or a variable); `--preflight` or a mention in text isn't one.
+GATE = re.compile(r'(^|[\s;&|(])(\./)?scripts/verify-release\.sh\s+"?(\$|[^\s"]*\.dmg\b)')
+PUBLISH = re.compile(r"\bgh\s+release\s+(create|upload)\b|\bgh\s+api\b.*/releases\b|^\s*(-\s+)?uses:\s*[\w.-]+/[\w.-]*release")
+REBUILD = re.compile(r"\bbuild\.sh\b|\bcodesign\b|\bhdiutil\b|\bswift\s+build\b")
+# Removing an attribute (-d) or all of them (-c) with xattr; reading one (-p, -l, -r alone) is fine.
+BYPASS = re.compile(r"open anyway|\bxattr\s+(-[a-z]*\s+)*-[a-z]*[dc]|spctl\s+--(master|global)-disable", re.I)
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 DOCKER = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
 
@@ -89,6 +99,43 @@ def permissions_at(lines, i):
         k, v = lines[j].strip().split(":", 1)
         perms[k.strip()] = strip_comment(v)[0]
     return perms
+
+
+def job_steps(lines):
+    """{job: [(first line index, [step lines])]} for each job's `steps:` list."""
+    out = {}
+    for i, line in enumerate(lines):
+        if indent(line) == 0 and line.startswith("jobs:"):
+            for j in block(lines, i, 0):
+                if indent(lines[j]) == 2 and lines[j].rstrip().endswith(":"):
+                    steps = out.setdefault(lines[j].strip()[:-1], [])
+                    for k in block(lines, j, 2):
+                        if lines[k].strip() == "steps:":
+                            items = [m for m in block(lines, k, indent(lines[k])) if lines[m].lstrip().startswith("- ")
+                                     and indent(lines[m]) == indent(lines[k]) + 2]
+                            for n, m in enumerate(items):
+                                end = items[n + 1] if n + 1 < len(items) else (block(lines, k, indent(lines[k])) or [m])[-1] + 1
+                                steps.append((m, [s for s in lines[m:end] if s.strip()]))
+    return out
+
+
+def release_safety(lines, bad):
+    """#11: publish only after the release gate in the same job, with nothing rebuilt in between."""
+    for job, steps in job_steps(lines).items():
+        gated_at = None
+        for idx, (start, body) in enumerate(steps):
+            text = "\n".join(body)
+            if GATE.search(text):
+                weak = [w for w in ("if:", "continue-on-error:") if any(s.strip().startswith(w) for s in body)]
+                if "|| true" in text or "|| :" in text:
+                    weak.append("|| true")
+                if weak:
+                    bad(start + 1, f"release gate step must not have {', '.join(weak)}")
+                gated_at = idx
+            elif gated_at is not None and REBUILD.search(text) and any(PUBLISH.search(s) for _, b in steps[idx:] for s in b):
+                bad(start + 1, f"job {job} changes the build after the release gate and before publishing")
+            if any(PUBLISH.search(s) for s in body) and gated_at is None:
+                bad(start + 1, f"job {job} publishes without passing scripts/verify-release.sh first")
 
 
 def check(path, policy):
@@ -161,6 +208,9 @@ def check(path, policy):
             body = [r.group(3)] + [lines[k] for k in block(lines, i, len(r.group(1)))]
             if any("${{" in b for b in body):
                 bad(i + 1, "${{ }} inside a run: script; pass it through env: instead")
+        if BYPASS.search(line):
+            bad(i + 1, "Gatekeeper bypass instruction; ship a notarized build instead (#11)")
+    release_safety(lines, bad)
     return problems
 
 

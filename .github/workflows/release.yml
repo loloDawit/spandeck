@@ -6,6 +6,11 @@ name: Release
 # The tag must match CFBundleShortVersionString in Resources/Info.plist.
 # Release notes are generated from the commits since the previous tag, unless written when publishing.
 # Run manually with a tag to rebuild an existing release and regenerate its notes.
+#
+# Release gate (#11): nothing is uploaded unless scripts/verify-release.sh accepts the DMG as Developer ID signed,
+# Hardened Runtime, timestamped, notarized, stapled and universal (docs/RELEASE_SIGNING.md). This workflow doesn't sign
+# yet, and the repository variable SPANDECK_TEAM_ID isn't set, so today every run stops at the first step, before
+# building, and publishes nothing. Signing itself is a separate reviewed change (RELEASE_SIGNING.md, decision 3).
 on:
   release:
     types: [published]
@@ -40,6 +45,12 @@ jobs:
           # The token isn't stored in .git/config; only the publish step gets it, as GH_TOKEN.
           persist-credentials: false
 
+      # Fails closed, before spending a build, when release signing isn't configured.
+      - name: Check release signing is configured
+        env:
+          SPANDECK_TEAM_ID: ${{ vars.SPANDECK_TEAM_ID }}
+        run: scripts/verify-release.sh --preflight
+
       - name: Check tag matches app version
         run: |
           if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
@@ -55,6 +66,12 @@ jobs:
       - name: Build DMG
         run: ./build.sh dmg
 
+      # The gate: the exact file uploaded below must pass. No `if:`, `continue-on-error` or `|| true` (check-workflows.py).
+      - name: Verify release artifact
+        env:
+          SPANDECK_TEAM_ID: ${{ vars.SPANDECK_TEAM_ID }}
+        run: scripts/verify-release.sh "build/SpanDeck-${TAG#v}.dmg"
+
       - name: Write release notes
         run: |
           prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
@@ -67,7 +84,7 @@ jobs:
               echo "**Full changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$TAG"
               echo
             fi
-            echo "Universal build for Apple Silicon and Intel, macOS 14 or newer. Not notarized yet: on first launch, allow it under System Settings > Privacy & Security > Open Anyway."
+            echo "Universal build for Apple Silicon and Intel, macOS 14 or newer. Developer ID signed and notarized; checked by scripts/verify-release.sh before upload."
           } > build/notes.md
           cat build/notes.md
 
@@ -76,11 +93,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" build/SpanDeck-*.dmg --clobber
+            gh release upload "$TAG" "build/SpanDeck-${TAG#v}.dmg" --clobber
             # Keep notes written when publishing; a manual run regenerates them.
             if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -z "$(gh release view "$TAG" --json body -q .body)" ]; then
               gh release edit "$TAG" --notes-file build/notes.md
             fi
           else
-            gh release create "$TAG" build/SpanDeck-*.dmg --title "SpanDeck ${TAG#v}" --notes-file build/notes.md
+            gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg" --title "SpanDeck ${TAG#v}" --notes-file build/notes.md
           fi
