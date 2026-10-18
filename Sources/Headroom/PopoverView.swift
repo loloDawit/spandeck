@@ -186,8 +186,9 @@ struct LimitRow: View {
     let entry: LimitEntry
     let tint: Color
 
-    private var pace: Double? {
-        guard let w = entry.window, let r = entry.resetsAt else { return nil }
+    /// Where usage would be if spread evenly over the window. None without a percent: there's no bar to compare it with.
+    static func pace(_ entry: LimitEntry) -> Double? {
+        guard entry.percent != nil, let w = entry.window, let r = entry.resetsAt else { return nil }
         return (1 - r.timeIntervalSinceNow / w) * 100
     }
 
@@ -199,7 +200,7 @@ struct LimitRow: View {
                 Text(Fmt.pct(entry.percent)).font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(Color.severity(entry.percent, base: .primary))
             }
-            UsageBar(percent: entry.percent, tint: Color.severity(entry.percent, base: tint), pace: pace)
+            UsageBar(percent: entry.percent, tint: Color.severity(entry.percent, base: tint), pace: Self.pace(entry))
             HStack {
                 if let note = LimitText.note(entry) { Text(note) }
                 Spacer()
