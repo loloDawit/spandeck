@@ -114,6 +114,7 @@ struct QuotaPercentTests {
         #expect(plan.percent == 10 && plan.products.map(\.name) == ["A", "B"])
         #expect(plan.products[0].percent == nil, "\(value ?? "absent")")
         #expect(plan.products[1].percent == 0) // a reported 0 stays exact
+        #expect(LimitText.products(plan) == "A --  B 0%")
         #expect(StatusRenderer.grokGauge(rig.services.store) == [10])
     }
 
@@ -130,5 +131,43 @@ struct QuotaPercentTests {
         let rig = try GrokRig(#"{"config":{"creditUsagePercent":\#(value)}}"#)
         await rig.services.refreshGrok()
         #expect(rig.services.store.grokFailure == nil && rig.services.store.grokPlan?.percent == expected)
+    }
+
+    // MARK: What the UI shows
+
+    private struct ClaudeRig {
+        let box: Sandbox
+        let transport: FakeTransport
+        let services: ProviderServices
+
+        @MainActor init(_ body: String) throws {
+            box = try Sandbox()
+            box.preferences.set(true, forKey: Prefs.claudeLimits)
+            transport = FakeTransport([Hosts.anthropic: [.json(body)]])
+            services = ProviderServices(store: Store(), env: box.environment(
+                transport: transport, credentials: FakeCredentialStore(FakeCredentialStore.synthetic())))
+        }
+    }
+
+    /// An unavailable percent is a blank gauge segment and "--" with a reason, not an empty bar at 0 %. The account
+    /// still counts as available, there's no error, and only the one request is made.
+    @Test func claudeUnavailablePercentIsShownAsUnavailable() async throws {
+        let rig = try ClaudeRig(#"{"limits":[{"kind":"session","resets_at":"\#(Self.resets)"},"#
+                                + #"{"kind":"weekly_all","percent":0}]}"#)
+        await rig.services.refreshClaude()
+        let store = rig.services.store
+        #expect(store.claudeAvailable && store.claudeError == nil)
+        #expect(StatusRenderer.claudeGauge(store) == [nil, 0, nil])
+        let session = try #require(store.claudeLimits?.session), weekly = try #require(store.claudeLimits?.weekly)
+        #expect(Fmt.pct(session.percent) == "--" && LimitText.note(session) == LimitText.unavailable)
+        #expect(Fmt.pct(weekly.percent) == "0%" && LimitText.note(weekly) == nil)
+        #expect(rig.transport.requests.count == 1)
+    }
+
+    /// The reason is added to a note the limit already has, not put in its place.
+    @Test func unavailableReasonKeepsTheNote() {
+        let e = LimitEntry(id: "x", name: "Weekly Example", percent: nil, resetsAt: nil, note: "12% of weekly used, 40% allowed")
+        #expect(LimitText.note(e) == LimitText.unavailable + " · 12% of weekly used, 40% allowed")
+        #expect(LimitText.note(LimitEntry(id: "y", name: "W", percent: 3, resetsAt: nil, note: "n")) == "n")
     }
 }
