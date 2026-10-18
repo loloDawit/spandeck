@@ -622,6 +622,12 @@ enum UsageCacheText {
 
 struct UsageCard: View {
     @ObservedObject var store: Store
+
+    /// The card's notes. Grok's summary is passed as it is: `localGrokUsage` hides one without tokens, which is what
+    /// a period of only unusable turns has, and its note must still show (F-1).
+    static func notes(_ store: Store) -> [(text: String, detail: String)] {
+        UsageNotes.notes(store.claudeUsage, grok: store.grokUsage)
+    }
     var updatePricing: () -> Void
     @AppStorage("usage.metric") private var metric: DailyMetric = .cost
 
@@ -635,7 +641,7 @@ struct UsageCard: View {
                 StatTile(title: "7 days", totals: combined?.week)
                 StatTile(title: "30 days", totals: combined?.month)
             }
-            let notes = UsageNotes.notes(store.claudeUsage, grok: grok)
+            let notes = Self.notes(store)
             if !notes.isEmpty { UsageNotes(notes: notes) }
             VStack(spacing: 4) {
                 ProviderRow(name: "Claude", color: .claude, summary: store.claudeUsage)
@@ -853,9 +859,9 @@ enum CompletenessText {
         var details: [String] = []
         if let c = claude?.month.completeness, !c.isComplete { details.append(claudeDetail(c, n)) }
         if let flawed = grok?.month.completeness.flawed, flawed > 0 {
-            details.append("In Grok's usage files for the last 30 days, " + n(flawed, "turn", "turns") + " had a token "
-                           + "count that is missing or isn't a valid number; it was left out and the rest counted. The "
-                           + "token totals may be low.")
+            details.append("In Grok's usage files for the last 30 days, " + n(flawed, "turn", "turns") + " had a counter "
+                           + "that is missing, isn't a valid number or contradicts another; it was left out and the rest "
+                           + "counted. The token totals may be low.")
         }
         return details.isEmpty ? nil : (incomplete, details.joined(separator: " "))
     }

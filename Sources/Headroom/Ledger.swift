@@ -200,8 +200,8 @@ struct IdentityCoverage: Codable, Equatable, Sendable {
 }
 
 /// What the ledger couldn't read (#58, P7/P8), independent of identity (#55), cost coverage (R7) and cache issues (R8).
-/// Claude reports every field; Grok only `flawed` (F-1, #7). Records that can't be read aren't in any total, so a total with any of them may be low; a message
-/// counted with an invalid counter left out is a lower bound too. Records that aren't usage (user records,
+/// Claude reports every field; Grok only `flawed` (F-1, #7). Records that can't be read aren't in any total, so a total
+/// with any of them may be low; a message counted with an invalid counter left out is a lower bound too. Records that aren't usage (user records,
 /// `<synthetic>`, other types, an assistant record without usage) are ignored and never counted here.
 struct DataCompleteness: Decodable, Equatable, Sendable {
     /// Logged messages (identity groups) counted with at least one invalid counter left out: negative, fractional,
@@ -1478,7 +1478,9 @@ final class Ledger {
             }
             let input = read("inputTokens"), cached = read("cachedReadTokens")
             var agg = Agg(output: read("outputTokens") ?? 0, cacheWrite5m: read("cacheCreationTokens") ?? 0,
-                          calls: read("modelCalls") ?? 0, costTicks: t.optionalInt("costUsdTicks"))
+                          calls: read("modelCalls") ?? 0)
+            // A missing or invalid cost is unknown (R7): never a negative, truncated or held cost.
+            if case .value(let ticks) = Self.counter(t["costUsdTicks"]) { agg.costTicks = ticks }
             switch (input, cached) {
             case let (i?, c?) where c <= i: agg.input = i - c; agg.cacheRead = c
             // More cache reads than input is a conflict, not 0 uncached input: only what both allow counts, and the
@@ -1489,13 +1491,13 @@ final class Ledger {
             case let (nil, c): agg.cacheRead = c ?? 0
             }
             // Resumed and forked sessions repeat inherited turns, so dedupe on content. An absent or invalid total is
-            // spelled apart from a reported one (F-1). The cost part (unchanged by R7) reads a missing cost as 0, so a
+            // spelled apart from a reported one, and every invalid total alike (F-1). The cost part (unchanged by R7) reads a missing cost as 0, so a
             // turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns` decides which counts.
             let total: String
             switch Self.counter(t["totalTokens"]) {
             case .value(let n): total = String(n)
             case .absent: total = "-"; flawed = true
-            case .invalid: total = "?" + String(describing: t["totalTokens"]!); flawed = true
+            case .invalid: total = "?"; flawed = true
             }
             let key = "\(ended)|\(total)|\(t.int("costUsdTicks"))"
             return GrokTurn(key: key, slot: Self.slot(of: date),
