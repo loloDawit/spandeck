@@ -21,6 +21,10 @@ struct PerformanceMemoryBenchTests {
         let start = Bench.footprint().now
 
         if mode == "gen" {
+            // It deletes the folder first, so only a `data-*` folder under `.build/bench` is accepted.
+            let parts = root.standardizedFileURL.pathComponents
+            try #require(parts.count >= 3 && parts.suffix(3).dropLast().elementsEqual([".build", "bench"])
+                         && parts.last!.hasPrefix("data-"), "SPANDECK_BENCH_HOME must be .build/bench/data-<name>")
             try? FileManager.default.removeItem(at: root)
             try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
             try d.write(home: home, now: Date())

@@ -14,7 +14,7 @@ res = {s: json.load(open(os.path.join(d, f"{s}.json"))) for s in sets}
 
 
 def ms(x):
-    return f"{x * 1000:.1f}" if x < 10 else f"{x * 1000:,.0f}"
+    return f"{x * 1000:,.1f}"
 
 
 def mb(b):
@@ -41,7 +41,7 @@ rows = [
     ("Cache save (`flush`)", "cache_save"),
     ("5 min full scan, nothing new", "full_scan_no_change"),
     ("Summary only (window change)", "summary_recompute"),
-    ("Wake after 8 h (full scan, 3 files grew)", "wake_after_8h"),
+    ("Wake after 8 h (full scan, 3 files grew, cache save)", "wake_after_8h"),
     ("Rebuild after Clear cached usage data", "rebuild_after_clear"),
 ]
 print("Wall time in ms: median / p95 / worst (n). CPU is the median, in ms.")
@@ -63,6 +63,7 @@ def row(label, f):
 row("Bytes scanned, first scan", lambda r: f"{mb(r['cold_first_scan']['bytes_scanned'])} MB")
 row("Cache file", lambda r: f"{mb(r['cache_bytes'])} MB")
 row("Disk written, first scan (median)", lambda r: f"{mb(r['cold_first_scan']['disk_written_bytes']['median'])} MB")
+row("Disk written, wake (median)", lambda r: f"{mb(r['wake_after_8h']['disk_written_bytes']['median'])} MB")
 row("Disk written, one cache save (median)", lambda r: f"{mb(r['cache_save']['disk_written_bytes']['median'])} MB")
 row("Disk read, first scan (median; file cache warm)", lambda r: f"{mb(r['cold_first_scan']['disk_read_bytes']['median'])} MB")
 row("All-scenario process: footprint peak (incl. generator, several ledgers)",

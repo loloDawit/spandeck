@@ -28,12 +28,26 @@ done
 [ ${#sets[@]} -gt 0 ] || sets=(small medium large)
 out=${out:-.build/bench/$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$out"
+# Full test output goes here, not into $out: it contains local paths, and $out may be committed.
+logs=.build/bench/logs/$(basename "$out")
+mkdir -p "$logs"
+
+# Runs one benchmark process and stops the whole run if it fails, so no result is missing or stale.
+run() {
+    local log=$1; shift
+    if ! env "$@" swift test "${flags[@]}" --skip-build --filter "${FILTER}" >"$log" 2>&1; then
+        echo "failed: $* (log: $log)" >&2
+        grep -E "✘|error" "$log" | head -5 >&2
+        exit 1
+    fi
+    grep -E "Test run with" "$log" || true
+}
 
 flags=(-c release -Xswiftc -enable-testing -Xswiftc -DDEBUG)
 swift build "${flags[@]}" --build-tests
 
 # The environment, as JSON. Only machine and toolchain facts: no user name, host name, path or serial number.
-python3 - "$out/env.json" <<'PY'
+python3 - "$out/env.json" "swift test ${flags[*]}" <<'PY'
 import json, platform, subprocess, sys
 def run(*a):
     try: return subprocess.run(a, capture_output=True, text=True, timeout=20).stdout.strip()
@@ -47,7 +61,7 @@ env = {
     "xcode": " ".join(run("xcodebuild", "-version").splitlines()[:2]),
     "commit": run("git", "rev-parse", "HEAD"), "dirty": bool(run("git", "status", "--porcelain", "--", "Sources", "Tests")),
     "power": run("pmset", "-g", "batt").splitlines()[0] if run("pmset", "-g", "batt") else "",
-    "build": "swift test -c release -Xswiftc -enable-testing -Xswiftc -DDEBUG",
+    "build": sys.argv[2],
 }
 json.dump(env, open(sys.argv[1], "w"), indent=2)
 PY
@@ -55,8 +69,8 @@ PY
 for d in "${sets[@]}"; do
     load_before=$(sysctl -n vm.loadavg)
     echo "== $d (load $load_before)"
-    env SPANDECK_BENCH_DATASET="$d" SPANDECK_BENCH_OUT="$out" ${idle:+SPANDECK_BENCH_IDLE_SECONDS="$idle"} \
-        swift test "${flags[@]}" --skip-build --filter PerformanceBenchTests 2>&1 | grep -E "Test run with|✘|error" || true
+    FILTER=PerformanceBenchTests run "$logs/$d.log" SPANDECK_BENCH_DATASET="$d" SPANDECK_BENCH_OUT="$out" \
+        ${idle:+SPANDECK_BENCH_IDLE_SECONDS="$idle"}
     python3 - "$out/$d.json" "$load_before" "$(sysctl -n vm.loadavg)" <<'PY'
 import json, sys
 p, before, after = sys.argv[1:]
@@ -67,10 +81,10 @@ done
 # Memory: one ledger per process, on a dataset written by a separate process, so the generator's strings and the other
 # scenarios' ledgers aren't in the footprint. The data folder is deleted afterwards.
 for d in "${sets[@]}"; do
-    data=.build/bench/data-$d
+    data=$PWD/.build/bench/data-$d
     for mode in gen cold warm; do
-        env SPANDECK_BENCH_DATASET="$d" SPANDECK_BENCH_MODE="$mode" SPANDECK_BENCH_HOME="$data" SPANDECK_BENCH_OUT="$out" \
-            swift test "${flags[@]}" --skip-build --filter PerformanceMemoryBenchTests 2>&1 | grep -E "✘|error" || true
+        FILTER=PerformanceMemoryBenchTests run "$logs/$d-memory-$mode.log" SPANDECK_BENCH_DATASET="$d" \
+            SPANDECK_BENCH_MODE="$mode" SPANDECK_BENCH_HOME="$data" SPANDECK_BENCH_OUT="$out"
     done
     rm -rf "$data"
 done

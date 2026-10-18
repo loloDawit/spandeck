@@ -102,7 +102,7 @@ struct PerformanceBenchTests {
         for _ in 0..<Self.n("tick", d) { idle.append(await Bench.measure { _ = await Self.refresh(main) }) }
         report["tick_no_change"] = Bench.summary(idle)
 
-        // 4. Incremental: 10 new messages (30 lines) appended to the hot file, then the tick.
+        // 4. Incremental: 10 new messages (40 lines) appended to the hot file, then the tick.
         var seq = 0, incr: [Bench.Sample] = []
         for _ in 0..<Self.n("tick", d) {
             try BenchDataset.append(home: box.home, count: 10, now: clock.now, seq: &seq)
@@ -135,12 +135,14 @@ struct PerformanceBenchTests {
         }
         report["summary_recompute"] = Bench.summary(summary)
 
-        // 7. Wake after an 8-hour sleep: the next refresh is a full scan, the day may have changed, and three
-        //    files gained lines meanwhile (other sessions). The app calls refreshLimits and refreshUsage on wake.
+        // 7. Wake after an 8-hour sleep: the next refresh is a full scan, the day may have changed, and the three
+        //    newest files gained lines meanwhile (other sessions). The app calls refreshLimits and refreshUsage on wake.
+        //    More than 10 minutes have passed with new data, so the refresh also saves the cache, as the app's would:
+        //    `disk_written_bytes` shows it.
         var wake: [Bench.Sample] = []
         for _ in 0..<Self.n("wake", d) {
             clock.advance(8 * 3600)
-            for _ in 0..<3 { try BenchDataset.append(home: box.home, count: 5, now: clock.now, seq: &seq) }
+            for k in 0..<3 { try BenchDataset.append(home: box.home, count: 5, now: clock.now, seq: &seq, newest: k) }
             wake.append(await Bench.measure { _ = await Self.refresh(main) })
         }
         report["wake_after_8h"] = Bench.summary(wake)

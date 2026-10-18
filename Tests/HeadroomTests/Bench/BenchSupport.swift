@@ -121,7 +121,30 @@ struct BenchDataset {
     private static let prompt = String(repeating: "synthetic prompt text ", count: 48)              // ~1 KB
     private static let toolText = String(repeating: #"line with \"usage\": {\"x\":1} quoted "#, count: 80) // ~3 KB
 
-    /// Writes the dataset under `home`; returns (bytes, lines, transcript files).
+    private static func formatter() -> ISO8601DateFormatter {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }
+
+    /// One logged message as four transcript lines: the prompt, two streamed snapshots, a tool result. Every message the
+    /// benchmark writes, first or appended, has this shape. Every 100th has no `requestId`.
+    private static func message(_ m: Int, prefix: String, at ts: String) -> String {
+        let id = "\(prefix)\(m)", model = models[m % models.count]
+        let req = m % 100 == 0 ? "" : #""requestId":"req_\#(id)","#
+        var text = #"{"type":"user","timestamp":"\#(ts)","message":{"role":"user","content":"\#(prompt)"}}"# + "\n"
+        for (out, read) in [(20, 0), (120, 400)] {
+            text += #"{"type":"assistant","timestamp":"\#(ts)",\#(req)"message":{"id":"msg_\#(id)","model":"\#(model)","#
+                + #""content":[{"type":"text","text":"synthetic"}],"usage":{"input_tokens":100,"output_tokens":\#(out),"#
+                + #""cache_read_input_tokens":\#(read),"cache_creation_input_tokens":200,"#
+                + #""cache_creation":{"ephemeral_5m_input_tokens":200,"ephemeral_1h_input_tokens":0}}}}"# + "\n"
+        }
+        return text + #"{"type":"user","timestamp":"\#(ts)","message":{"role":"user","content":[{"type":"tool_result","#
+            + #""content":"\#(toolText)"}]}}"# + "\n"
+    }
+
+    /// Writes the dataset under `home`; returns (bytes, lines, transcript files). Every one of `messages + bigFile`
+    /// messages is written: the regular files split `messages` as evenly as possible.
     @discardableResult
     func write(home: URL, now: Date) throws -> (bytes: Int, lines: Int, files: Int) {
         let dir = home.appendingPathComponent(Self.projectDir)
@@ -130,13 +153,12 @@ struct BenchDataset {
         let start = now.addingTimeInterval(-span)
         let total = messages + bigFile
         var bytes = 0, lines = 0, written = 0
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let iso = Self.formatter()
 
         // The big file, if any, holds the newest `bigFile` messages, so it is the hot one.
-        var chunks: [(name: String, range: Range<Int>)] = []
-        let per = max(1, messages / files)
-        for f in 0..<files { chunks.append(("s\(f)", (f * per)..<min(messages, (f + 1) * per))) }
+        var chunks: [(name: String, range: Range<Int>)] = (0..<files).map { f in
+            ("s\(f)", (f * messages / files)..<((f + 1) * messages / files))
+        }
         if bigFile > 0 { chunks.append(("big", messages..<total)) }
 
         for (name, range) in chunks where !range.isEmpty {
@@ -144,19 +166,8 @@ struct BenchDataset {
             text.reserveCapacity(range.count * 5_600)
             var last = start
             for m in range {
-                let t = start.addingTimeInterval(span * Double(m) / Double(total))
-                last = t
-                let ts = iso.string(from: t), id = "b\(m)", model = Self.models[m % Self.models.count]
-                let req = m % 100 == 0 ? "" : #""requestId":"req_\#(id)","#
-                text += #"{"type":"user","timestamp":"\#(ts)","message":{"role":"user","content":"\#(Self.prompt)"}}"# + "\n"
-                for (out, read) in [(20, 0), (120, 400)] {
-                    text += #"{"type":"assistant","timestamp":"\#(ts)",\#(req)"message":{"id":"msg_\#(id)","model":"\#(model)","#
-                        + #""content":[{"type":"text","text":"synthetic"}],"usage":{"input_tokens":100,"output_tokens":\#(out),"#
-                        + #""cache_read_input_tokens":\#(read),"cache_creation_input_tokens":200,"#
-                        + #""cache_creation":{"ephemeral_5m_input_tokens":200,"ephemeral_1h_input_tokens":0}}}}"# + "\n"
-                }
-                text += #"{"type":"user","timestamp":"\#(ts)","message":{"role":"user","content":[{"type":"tool_result","#
-                    + #""content":"\#(Self.toolText)"}]}}"# + "\n"
+                last = start.addingTimeInterval(span * Double(m) / Double(total))
+                text += Self.message(m, prefix: "b", at: iso.string(from: last))
                 lines += 4
             }
             let url = dir.appendingPathComponent("\(name).jsonl")
@@ -183,31 +194,25 @@ struct BenchDataset {
         return (bytes, lines, written)
     }
 
-    /// Appends `count` new messages, dated `now`, to the hot file, as Claude Code would while a session runs.
-    static func append(home: URL, count: Int, now: Date, seq: inout Int) throws {
+    /// Appends `count` new messages, dated `now` (the benchmark's clock), to the transcript `newest` places from the
+    /// newest (0 = the hot file), as Claude Code would while a session runs. The file's modification time becomes
+    /// `now`, so a file appended after a simulated sleep is "hot".
+    static func append(home: URL, count: Int, now: Date, seq: inout Int, newest: Int = 0) throws {
         let dir = home.appendingPathComponent(projectDir)
-        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-        let hot = names.contains("big.jsonl") ? "big.jsonl" : names.sorted { a, b in
-            (Int(a.dropFirst().dropLast(6)) ?? 0) < (Int(b.dropFirst().dropLast(6)) ?? 0)
-        }.last!
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func order(_ n: String) -> Int { n == "big.jsonl" ? .max : Int(n.dropFirst().dropLast(6)) ?? -1 }
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".jsonl") }
+            .sorted { order($0) > order($1) }
+        let url = dir.appendingPathComponent(names[min(newest, names.count - 1)])
+        let ts = formatter().string(from: now)
         var text = ""
         for _ in 0..<count {
             seq += 1
-            let ts = iso.string(from: now), id = "n\(seq)"
-            text += #"{"type":"user","timestamp":"\#(ts)","message":{"role":"user","content":"\#(prompt)"}}"# + "\n"
-            for out in [20, 120] {
-                text += #"{"type":"assistant","timestamp":"\#(ts)","requestId":"req_\#(id)","message":{"id":"msg_\#(id)","#
-                    + #""model":"claude-sonnet-4-5","content":[{"type":"text","text":"synthetic"}],"usage":{"input_tokens":100,"#
-                    + #""output_tokens":\#(out),"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"# + "\n"
-            }
+            text += message(seq, prefix: "n", at: ts)
         }
-        let h = try FileHandle(forWritingTo: dir.appendingPathComponent(hot))
+        let h = try FileHandle(forWritingTo: url)
         try h.seekToEnd()
         try h.write(contentsOf: Data(text.utf8))
         try h.close()
-        // Dated on the benchmark's clock, so a file appended after a simulated sleep is still "hot".
-        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: dir.appendingPathComponent(hot).path)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: url.path)
     }
 }
