@@ -64,6 +64,9 @@ struct WorkflowPolicyTests {
             let at = try #require(release.range(of: publish), "\(publish)")
             #expect(gate.upperBound < at.lowerBound, "\(publish) before the gate")
         }
+        // The upload checks the bytes the gate verified, by the hash the gate output.
+        #expect(release.contains("id: verify") && release.contains("${{ steps.verify.outputs.sha256 }}"))
+        #expect(release.contains(#"| shasum -a 256 -c -"#))
         for (name, text) in try Self.files() {
             #expect(!text.localizedCaseInsensitiveContains("open anyway"), "\(name)")
             #expect(!text.contains("com.apple.quarantine"), "\(name)")
