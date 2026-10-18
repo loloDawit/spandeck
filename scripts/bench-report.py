@@ -34,17 +34,17 @@ for s in sets:
 print()
 
 rows = [
-    ("Cold launch: first scan, no cache", "cold_first_scan"),
-    ("Warm launch: cache load + first refresh", "warm_launch"),
+    ("Ledger cold start: first scan, no cache (not app launch)", "cold_first_scan"),
+    ("Ledger warm start: cache load + first refresh (not app launch)", "warm_launch"),
     ("10 s tick, nothing new", "tick_no_change"),
-    ("10 s tick, 10 new messages", "tick_incremental_10_messages"),
+    ("10 s tick, 10 new messages (no save)", "tick_incremental_10_messages"),
     ("Cache save (`flush`)", "cache_save"),
     ("5 min full scan, nothing new", "full_scan_no_change"),
     ("Summary only (window change)", "summary_recompute"),
-    ("Wake after 8 h (full scan, 3 files grew, cache save)", "wake_after_8h"),
+    ("Simulated wake, clock +8 h (full scan, 3 files grew, cache save)", "wake_after_8h"),
     ("Rebuild after Clear cached usage data", "rebuild_after_clear"),
 ]
-print("Wall time in ms: median / p95 / worst (n). CPU is the median, in ms.")
+print("Wall time in ms: median / p95 / worst (n). CPU is the median, in ms. p95 is nearest-rank; with n ≤ 19 it is the worst sample.")
 print()
 print("| Scenario | " + " | ".join(sets) + " |")
 print("|---|" + "---|" * len(sets))
@@ -63,6 +63,11 @@ def row(label, f):
 row("Bytes scanned, first scan", lambda r: f"{mb(r['cold_first_scan']['bytes_scanned'])} MB")
 row("Cache file", lambda r: f"{mb(r['cache_bytes'])} MB")
 row("Disk written, first scan (median)", lambda r: f"{mb(r['cold_first_scan']['disk_written_bytes']['median'])} MB")
+row("Incremental tick samples that saved the cache (want 0)",
+    lambda r: str(r['tick_incremental_10_messages'].get('samples_with_a_save', '?')))
+row("First change after a ledger start: wall / written (it saves the cache)",
+    lambda r: f"{ms(r['tick_incremental_10_messages']['first_change_after_start_wall_s'])} ms / "
+              f"{mb(r['tick_incremental_10_messages']['first_change_after_start_written_bytes'])} MB")
 row("Disk written, wake (median)", lambda r: f"{mb(r['wake_after_8h']['disk_written_bytes']['median'])} MB")
 row("Disk written, one cache save (median)", lambda r: f"{mb(r['cache_save']['disk_written_bytes']['median'])} MB")
 row("Disk read, first scan (median; file cache warm)", lambda r: f"{mb(r['cold_first_scan']['disk_read_bytes']['median'])} MB")

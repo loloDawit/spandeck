@@ -66,8 +66,8 @@ struct PerformanceBenchTests {
             Ledger(home: box.home, appSupport: support, pricing: pricing, now: { clock.now })
         }
 
-        // 1. Cold launch: no SpanDeck cache, first scan of everything. (The OS file cache is warm after the
-        //    first run: purging it needs root. Run 1 is reported separately.)
+        // 1. Ledger cold start: no SpanDeck cache, first scan of everything. Not an app launch (no NSApplication,
+        //    status item or run loop). The OS file cache may be warm: purging it needs root. Run 1 is reported apart.
         var cold: [Bench.Sample] = [], scanned = 0, tokens = 0
         for i in 0..<Self.n("cold", d) {
             let l = ledger(try freshSupport("cold\(i)"))
@@ -87,7 +87,8 @@ struct PerformanceBenchTests {
         let cacheURL = support.appendingPathComponent(Ledger.cacheName)
         report["cache_bytes"] = Self.fileSize(cacheURL)
 
-        // 2. Warm launch: a new ledger on the saved cache (load, then the first refresh's full scan).
+        // 2. Ledger warm start: a new ledger on the saved cache (load, then the first refresh's full scan). Not an app
+        //    launch.
         var warm: [Bench.Sample] = []
         for _ in 0..<Self.n("warm", d) {
             let l = ledger(support)
@@ -102,13 +103,21 @@ struct PerformanceBenchTests {
         for _ in 0..<Self.n("tick", d) { idle.append(await Bench.measure { _ = await Self.refresh(main) }) }
         report["tick_no_change"] = Bench.summary(idle)
 
-        // 4. Incremental: 10 new messages (40 lines) appended to the hot file, then the tick.
+        // 4. Incremental: 10 new messages (40 lines) appended to the hot file, then the tick. A ledger that hasn't saved
+        //    yet saves on its first change (`lastSave` is `.distantPast`), so one untimed tick takes that save first:
+        //    the timed ticks then exclude saves by construction (B5), and `samples_with_a_save` checks it.
         var seq = 0, incr: [Bench.Sample] = []
+        try BenchDataset.append(home: box.home, count: 10, now: clock.now, seq: &seq)
+        let primingSave = await Bench.measure { _ = await Self.refresh(main) }
         for _ in 0..<Self.n("tick", d) {
             try BenchDataset.append(home: box.home, count: 10, now: clock.now, seq: &seq)
             incr.append(await Bench.measure { _ = await Self.refresh(main) })
         }
-        report["tick_incremental_10_messages"] = Bench.summary(incr)
+        let cacheSize = UInt64(Self.fileSize(cacheURL))
+        report["tick_incremental_10_messages"] = Bench.summary(incr).merging([
+            "samples_with_a_save": incr.filter { $0.written >= cacheSize / 2 }.count,
+            "first_change_after_start_wall_s": primingSave.wall, "first_change_after_start_written_bytes": primingSave.written,
+        ]) { a, _ in a }
 
         // 4b. Cache save: `flush()` after a change (what quit does, and every 10 minutes while running).
         var save: [Bench.Sample] = []
@@ -135,7 +144,7 @@ struct PerformanceBenchTests {
         }
         report["summary_recompute"] = Bench.summary(summary)
 
-        // 7. Wake after an 8-hour sleep: the next refresh is a full scan, the day may have changed, and the three
+        // 7. Simulated wake (the clock moves 8 h; the machine doesn't sleep): the next refresh is a full scan, the day may have changed, and the three
         //    newest files gained lines meanwhile (other sessions). The app calls refreshLimits and refreshUsage on wake.
         //    More than 10 minutes have passed with new data, so the refresh also saves the cache, as the app's would:
         //    `disk_written_bytes` shows it.

@@ -20,11 +20,10 @@ struct PerformanceMemoryBenchTests {
         let out = URL(fileURLWithPath: e["SPANDECK_BENCH_OUT"] ?? NSTemporaryDirectory())
         let start = Bench.footprint().now
 
+        // Every mode writes under the folder, and `gen` deletes it first, so only this package's own
+        // `.build/bench/data-<letters>` is accepted: not a symlink, and with no `..` or symlinked parent leading elsewhere.
+        try #require(BenchDataset.isBenchDataFolder(root), "SPANDECK_BENCH_HOME must be <package>/.build/bench/data-<letters>")
         if mode == "gen" {
-            // It deletes the folder first, so only a `data-*` folder under `.build/bench` is accepted.
-            let parts = root.standardizedFileURL.pathComponents
-            try #require(parts.count >= 3 && parts.suffix(3).dropLast().elementsEqual([".build", "bench"])
-                         && parts.last!.hasPrefix("data-"), "SPANDECK_BENCH_HOME must be .build/bench/data-<name>")
             try? FileManager.default.removeItem(at: root)
             try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
             try d.write(home: home, now: Date())

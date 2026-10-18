@@ -54,7 +54,8 @@ enum Bench {
                       written: io1.written &- io0.written)
     }
 
-    /// Median, 95th percentile (nearest rank) and worst of `xs`.
+    /// Median, 95th percentile (nearest rank: the ⌈0.95·n⌉-th smallest) and worst of `xs`. With n ≤ 19 the p95 is the
+    /// worst sample, so a p95 from a small n says no more than the worst does.
     static func stats(_ xs: [Double]) -> [String: Double] {
         guard !xs.isEmpty else { return [:] }
         let s = xs.sorted()
@@ -98,6 +99,23 @@ struct BenchDataset {
         guard selected != nil, e["SPANDECK_BENCH_HOME"] != nil, let m = e["SPANDECK_BENCH_MODE"],
               ["gen", "cold", "warm"].contains(m) else { return nil }
         return m
+    }
+
+    /// This package's `.build/bench`, from this file's own path (`Tests/HeadroomTests/Bench/`).
+    static let benchRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(".build/bench")
+
+    /// Whether `url` is `<package>/.build/bench/data-<lowercase letters>` once `..` and symlinks in its parents are
+    /// resolved, and is not itself a symlink. The memory runs write there, and delete it first in `gen` mode.
+    static func isBenchDataFolder(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        guard name.hasPrefix("data-"), name.count > 5, name.dropFirst(5).allSatisfy({ $0.isLowercase && $0.isLetter }) else {
+            return false
+        }
+        if let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType,
+           type == .typeSymbolicLink { return false }
+        let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        return parent == benchRoot.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     let name: String
