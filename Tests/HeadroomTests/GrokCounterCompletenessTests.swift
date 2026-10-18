@@ -192,6 +192,31 @@ struct GrokCounterCompletenessTests {
         }
     }
 
+    /// Agreeing only on zeros is no evidence: 0 is the most common counter value. A turn without a total that shares
+    /// no nonzero token counter with the kept turn is merged and flagged, never silently dropped (review of #80).
+    @Test func agreementOnZerosAloneIsUncertain() async throws {
+        for (reported, bare) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: reported, [Self.turn("cachedReadTokens", "0").replacingOccurrences(
+                of: #""cacheCreationTokens":5"#, with: #""cacheCreationTokens":0"#)])
+            try rig.grok(session: bare, [#""cachedReadTokens":0,"cacheCreationTokens":0,"costUsdTicks":10"#])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 150, "\(reported) first")
+            #expect(grok.month.identity == IdentityCoverage(ambiguous: 1), "\(reported) first")
+        }
+    }
+
+    /// Each uncertain merge is counted, not just the first into a kept turn (review of #80).
+    @Test func everyUncertainMergeIsCounted() async throws {
+        let rig = try Rig()
+        try rig.grok(session: "a", [Self.turn()])
+        try rig.grok(session: "b", [#""costUsdTicks":10"#])
+        try rig.grok(session: "c", [#""outputTokens":"x","costUsdTicks":10"#])
+        let grok = await rig.summaries().grok
+        #expect(grok.month.tokens == 155)
+        #expect(grok.month.identity == IdentityCoverage(ambiguous: 2))
+    }
+
     /// Two turns without a total that disagree on a counter are two turns. Before this rule both keyed `-` and one
     /// vanished.
     @Test func turnsWithoutTotalThatDisagreeAreDistinct() async throws {
