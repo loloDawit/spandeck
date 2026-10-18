@@ -199,21 +199,22 @@ Hints such as identical counters (as in F12), or a later timestamp, suggest H1 b
 
 **Bounds that are justified, and their assumptions:**
 - **A0 (already behind every total):** a model's last logged snapshot is its final count. Without A0, no bound below holds; the true value could exceed every snapshot.
-- **A1 (P2's premise):** records never over-report. Each counter in a snapshot is at most the request's final value.
-- **Token lower bound** `L = total(R)`: under H1 the truth is `R`; under H2 `Σ S_m ≥ R` field by field. So `L` holds under either hypothesis, given A0 and A1.
+- **A1 (P2's premise):** records never over-report. Input, output, cache-read and the **cache-write quantity** in a snapshot are each at most the request's final value. The cache-write tier split (5 min / 1 h / unresolved / disputed) is out of scope: it can change between snapshots (P9, `Agg.reconciled`), so a snapshot's tier field may exceed the final one.
+- **Token lower bound** `L = total(R)`: under H1 the truth is `R`; under H2 `Σ S_m ≥ R` in total, and field by field except the cache-write tiers. The record whose cache-write quantity wins in `R` lies inside its own model's `S_m`, so `Σ cacheWrites(S_m) ≥ cacheWrites(R)`. So `L` holds under either hypothesis, given A0 and A1.
+- **Bounds are on quantities, not tiers.** Where models tie on cache-write quantity with different splits, `R`'s tier is disputed or unresolved (P9). The token bounds still hold for the quantity, but no tier is claimed.
 - **Token upper bound** `U = Σ_m total(S_m)`: under H2 it is the truth; under H1 the truth `R ≤ Σ S_m`. So `U` holds given A0, and given that no further call shares the pair unseen.
 - **Exact part: none.** `L` is a bound, not an exact value. The pair's tokens are reported as **at least `L`, at most `U`**, never as one exact number.
 - **Totals that include such pairs:** exact operations add exactly. Pairs add `[L, U]`, so a total is `[E + ΣL, E + ΣU]` with the qualifier *possible cross-model duplicate*.
-- **Per-model attribution:** under H1 the pair belongs to one unknown model. A model's justified lower bound from the pair is therefore **0**, and its upper bound is `total(S_m)`. Model rows show `S_m` with the qualifier, never as exact.
+- **Per-model attribution:** under H1 the pair belongs to one unknown model and that model gets all of `R` (`R ≥ S_m`). Under H2 it gets `S_m`. A model's justified range from the pair is therefore **[0, total(R)]**. Model rows show this range with the qualifier, never as exact. Per-model ranges can't be summed into the total's range: the total's bounds come from `L` and `U` above.
 - **Cost:** a cost bound is justified only when every model involved is priced and no P9 tier is unresolved or disputed. Then:
   - lower = `min(min_m cost_m(R), Σ_m cost_m(S_m))`;
   - upper = `max(max_m cost_m(R), Σ_m cost_m(S_m))`.
 
-  Under H1 the price of the unknown model applies to `R`; under H2 each model's price applies to its own `S_m`; neither ordering is guaranteed. Otherwise the cost is **provisional** (no bound claimed), as with P9's disputed writes.
+  Under H1 the price of the unknown model applies to `R`; under H2 each model's price applies to its own `S_m`; neither ordering is guaranteed. This relies on `R`'s cache-write classification being one record's classification (resolved tiers, no tie). Otherwise the cost is **provisional** (no bound claimed), as with P9's disputed writes.
 - **F12 under this rule:**
   - pair: `L` = 110, `U` = 220;
   - day total: [385, 495], marked *possible cross-model duplicate*;
-  - `claude-test-1` and `claude-test-2` rows: each [0, 110] from the pair (`claude-test-2` also has its own exact 55 from `msg_12c`);
+  - `claude-test-1` and `claude-test-2` rows: each [0, 110] from the pair, i.e. [0, total(R)] (`claude-test-2` also has its own exact 55 from `msg_12c`). The rows' upper bounds sum to more than the day's upper bound, as expected;
   - cost: provisional, since the test models are unpriced.
 
 **Telling a re-log from distinct calls that are legitimately multi-model:** an operation already holds parts for several models when `usage.iterations` lists sub-calls (P11, F13). Those are distinct calls, not P10. The current `Seen.parts` doesn't record which part came from iterations and which from a re-log, so computing `[L, U]` needs a new per-operation marker. **That is a cache schema change, deferred to the gated implementation slice**, not this PR.
@@ -228,7 +229,7 @@ Hints such as identical counters (as in F12), or a later timestamp, suggest H1 b
 - **Home slot (P3) [decided]:** an operation lives in the slot of its first record read.
 - **Retention (P16) [decided]:** 32 days; the 30-day view starts at local midnight 29 days ago.
 - **5-hour window start (P15) [blocked #10/#7]:**
-  - Today: `resetsAt − 5h`, rounded down to a slot (`main.swift:148`).
+  - Today: `resetsAt − 5h` (`main.swift:148`), rounded down to a 15-minute slot by `Ledger.summarize` (`Ledger.swift:1519`).
   - Proposed contract rule: the window's first slot is shown as **boundary-uncertain** whenever the computed start isn't on a slot boundary, instead of being silently included (F22).
   - The rounding stays until real `resets_at` values are characterised.
 
@@ -363,7 +364,7 @@ Three records for `req_01` / `msg_01`, with output 50 → 80 → 120 and cache r
 
 ## 9. Decisions and open questions
 
-**Accepted 2026-10-18:** D1, D6, P2, P5, P6, P12, D7. Unchanged: no Headroom migration, and the existing privacy safeguards.
+**Accepted 2026-10-18:** the overall architecture (D2, D3 for the existing adapters, D8), plus D1, D6, P2, P5, P6, P12 and D7. Unchanged: no Headroom migration, and the existing privacy safeguards.
 
 **Open (owner):**
 1. P10 (§D4.1): range vs "≥ L" display, the qualifier's wording, and acceptance of the bounds and their assumptions A0 and A1.

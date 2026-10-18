@@ -65,6 +65,9 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 - **Within its window:** a quota value stays meaningful only within its own window. After a failed refresh, the last-known value is shown as *stale* with its age (`fetchedAt`) **while now < that limit's `resets_at`**.
 - **After the reset:** the value is **unavailable**. No current value is inferred or extrapolated after a reset.
 - **No reset time:** a limit with no `resets_at` has no proven window, so a failed refresh makes it unavailable.
+- **Grok:** the same rule applies to the billing period. The last plan is *stale* only while now < `GrokPlan.periodEnd` (`Clients.swift:157`); after it, or with no `periodEnd`, it is unavailable.
+  - **Today:** #21's stale plan isn't bounded by `periodEnd`, so the same gap as F-3 exists.
+  - **Proposed:** track it with F-3 under #4.
 - **Prices aren't "stale":** they change only by an explicit download (R6). The built-in snapshot's revision and `retrieved` date are shown instead.
 
 **Polling cadence and failure behaviour, as observed in code (2026-10-18):**
@@ -95,6 +98,7 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 ## 5. Current violations to fix (findings, not fixed here)
 - **F-1, Grok local usage reads missing as 0.**
   - `parseGrokUsage` (`Ledger.swift:1469–1476`) uses `int(_:)`, which returns 0 for an absent or non-numeric key (`Util.swift:176`). This covers `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cachedReadTokens`, `modelCalls`, and `totalTokens` in the dedupe key.
+  - `int(_:)` also accepts JSON booleans as 1 or 0, which `optionalInt` rejects (`Util.swift:178–181`).
   - It also clamps `input − cached` at 0.
   - **Proposed:** read counters with the P8 `Ledger.counter` rules; flag Grok turns like Claude groups (Grok gains a `DataCompleteness`); the dedupe key uses `optionalInt` with absent spelled distinctly (the open "Grok dedupe identity" item from #7's 2026-10-15 comment).
   - **Tracked in #7** (owner decision, 2026-10-18).
@@ -105,7 +109,7 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
   - **Proposed:** a missing percent makes that limit unavailable, kept with its reset time if present.
   - **Tracked in #4** (owner decision, 2026-10-18).
 - **F-3, Claude quota staleness is inconsistent.**
-  - On an error the menu-bar gauge blanks (`claudeGaugeBlankOnOtherErrors`).
+  - On an error the menu-bar gauge blanks (`StatusRenderer.claudeGauge`, `StatusRenderer.swift:71`; test `claudeGaugeBlankOnOtherErrors`).
   - The popover keeps listing the last limits with their age, **even after their `resets_at`** (`PopoverView.swift:465`). That shows a value outside its window, which the rule below forbids.
   - **Direction (owner, 2026-10-18):** keep the last-known value with *stale* and its age while it's still within its original window; unavailable after its reset (§3 *Stale rule*).
   - Implementation waits for the stale threshold.
