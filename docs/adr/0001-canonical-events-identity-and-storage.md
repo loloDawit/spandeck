@@ -1,6 +1,9 @@
 # ADR 0001: Canonical usage events, source adapters, identity and local storage
 
-- **Status:** Proposed (design only; no code, schema or dependency change). Refs #9, drafted jointly with #7.
+- **Status:** Partly accepted (design only; no code, schema or dependency change). Refs #9, drafted jointly with #7.
+  - **Accepted by the owner on 2026-10-18:** the overall architecture (D2, D3 for the existing adapters, D8), plus D1, D6, P2, P5, P6, P12 and D7.
+  - **Revised and awaiting acceptance:** P10 (§D4.1).
+  - **Unresolved:** everything marked [blocked #10].
 - **Date:** 2026-10-18
 - **Companion:** [`METRIC_CONTRACT.md`](../METRIC_CONTRACT.md) (#7) defines what each number means and how its provenance is shown. This ADR defines how records become those numbers.
 
@@ -68,7 +71,7 @@ The fixture register `Tests/HeadroomTests/Fixtures/Ledger/README.md` (P1–P17, 
 
 ## 3. Decisions
 
-### D1. Process architecture: stay a single in-process app [proposed]
+### D1. Process architecture: stay a single in-process app [accepted 2026-10-18]
 **Choice:** keep one menu-bar process, with adapters, reconciler, store and query layer as in-process components behind protocols (as `Dependencies.swift` already does for Keychain, network, process and login item).
 
 **Alternatives:**
@@ -92,7 +95,7 @@ The fixture register `Tests/HeadroomTests/Fixtures/Ledger/README.md` (P1–P17, 
 2. #8 measures UI stalls from parsing that a queue can't fix.
 3. Parser crash isolation becomes a security requirement. That would point to an XPC helper, not a daemon.
 
-### D2. Canonical model: observations → operations → aggregates [proposed]
+### D2. Canonical model: observations → operations → aggregates [accepted with the overall architecture, 2026-10-18]
 Three layers, matching what the ledger already does, with the missing dimensions added as **nullable** fields:
 
 1. **Observation:** one record as an adapter read it. It is never persisted raw. Fields:
@@ -118,7 +121,7 @@ Three layers, matching what the ledger already does, with the missing dimensions
 
 **Tool events** [blocked #10]: no current source records tool calls in a form SpanDeck reads. The model reserves `tool?` on an observation and stores counts only, never arguments or results (PRODUCT principle 1).
 
-### D3. Source adapters [proposed for the two that exist; the rest blocked #10]
+### D3. Source adapters [accepted for the existing adapters, 2026-10-18; the rest blocked #10]
 An adapter has one job: turn bytes into observations with a cursor, without interpreting gaps. Proposed protocol (illustrative; no code in this ADR):
 
 ```swift
@@ -139,33 +142,27 @@ protocol UsageSourceAdapter {
 | Claude OpenTelemetry | **[blocked #10, #4]** | Exporter and transport options, identity fields and nested-agent behaviour unverified; enabling it changes Claude settings |
 | Bedrock / Vertex | **[blocked #10]** | Model ids already pass validation (`us.anthropic.…-v1:0`, `…@2025…`), but account, billing and actual-cost sources are unknown. No actual-cost source is assumed (contract) |
 
-### D4. Identity and deduplication [P1, P4, P13 decided; P2, P6, P12 proposed; P5, P10 owner; P11 blocked]
+### D4. Identity and deduplication [P1, P2, P4, P5, P6, P12, P13 decided; P10 revised, gated; P11 blocked]
 - **Scope [proposed]:** identity is scoped by `provider`. Claude and Grok operations are never matched to each other. Within a provider, by `account` once accounts are known; until then, one implicit account. This follows the owner's P4 caution against unioning identities across accounts and providers.
 - **Within one source** (Claude JSONL): unchanged from the code.
   - P1: (message id, request id).
   - P4: one id alone in its own namespace, joined only to an unambiguous pair; a join is never undone. Neither id: a keyed fingerprint, flagged uncertain.
   - P13: rewrites are read again from the start; identity dedupe prevents double counts.
-- **Repeated records of one operation (P2) [proposed: accept as decided]:**
+- **Repeated records of one operation (P2) [decided 2026-10-18]:**
   - Records are cumulative snapshots, so each counter takes its maximum and counts never decrease.
   - Cache writes are one quantity: the larger wins with its classification.
   - `Agg.reconciled` is commutative and associative, so arrival order and file grouping don't matter.
   - Evidence: F01, F02, F43, F44, and #61's re-review.
-- **Last line without a newline (P6) [proposed: accept]:** it is counted once its newline is written; until then the file is `pending`, not unread.
-- **The record of past usage (P12) [proposed: accept]:**
-  - The transcripts on disk are the source of truth.
+- **Last line without a newline (P6) [decided 2026-10-18]:** it is counted once its newline is written; until then the file is `pending`, not unread.
+- **The record of past usage (P12) [decided 2026-10-18]:**
+  - The transcripts on disk are the source for rebuilding the cache.
   - The cache keeps what it already counted, but a rebuild counts only what is still on disk.
-  - The owner already accepted this for every version bump.
-- **Same message id under another request id (P5) [owner]:**
-  - Today: two operations, as in ccusage (F06).
-  - Proposed: keep it, and count such pairs into `IdentityCoverage` as a distinct, visible signal, so a wrong split can't hide.
+  - The history lost when transcripts are gone is documented (`USAGE_CACHE.md`).
+- **Same message id under another request id (P5) [decided 2026-10-18]:**
+  - Distinct request ids stay separate operations, as today and in ccusage (F06).
+  - Identity uncertainty is surfaced where appropriate. Implementation slice: count such pairs as a visible `IdentityCoverage` signal.
   - Revisit if #10 documents request-id semantics.
-- **Same pair re-logged under another model (P10) [owner]:**
-  - Today: the second model's counts are added (F12 is a CI known issue).
-  - Options:
-    - (a) the first model wins;
-    - (b) the larger total wins;
-    - (c) keep both, but report the overlap as quantity uncertainty instead of exact.
-  - Proposed: **(c)** until #10 explains the case. It doesn't silently drop usage and doesn't present a double count as exact.
+- **Same pair re-logged under another model (P10) [revised; implementation gated]:** see §D4.1.
 - **Iterations semantics (P11) [blocked #10]:** the assumption stays and stays visible (F13).
 - **Across sources (JSONL vs status line vs OTel) [blocked #10]:**
   - The rule is fixed now; the field mapping waits.
@@ -173,6 +170,58 @@ protocol UsageSourceAdapter {
   - Counters come from one **primary source per field**, by a fixed precedence written per source pair once #10 documents each source's fields. The other sources only add coverage and freshness.
   - If two sources can't be proven to describe the same operation, they're shown **side by side as separate views, never summed** (PRODUCT principle 3; contract invariant I-7).
   - Overlap examples (§7.4) are *proposed shapes*, not fixtures; #2's overlapping-source criterion stays open, as the owner decided.
+
+### D4.1 P10: one pair, records under more than one model [revised for acceptance; gated]
+
+**Owner direction (2026-10-18):**
+- Retain the observations, and mark possible cross-model duplication as uncertain.
+- Don't label possibly duplicated tokens as exact.
+- Settle the accounting policy before implementing.
+- No cache schema change in this PR.
+
+**What the code does today (F12, re-examined):**
+- `msg_12a` / `req_12a` is logged as `claude-test-1` [input 100, output 10], and 15 minutes later again as `claude-test-2` [100, 10].
+- `count()` finds the pair in `seen`, finds no `claude-test-2` part, and adds the whole second snapshot under `claude-test-2` with 0 calls.
+- The operation stays `identified`, so the total (495) carries **no uncertainty signal**: a possible double count is shown as exact. This is the case to fix.
+- The fixture's own expected values (385) encode option (a), "the first model wins". That would be a silent policy choice, and this revision doesn't adopt it.
+- The fixture stays a CI known issue until the policy is settled; this PR doesn't change it.
+
+**Two hypotheses the records can't tell apart:**
+
+| | H1: one request re-logged | H2: distinct model calls sharing the ids |
+|---|---|---|
+| Meaning | the same API request written again with another model label | two calls whose records reuse one message id and request id |
+| Consistent with | P1 (a pair identifies one request) | a fallback or retry reusing ids (unverified; #10) |
+| True tokens | `total(R)`, where `R` = per-field P2 reconciliation of all the pair's records across models | `Σ total(S_m)`, where `S_m` = the P2 reconciliation of the records under model `m` |
+| True model | one of the models; which one is unknown | each model, its own `S_m` |
+
+Hints such as identical counters (as in F12), or a later timestamp, suggest H1 but don't prove it. F12 is synthetic, and it's unverified whether Claude Code ever writes this case (fixture note; #10).
+
+**Bounds that are justified, and their assumptions:**
+- **A0 (already behind every total):** a model's last logged snapshot is its final count. Without A0, no bound below holds; the true value could exceed every snapshot.
+- **A1 (P2's premise):** records never over-report. Each counter in a snapshot is at most the request's final value.
+- **Token lower bound** `L = total(R)`: under H1 the truth is `R`; under H2 `Σ S_m ≥ R` field by field. So `L` holds under either hypothesis, given A0 and A1.
+- **Token upper bound** `U = Σ_m total(S_m)`: under H2 it is the truth; under H1 the truth `R ≤ Σ S_m`. So `U` holds given A0, and given that no further call shares the pair unseen.
+- **Exact part: none.** `L` is a bound, not an exact value. The pair's tokens are reported as **at least `L`, at most `U`**, never as one exact number.
+- **Totals that include such pairs:** exact operations add exactly. Pairs add `[L, U]`, so a total is `[E + ΣL, E + ΣU]` with the qualifier *possible cross-model duplicate*.
+- **Per-model attribution:** under H1 the pair belongs to one unknown model. A model's justified lower bound from the pair is therefore **0**, and its upper bound is `total(S_m)`. Model rows show `S_m` with the qualifier, never as exact.
+- **Cost:** a cost bound is justified only when every model involved is priced and no P9 tier is unresolved or disputed. Then:
+  - lower = `min(min_m cost_m(R), Σ_m cost_m(S_m))`;
+  - upper = `max(max_m cost_m(R), Σ_m cost_m(S_m))`.
+
+  Under H1 the price of the unknown model applies to `R`; under H2 each model's price applies to its own `S_m`; neither ordering is guaranteed. Otherwise the cost is **provisional** (no bound claimed), as with P9's disputed writes.
+- **F12 under this rule:**
+  - pair: `L` = 110, `U` = 220;
+  - day total: [385, 495], marked *possible cross-model duplicate*;
+  - `claude-test-1` and `claude-test-2` rows: each [0, 110] from the pair (`claude-test-2` also has its own exact 55 from `msg_12c`);
+  - cost: provisional, since the test models are unpriced.
+
+**Telling a re-log from distinct calls that are legitimately multi-model:** an operation already holds parts for several models when `usage.iterations` lists sub-calls (P11, F13). Those are distinct calls, not P10. The current `Seen.parts` doesn't record which part came from iterations and which from a re-log, so computing `[L, U]` needs a new per-operation marker. **That is a cache schema change, deferred to the gated implementation slice**, not this PR.
+
+**Still to settle before implementing [owner]:**
+1. Whether `[L, U]` is shown as a range, or as "≥ L" with a note.
+2. The qualifier's wording.
+3. Whether #10 evidence (does Claude Code write this case, and why) can retire H1 or H2.
 
 ### D5. Time [P3, P14, P16 decided; P15 blocked]
 - **Slots [decided, #57]:** 15-minute UTC slots, so every local midnight in every current offset is a slot boundary. Day and week totals are computed from slots in the current `Calendar` at query time, so zone and DST changes need no re-index (F21, F46, F47).
@@ -183,7 +232,7 @@ protocol UsageSourceAdapter {
   - Proposed contract rule: the window's first slot is shown as **boundary-uncertain** whenever the computed start isn't on a slot boundary, instead of being silently included (F22).
   - The rounding stays until real `resets_at` values are characterised.
 
-### D6. Local storage: keep the JSON v7 cache now, plan SQLite for event-level data [proposed]
+### D6. Local storage: keep the JSON v7 cache now, plan SQLite for event-level data [accepted 2026-10-18]
 
 | | Keep JSON v7 (choice now) | SQLite (system `libsqlite3`, no package) | Append-only event log |
 |---|---|---|---|
@@ -214,16 +263,15 @@ protocol UsageSourceAdapter {
 - *Clear cached usage data* removes every file of the store, sidecars included;
 - no automatic migration from Headroom's folder.
 
-### D7. Privacy of new dimensions [owner]
+### D7. Privacy of new dimensions [decided 2026-10-18]
 - **Session and project:** a project is a folder name under `~/.claude/projects/`, derived from a working directory, which is often a private repository name (PRODUCT principle 1).
-- **Options:**
-  - (a) opaque ids only, so totals can be split but never named;
-  - (b) names shown in memory from the path, never persisted;
-  - (c) names persisted, with consent.
-- **Proposed:** (a) by default. (b) only behind an explicit setting, and (c) not in M1.
+- **Decision:**
+  - Session and project identifiers are **opaque by default**: keyed ids under the per-install key, so totals can be split but not named.
+  - Private folder and repository names are **never persisted**.
+  - Showing names in memory only (read from the path at display time) would need a separate owner approval and an explicit setting. It isn't part of this decision.
 - **Agent:** main vs subagent can be derived from the existing `/subagents/` path layout, with no new data stored. That needs P11-style verification in #10 that subagent records aren't also included in the parent's usage.
 
-### D8. Versioning and migration [proposed]
+### D8. Versioning and migration [accepted with the overall architecture, 2026-10-18]
 - **Cache schema:**
   - `State.version` stays the single switch.
   - Any change to identity keys, slot meaning or counted semantics bumps it, which means discard and rebuild (P12 loss documented in `USAGE_CACHE.md`, as for v4→v7).
@@ -267,7 +315,7 @@ protocol UsageSourceAdapter {
 | Rewrite outside sampled windows | Not detected (accepted limit P13); identity dedupe still prevents double counts on a later full re-read |
 | Id-less streaming records | May overcount; flagged `fingerprinted` (P4, accepted) |
 | Two sources disagree on counters | Primary-source-per-field rule; disagreement surfaced as quantity uncertainty, never averaged or summed |
-| Quota endpoint changes shape | Unavailable, not 0% (contract F-2); last value shown as stale with its age |
+| Quota fetch fails or the answer changes shape | A missing percent is unavailable, never 0 % (contract F-2). The last-known value may be shown with *stale* and its age only while its own window hasn't reset; after its reset time it is unavailable (contract §3, F-3). Today the menu-bar gauge blanks, while the popover keeps the last limits with their age and no reset check (contract F-3) |
 | Cache unwritable / unexcludable | In-memory totals, issue shown (existing R8/#70 behaviour) |
 | Clock or zone change | Slots are UTC; views recompute (P14) |
 
@@ -276,8 +324,8 @@ protocol UsageSourceAdapter {
 | Policy | Disposition |
 |---|---|
 | P1, P3, P4, P7, P8, P9, P13, P14, P16, P17 | decided / implemented; carried unchanged |
-| P2, P6, P12 | proposed: accept as decided (§D4) |
-| P5, P10 | owner decision (§D4 proposals) |
+| P2, P5, P6, P12 | decided 2026-10-18 (§D4); P5's visible signal is an implementation slice |
+| P10 | revised (§D4.1); implementation gated until the accounting policy is settled |
 | P11, P15 | blocked on #10 (§D4, §D5) |
 
 ## 7. Synthetic examples (from existing fixtures)
@@ -294,8 +342,8 @@ Three records for `req_01` / `msg_01`, with output 50 → 80 → 120 and cache r
 
 ### 7.3 Re-log under another model: F12 (P10)
 `req_12a` / `msg_12a` is logged as `claude-test-1` (110), then again as `claude-test-2` (110).
-- **Today:** 220 counted.
-- **Proposed (c):** one operation; 110 exact plus 110 marked quantity-uncertain, shown as "≥110, up to 220", not 220 exact.
+- **Today:** 220 counted for the pair, shown as exact. The day total is 495.
+- **Revised rule (§D4.1):** the pair is at least 110, at most 220, with no exact part. The day total is [385, 495], marked *possible cross-model duplicate*.
 
 ### 7.4 Overlapping sources: *proposed shape only* [blocked #10]
 - **Inputs:** a JSONL observation `{provider: anthropic, source: claude.jsonl, messageID: m, requestID: r, counters: …}`, and a hypothetical second observation of the same operation from another Claude source.
@@ -305,17 +353,26 @@ Three records for `req_01` / `msg_01`, with output 50 → 80 → 120 and cache r
 
 ## 8. Implementation slices (each a small PR, after acceptance)
 1. **Contract fixes, no schema change:** missing-as-zero in Grok local usage and in quota parsing (contract F-1, F-2), with fixtures. Folded into existing issues where they fit.
-2. **P10 decision:** implement the chosen option (F12 known issue resolved), with a cache bump if counting semantics change.
+2. **P10, gated:** only once §D4.1's open points are settled. It needs a per-operation marker that separates re-logs from iteration parts, which is a cache version bump (discard and rebuild, P12).
 3. **P15 boundary-uncertain window slot** (after #10 characterises `resets_at`).
 4. **Extract adapters behind `UsageSourceAdapter`** with no behaviour change (fixtures F01–F49 identical before and after).
 5. **Add `source` and the provider-scoped key to operations:** additive, then a version bump if keys change.
+5a. **P5 signal:** count message ids seen under more than one request id as a visible identity qualifier.
 6. **First new adapter** (status line or OTel, per #10's "smallest adapter" decision), behind #4's consent and rollback contract.
 7. **Storage:** re-evaluate D6 with #8 data before slice 6 lands event-level data.
 
-## 9. Open questions (owner)
-1. Accept D1 (in-process) and D6 (keep JSON v7 now)?
-2. P2, P6, P12: accept as decided?
-3. P5: keep the two-operation rule with a visible signal?
-4. P10: option (a), (b) or (c)?
-5. D7: opaque-only session and project by default?
-6. Contract statuses and UI wording (`METRIC_CONTRACT.md` §3)?
+## 9. Decisions and open questions
+
+**Accepted 2026-10-18:** D1, D6, P2, P5, P6, P12, D7. Unchanged: no Headroom migration, and the existing privacy safeguards.
+
+**Open (owner):**
+1. P10 (§D4.1): range vs "≥ L" display, the qualifier's wording, and acceptance of the bounds and their assumptions A0 and A1.
+2. Contract wording and the stale threshold (`METRIC_CONTRACT.md` §3, §10).
+
+**Unresolved, waiting on #10:**
+- P11: `usage.iterations` semantics.
+- P15: 5-hour window boundaries.
+- Status-line and OpenTelemetry identity and field mappings.
+- Bedrock and Enterprise observability coverage.
+
+The overlapping-source fixture requirement (#2) stays open.

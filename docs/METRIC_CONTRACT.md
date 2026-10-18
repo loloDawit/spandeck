@@ -1,11 +1,13 @@
 # Metric and provenance contract
 
-- **Status:** Proposed. Contract version **0.1** (design only; no code change). Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+- **Status:** Partly accepted. Contract version **0.2** (design only; no code change). Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+  - **Accepted by the owner on 2026-10-18:** missing is not zero; the value statuses and qualifiers (§3); F-1 → #7, F-2 → #4; the F-3 direction; Bedrock/Vertex labelling (§8).
+  - **Still open:** the stale threshold (§3); P10 display (ADR §D4.1).
 - **Date:** 2026-10-18
 
 This contract says what each number SpanDeck shows means, where it comes from, how fresh and complete it is, and how missing data is shown. Labels follow the ADR: **[decided]**, **[proposed]**, **[owner]**, **[blocked #10]**.
 
-## 1. Four kinds of number that must never be mixed [decided in principle: #7 problem statement, PRODUCT.md]
+## 1. Five kinds of number that must never be mixed [decided: #7 problem statement, PRODUCT.md; owner 2026-10-18]
 
 | Kind | Example | Unit | Authority | Today's source |
 |---|---|---|---|---|
@@ -13,7 +15,7 @@ This contract says what each number SpanDeck shows means, where it comes from, h
 | **Estimated API-equivalent cost** | ≈ $0.004 | USD at list price | estimate: LiteLLM price table at a pinned revision | `Pricing` (R6) |
 | **Provider-reported cost** | Grok turn cost | USD (1e-10 ticks) | observed, as the provider's CLI reported it; not a bill | Grok `costUsdTicks` |
 | **Subscription quota** | Session 42 % used, resets 18:00 | percent of a plan window | provider-reported, **unofficial** endpoint, opt-in | `ClaudeLimitsClient`, `GrokClient` |
-| **Actual charge** | an invoice line | USD | provider billing | **none: always *unavailable*** (no source exists; Bedrock / AWS cost sources blocked #10) |
+| **Actual charge** | an invoice line | USD | a **verified** provider billing source | **none: always *unavailable*** (no such source exists; Bedrock / AWS cost sources blocked #10) |
 
 **Rules:**
 - A quota percent is never summed with, compared to or derived from tokens or costs (#7 non-goal).
@@ -33,14 +35,16 @@ This contract says what each number SpanDeck shows means, where it comes from, h
 | Actual charges | none | n/a | n/a | n/a | always *unavailable* |
 | Session, project, agent, tool metrics | none today | n/a | n/a | n/a | blocked #10 / ADR D7 |
 
-## 3. Statuses shown to the user [proposed; wording owner]
+## 3. Statuses shown to the user [accepted 2026-10-18; exact wording and stale threshold open]
 Every displayed number carries exactly one **value status** and zero or more **qualifiers**.
 
 **Value status:**
 - **observed:** read from a source that records the quantity itself (tokens in logs, a reported percent or cost).
 - **estimated:** computed from observed quantities and a stated method (list-price cost).
 - **unavailable:** there is no value. Never shown as `0`, `$0` or `0 %`; shown as "—" with a reason.
-- **actual:** reserved for a provider charge. No source today, so never shown.
+- **actual:** only for a charge read from a **verified** billing source. None exists today, so it is never shown.
+
+A **valid zero** (a counter, percent or cost that is present and exactly 0) is an *observed* (or *estimated*) 0. It is never shown as *unavailable*, and a missing or malformed value is never shown as 0 (§4).
 
 **Qualifiers** (each maps to an existing facet, so most need no new data):
 
@@ -48,17 +52,35 @@ Every displayed number carries exactly one **value status** and zero or more **q
 |---|---|---|---|
 | partial | some contributing values unknown; the shown amount is a lower bound | `CostEstimate.Coverage.partial`, `minimum` | "≥ $x" |
 | provisional | quantities disagree between sources; no bound claimed | `QuantityUncertainty.disputedTokens`, `CostEstimate.isProvisional` | cache-write conflict note |
-| approximate identity | some operations identified by less than both ids | `IdentityCoverage.uncertain > 0` | "Usage may be approximate: some records lack identifiers." |
+| uncertain identity | some operations identified by less than both ids, or (P5) a message id seen under more than one request id | `IdentityCoverage.uncertain > 0`; the P5 signal is a later slice | "Usage may be approximate: some records lack identifiers." |
+| possible cross-model duplicate | one id pair has records under more than one model (P10): tokens are a range `[L, U]`, never exact | none yet; gated (ADR §D4.1) | none (today counted as exact, the defect F12 shows) |
 | incomplete data | unread records or flawed counters in the period | `DataCompleteness.isComplete == false` | unread / flawed note |
 | pending | a transcript's last line is unfinished | `DataCompleteness.pending` | none shown as a gap (normal while writing) |
 | saturated | a sum held at `Int.max` | `QuantityUncertainty.saturated` | held note |
-| stale | the last successful fetch is older than its expected cadence | `GrokPlan` after a temporary failure; **not yet for Claude quota or prices** | Grok stale label |
+| stale | a last-known value shown after a failed or missed refresh, with its age, and only while it is still meaningful (see *Stale rule*) | `GrokPlan` after a temporary failure; **not yet for the Claude quota** | Grok stale label |
 | boundary-uncertain | a window's first slot may include records before its start | none yet (P15) | none |
 | unofficial | value from an undocumented endpoint | none yet | consent card text (#15) |
 
-**Proposed stale thresholds [owner]:**
-- quota: older than 2 poll intervals, or than its `resets_at`;
-- prices: the built-in snapshot's `retrieved` date is shown, not a staleness alarm, since prices change only by an explicit download (R6).
+**Stale rule [direction accepted 2026-10-18; threshold open]:**
+- **Within its window:** a quota value stays meaningful only within its own window. After a failed refresh, the last-known value is shown as *stale* with its age (`fetchedAt`) **while now < that limit's `resets_at`**.
+- **After the reset:** the value is **unavailable**. No current value is inferred or extrapolated after a reset.
+- **No reset time:** a limit with no `resets_at` has no proven window, so a failed refresh makes it unavailable.
+- **Prices aren't "stale":** they change only by an explicit download (R6). The built-in snapshot's revision and `retrieved` date are shown instead.
+
+**Polling cadence and failure behaviour, as observed in code (2026-10-18):**
+- Quota limits refresh every 60 s (`main.swift:42`); local usage every 10 s (`main.swift:43`).
+- Claude: a 429 backs off 300 s, and a 401 pauses 300 s (`ProviderServices.swift:264–265`, `claudeAuthPause`).
+  - On any error the last limits are kept in `Store` and `claudeError` is set.
+  - The **menu-bar gauge blanks** (`StatusRenderer.swift:71`).
+  - The **popover still lists the last limits** with "⟨error⟩, showing data from ⟨age⟩" (`PopoverView.swift:465`), with no check against `resets_at`.
+  - Only a missing login (`notConfigured`) clears them (`ProviderServices.swift:260`).
+- Grok: a rejected key pauses 600 s (`grokAuthPause`). Temporary failures keep the last plan, labelled stale (#21).
+- **Still undocumented:**
+  - how long the Claude endpoint takes to answer, and its own rate limits;
+  - what happens across sleep and wake;
+  - whether a hidden gauge's paused polling counts as a miss.
+
+**The threshold** (how many missed refreshes before *stale* shows) **is not finalized** until the points above are documented. A candidate for review is "two consecutive missed or failed refreshes".
 
 ## 4. Null versus zero [decided as a principle; rules proposed]
 1. **Absent ≠ 0.** A counter, percent or cost that is missing, `null`, non-numeric, negative, fractional or too large is **absent**.
@@ -75,14 +97,18 @@ Every displayed number carries exactly one **value status** and zero or more **q
   - `parseGrokUsage` (`Ledger.swift:1469–1476`) uses `int(_:)`, which returns 0 for an absent or non-numeric key (`Util.swift:176`). This covers `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cachedReadTokens`, `modelCalls`, and `totalTokens` in the dedupe key.
   - It also clamps `input − cached` at 0.
   - **Proposed:** read counters with the P8 `Ledger.counter` rules; flag Grok turns like Claude groups (Grok gains a `DataCompleteness`); the dedupe key uses `optionalInt` with absent spelled distinctly (the open "Grok dedupe identity" item from #7's 2026-10-15 comment).
-  - **Fold into:** #7, or a small child of it, since there's no existing Grok-accounting issue.
+  - **Tracked in #7** (owner decision, 2026-10-18).
 - **F-2, quota parsing reads missing as 0 %.**
   - `ClaudeLimitsClient.fetch` uses `l.double("percent") ?? 0` and `utilization ?? 0`.
   - `GrokClient` product `usagePercent ?? 0`.
   - The Grok top-level percent is already strict (#21).
   - **Proposed:** a missing percent makes that limit unavailable, kept with its reset time if present.
-  - **Fold into:** #4 (quota integration lifecycle), or #7.
-- **F-3, no staleness for Claude quota or prices.** The Claude gauge goes blank on errors (`claudeGaugeBlankOnOtherErrors`) rather than showing the last value as stale. That is safe but loses information. This needs an owner choice.
+  - **Tracked in #4** (owner decision, 2026-10-18).
+- **F-3, Claude quota staleness is inconsistent.**
+  - On an error the menu-bar gauge blanks (`claudeGaugeBlankOnOtherErrors`).
+  - The popover keeps listing the last limits with their age, **even after their `resets_at`** (`PopoverView.swift:465`). That shows a value outside its window, which the rule below forbids.
+  - **Direction (owner, 2026-10-18):** keep the last-known value with *stale* and its age while it's still within its original window; unavailable after its reset (§3 *Stale rule*).
+  - Implementation waits for the stale threshold.
 
 ## 6. Reconciliation and accounting invariants
 These hold in today's code unless marked, and every refactor must keep them (fixture-tested):
@@ -95,7 +121,7 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 - **I-7 [proposed]:** sources that can't be proven to observe the same operation are never summed. They're shown as separate views.
 - **I-8 [proposed]:** operations are scoped by provider (and by account once known), and never matched across providers.
 - **I-9:** a quota percent is never added to, or derived from, tokens or costs.
-- **I-10:** an estimated cost carries its price revision. A provider-reported cost is never relabelled actual. Actual stays unavailable until a billing source exists.
+- **I-10:** an estimated cost carries its price revision. A provider-reported cost is never relabelled actual. Actual stays unavailable until a verified billing source exists.
 - **I-11:** coverage adds field-wise through every total, so one provider's gap keeps the combined total qualified (`UsageSummary.combine`).
 
 ## 7. Time windows [P14, P16 decided; P15 blocked]
@@ -112,7 +138,10 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 ## 8. Enterprise, Bedrock and account limits [blocked #10; stated now]
 - **No account dimension today.** Usage from several Claude accounts on one Mac (personal and work) is summed as one, because transcripts carry no account field SpanDeck reads. This is a known limit to show in the UI.
 - **Bedrock / Vertex:** model ids are accepted and counted, and costed at LiteLLM's first-party list price if the id matches. **That is not the Bedrock price or a charge.**
-  - Proposed: label Bedrock/Vertex-shaped ids as *estimated at Anthropic list price; cloud provider pricing differs* until #10 says otherwise.
+- **Rule [accepted 2026-10-18]:**
+  - Every Bedrock or Vertex estimate names its price source: the price table (LiteLLM), its revision, and the entry used. For example: *estimated at Anthropic list price (LiteLLM `<revision>`, entry `claude-…`); cloud-provider pricing differs*.
+  - It is never described as an actual cloud-provider charge.
+  - If no entry matches, the cost is unknown, never $0 (P17).
 - **Enterprise / managed:** quota percentages may not be exposed for some accounts (#10 non-goal: don't assume). The quota is unavailable, never 0 %.
 - **Actual spend:** no AWS Cost Explorer or Anthropic billing source is read, or planned without a separate threat-model review.
 
@@ -128,8 +157,19 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 
 **New ones needed per slice:** F-1 (Grok missing counters), F-2 (quota missing percent), P10 decision (F12), P15 boundary slot (F22).
 
-## 10. Owner decisions
-1. The status vocabulary and qualifier wording (§3).
-2. Stale thresholds (§3), and F-3: blank vs stale for the Claude quota.
-3. Where F-1 and F-2 are tracked (fold into #7 / #4).
-4. The Bedrock/Vertex labelling text (§8).
+## 10. Decisions and open points
+
+**Accepted 2026-10-18:**
+- missing is not zero, and a valid zero stays distinct;
+- value statuses observed / estimated / unavailable, and actual only with a verified billing source;
+- independent qualifiers;
+- F-1 → #7, F-2 → #4;
+- the F-3 direction;
+- Bedrock/Vertex estimates name their price source and are never called charges.
+
+**Open:**
+1. The stale threshold, once polling cadence and failure behaviour are fully documented (§3).
+2. Exact UI wording for each qualifier.
+3. P10 display: a range or "≥ L" (ADR §D4.1).
+
+**Waiting on #10:** P11, P15, status-line and OTel mappings, Bedrock and Enterprise coverage.
