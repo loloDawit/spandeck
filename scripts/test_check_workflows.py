@@ -153,7 +153,8 @@ class CheckerTests(unittest.TestCase):
         # Nor does a mention in text, such as release notes naming the script.
         mention = "      - name: Notes\n        run: echo \"checked by scripts/verify-release.sh before upload\"\n"
         self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, mention)}, "publishes without")
-        for publish in ('gh release upload "$TAG" x.dmg --clobber', "gh api repos/o/r/releases -f tag_name=v1"):
+        for publish in ('gh release upload "$TAG" x.dmg --clobber', "gh api repos/o/r/releases -f tag_name=v1",
+                        'gh release edit "$TAG" --draft=false'):
             self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, "").replace(
                 'gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg"', publish)}, "publishes without")
         action = f"      - uses: softprops/action-gh-release@{SHA} # v2.0.0\n"

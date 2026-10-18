@@ -13,7 +13,7 @@ Fails (exit 1, one line per problem) when:
   - `github.token` or `secrets.` appears outside a step (a workflow- or job-level `env:` hands it to every step);
   - a workflow uses `pull_request_target`;
   - a workflow file isn't listed in POLICY (new workflows need a reviewed entry);
-  - a step publishes a release (`gh release create|upload`, `gh api …/releases`, or a release action) before an
+  - a step publishes a release (`gh release create|upload|edit`, since `edit --draft=false` publishes a draft; `gh api …/releases`; or a release action) before an
     earlier step of the same job ran `scripts/verify-release.sh <dmg>` (#11; `--preflight` doesn't count), the gate step
     has `if:`, `continue-on-error:` or `|| true`, or a step between the gate and the publish rebuilds or re-signs;
   - any workflow tells users to bypass Gatekeeper (Open Anyway, removing the quarantine attribute, disabling spctl).
@@ -35,7 +35,7 @@ POLICY = {
 
 # An invocation with a DMG argument (a path ending .dmg, or a variable); `--preflight` or a mention in text isn't one.
 GATE = re.compile(r'(^|[\s;&|(])(\./)?scripts/verify-release\.sh\s+"?(\$|[^\s"]*\.dmg\b)')
-PUBLISH = re.compile(r"\bgh\s+release\s+(create|upload)\b|\bgh\s+api\b.*/releases\b|^\s*(-\s+)?uses:\s*[\w.-]+/[\w.-]*release")
+PUBLISH = re.compile(r"\bgh\s+release\s+(create|upload|edit)\b|\bgh\s+api\b.*/releases\b|^\s*(-\s+)?uses:\s*[\w.-]+/[\w.-]*release")
 REBUILD = re.compile(r"\bbuild\.sh\b|\bcodesign\b|\bhdiutil\b|\bswift\s+build\b")
 # Removing an attribute (-d) or all of them (-c) with xattr; reading one (-p, -l, -r alone) is fine.
 BYPASS = re.compile(r"open anyway|\bxattr\s+(-[a-z]*\s+)*-[a-z]*[dc]|spctl\s+--(master|global)-disable", re.I)
