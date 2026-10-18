@@ -166,6 +166,29 @@ struct GrokCounterCompletenessTests {
         #expect(grok.month.completeness.isComplete)
     }
 
+    /// An invalid reported cost is unknown (R7), never a negative or truncated cost; the tokens still count.
+    @Test(arguments: ["-5", "1.5", "1e30"])
+    func invalidCostIsUnknown(_ value: String) async throws {
+        let rig = try Rig()
+        try rig.grok([Self.turn("costUsdTicks", value)])
+        let grok = await rig.summaries().grok
+        #expect(grok.month.tokens == 155 && grok.month.cost.coverage == .unavailable, "costUsdTicks = \(value)")
+    }
+
+    /// When every counter is unusable the turn adds no tokens, but the card still says so: the note reads Grok's
+    /// summary as it is, not only when it has tokens (`Store.localGrokUsage` hides a summary without any).
+    @MainActor @Test func noteShownWhenGrokHasNoTokens() async throws {
+        let rig = try Rig()
+        try rig.grok([#""inputTokens":"x","cachedReadTokens":"x","outputTokens":"x","cacheCreationTokens":"x","#
+                      + #""modelCalls":"x","totalTokens":"x""#])
+        let grok = await rig.summaries().grok
+        #expect(grok.month.tokens == 0 && grok.month.completeness == DataCompleteness(flawed: 1))
+        let store = Store()
+        store.grokUsage = grok
+        #expect(store.localGrokUsage == nil)
+        #expect(UsageCard.notes(store).map(\.text) == [CompletenessText.incomplete])
+    }
+
     // MARK: Totals and notes
 
     /// A flawed Grok turn keeps the combined Claude + Grok total qualified.
@@ -184,8 +207,8 @@ struct GrokCounterCompletenessTests {
         let (claude, grok) = await rig.summaries()
         let note = try #require(CompletenessText.note(claude, grok: grok))
         #expect(note.text == CompletenessText.incomplete)
-        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a token count that is "
-                                     + "missing or isn't a valid number"))
+        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a counter that is "
+                                     + "missing, isn't a valid number or contradicts another"))
         #expect(!note.detail.contains("Claude Code's logs"))
         #expect(UsageNotes.notes(claude, grok: grok).map(\.text) == [CompletenessText.incomplete])
     }
@@ -202,8 +225,8 @@ struct GrokCompletenessTextTests {
     @Test func grokOnly() throws {
         #expect(CompletenessText.note(nil, grok: summary(DataCompleteness())) == nil)
         let two = try #require(CompletenessText.note(nil, grok: summary(DataCompleteness(flawed: 2))))
-        #expect(two.detail.contains("2 turns had a token count that is missing or isn't a valid number; it was left out "
-                                    + "and the rest counted."))
+        #expect(two.detail.contains("2 turns had a counter that is missing, isn't a valid number or contradicts another; "
+                                    + "it was left out and the rest counted."))
         #expect(two.detail.contains("token totals may be low"))
     }
 
@@ -218,6 +241,6 @@ struct GrokCompletenessTextTests {
         let note = try #require(CompletenessText.note(summary(DataCompleteness(malformed: 1)),
                                                       grok: summary(DataCompleteness(flawed: 1))))
         #expect(note.detail.contains("In Claude Code's logs for the last 30 days, 1 record couldn't be read"))
-        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a token count"))
+        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn had a counter"))
     }
 }
