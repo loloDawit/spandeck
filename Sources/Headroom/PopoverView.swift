@@ -9,8 +9,9 @@ extension Color {
     static let claude = Color(nsColor: Palette.claude)
     static let grok = Color(nsColor: Palette.grok)
 
-    static func severity(_ pct: Double, base: Color) -> Color {
-        pct >= 90 ? .red : pct >= 75 ? .orange : base
+    static func severity(_ pct: Double?, base: Color) -> Color {
+        guard let pct else { return base }
+        return pct >= 90 ? .red : pct >= 75 ? .orange : base
     }
 }
 
@@ -138,9 +139,10 @@ struct LiveChart: View {
     }
 }
 
-/// Capsule progress bar with an optional pace marker showing where usage would be if spread evenly.
+/// Capsule progress bar with an optional pace marker showing where usage would be if spread evenly. Without a percent
+/// (unavailable, F-2) only the empty track is drawn, never a bar at 0%.
 struct UsageBar: View {
-    let percent: Double
+    let percent: Double?
     let tint: Color
     var pace: Double?
 
@@ -148,9 +150,11 @@ struct UsageBar: View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.09))
-                Capsule()
-                    .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(4, g.size.width * min(percent, 100) / 100))
+                if let percent {
+                    Capsule()
+                        .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(4, g.size.width * min(percent, 100) / 100))
+                }
                 if let pace {
                     Rectangle().fill(Color.primary.opacity(0.65))
                         .frame(width: 1.5, height: g.size.height + 4)
