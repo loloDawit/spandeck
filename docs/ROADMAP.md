@@ -2,7 +2,7 @@
 
 **Live status:** GitHub Project **SpanDeck — Product Roadmap** ([repository Projects tab](https://github.com/loloDawit/spandeck/projects)). Phases are GitHub Milestones `M0`–`M4`, with no dates. How tracking works: [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).
 
-**Snapshot:** 2026-10-15, `main` = `6d51227`. If this page and the Project disagree, the Project is right.
+**Snapshot:** 2026-10-18, `main` = `37623fe` (M0 tracking reconciliation, #2). If this page and the Project disagree, the Project is right. M0's progress bar is #2's closed sub-issues: 4 of 11.
 
 Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation. Evidence labels: **[mocked]** means it is shown by tests with injected dependencies, not observed on a real macOS system. **[CI]** means the test suite passed on a GitHub-hosted runner. That shows the [mocked] tests pass on that toolchain. It doesn't show how the app behaves on a real Mac. Before 2026-10-15, test results were owner-reported local runs only. See [Hosted CI baseline](#hosted-ci-baseline).
 
@@ -10,14 +10,15 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 
 | Order | Item | Milestone | Status | Notes |
 |---|---|---|---|---|
-| Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
-| Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
-| Done | R11: SHA-pin actions, least `permissions`, signing / notarization plan, #37 | M0 | Done — PR #41 (`eca47fe`) | Workflow and doc change. Hardening check passes in hosted CI; nothing signed or notarized. |
-| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | **Verified on one Mac** (runs 1 and 2) | [Results](audits/0003-runtime-verification.md#8-results). Default launch: offline as observed, no credential or subprocess access, no login item; only local cache and preference writes [runtime]. Closing #3 is the owner's decision. Not covered: Intel, other macOS versions, signed builds, V16. |
-| Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
-| Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
-| Later | #4 capability matrix and integration lifecycle spec, #10 supported Claude surfaces | M0 | Open | Feed M1 integrations and M2 adapters. |
-| Backlog | #46 blocking subprocesses can starve Swift's shared executor | M0 | Open, not prioritized | Working diagnosis from the CI failures; CI runs serially until it is resolved. |
+| Done | #3: credential, permission and egress audit with OS-level runtime runs 1 and 2 | M0 | Closed 2026-10-16 | [Results](audits/0003-runtime-verification.md#8-results). Default launch offline as observed [runtime]. Not covered: Intel, other macOS versions, signed builds, V16 (#4). |
+| Done | #5: privacy verification (audit 0007), P1/P2/P4 fixes #66, #68, #70, Run 4 | M0 | Closed 2026-10-18 | Residual risks accepted by the owner, not verified absent. The personal-account trial is still **NO-GO**. |
+| Done | #6: ledger fixtures F01–F49; fixes #55–#58 (PRs #60–#63) | M0 | Closed 2026-10-18 | No overlapping-source fixture (#9). Open policies P2/P5/P6/P10/P12 → #9, P11 → #10, P15 → #7. |
+| Done | #11 part: SpanDeck identity isolated from Headroom (PR #65, audit 0008) | M0 | Merged | No migration of Headroom state. The rest of #11 is open. |
+| Next | #9 ADR and #7 metric contract, in one joint design pass | M0 | Next / in progress | Each waits on the other, so they're drafted together. |
+| Next | #11 repository protection and release gate | M0 | In progress | The `main` ruleset targets no branch, and `release.yml` can publish an unsigned DMG on any `v*` tag. Findings are on #11. |
+| Later | #10 supported Claude surfaces, then #4 capability matrix and consent / rollback spec | M0 | Open | #10 owns the capability matrix; #4 consumes it. Feeds M1 integrations and M2 adapters. |
+| Later | #8 performance baseline | M0 | Open | Relative synthetic debug timings posted on #8; no committed harness, and no startup, memory or CPU baseline. |
+| Backlog | #46 blocking subprocesses can starve Swift's shared executor | M0 | Open, P1 | Engineering follow-up, not an M0 exit criterion. CI runs serially until it is resolved. |
 
 ## Remediation series (R1–R12)
 
@@ -42,6 +43,7 @@ Done: **12 of 12** remediations (R1–R12) merged. That completes the remediatio
 ### Hosted CI baseline
 
 - **First green run:** [run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `main` = `6d51227` (2026-10-16 UTC). 187 tests passed, and the workflow hardening check passed.
+- **Latest at this snapshot:** [run 39078822895](https://github.com/loloDawit/spandeck/actions/runs/39078822895) on `37623fe`: 296 tests passed with 4 known issues (fixture F12, policy P10 on #9).
 - **Runner:** `macos-15` arm64 (3 cores). Image `macos-15-arm64` 20260907.0337, default Xcode 16.4 according to the image README. The Swift version isn't printed in the log. Local development uses Xcode 26.6 / Swift 6.3.3.
 - **Serial tests:** CI runs `swift test --no-parallel` (PR #45). Run in parallel on 3 cores, tests whose fakes block a thread for up to 2 s timed out ([run 38843030419](https://github.com/loloDawit/spandeck/actions/runs/38843030419)). The working diagnosis and the conditions for running in parallel again are in #46.
 - **How we got there:** the push of merge #41 started the first hosted run, [38827646254](https://github.com/loloDawit/spandeck/actions/runs/38827646254). It failed because Xcode 16.4 couldn't type-check two test expressions. #42 and #43 fixed that compile failure, #44 replaced a 1 s wall-clock test bound, and #45 made the tests run serially.
@@ -51,17 +53,17 @@ Done: **12 of 12** remediations (R1–R12) merged. That completes the remediatio
 
 Epic: #2. Research issues #3–#11 stay open until all their acceptance criteria are met.
 
-- [ ] Inventory permissions, process execution, credentials, network destinations, stored files and login-item behavior. *Code-level inventory done (#3, PR #13); OS-level confirmation outstanding (#3).*
+- [x] Inventory permissions, process execution, credentials, network destinations, stored files and login-item behavior. *#3 closed: code-level inventory (PR #13) and default-launch runtime runs 1 and 2 on one Mac. Consent-enabled paths (V16) remain unverified (#4).*
 - [ ] Document how to reproduce and opt out of each data-collection path. *Egress and capability matrices in the #3 audit; opt-outs exist for credentials, quota polling and the login item. Cache deletion: Settings ▸ Clear cached usage data (R8, #34).*
-- [ ] Anonymized fixtures for duplicate stream updates, missing request IDs, timestamp boundaries, renamed models, bad pricing entries and partial log files. *Unpriced-model fixtures exist (R7); the rest is #6, not started.*
-- [ ] Cross-check fixture totals with independent calculations; distinguish modeled cost from billed cost. *Cost coverage (complete / partial / unavailable) merged in R7; metric contract and remaining golden tests in #7.*
-- [ ] Record baseline `swift test`, `swift build`, CPU, memory, scan time and startup. *`swift test` / `swift build` owner-reported on 2026-10-13 (#2); CPU, memory, scan and startup not measured (#8).*
-- [ ] Checks for credential leakage and external egress. *Mocked launch-path tests show no credential read and no network request on default launch [mocked]; not observed at OS level.*
-- [ ] ADR: canonical events, source adapters, deduplication and storage (#9). *Blocked on #3, #5, #6, #7.*
+- [ ] Anonymized fixtures for duplicate stream updates, missing request IDs, timestamp boundaries, renamed models, bad pricing entries and partial log files. *#6 closed: fixtures F01–F49 with golden results, run in tail, full-scan, relaunch and rebuild modes. No overlapping-source fixture yet (#9).*
+- [ ] Cross-check fixture totals with independent calculations; distinguish modeled cost from billed cost. *Cost coverage merged in R7, and #7's golden tests exist. The metric contract and the observed / estimated / actual vocabulary are open in #7.*
+- [ ] Record baseline `swift test`, `swift build`, CPU, memory, scan time and startup. *`swift test` runs in hosted CI on every push to `main` (serial, debug only). Relative synthetic ledger timings are posted on #8; CPU, memory and startup aren't measured, and the harness isn't committed.*
+- [ ] Checks for credential leakage and external egress. *Default launch: no credential read and no network request [mocked][runtime, #3 runs 1–2, #5 Run 4], within the monitors' windows. Consent-enabled paths are unverified (V16, #4).*
+- [ ] ADR: canonical events, source adapters, deduplication and storage (#9). *Next: drafted jointly with #7. The P4 identity policy and Headroom no-migration are decided; no ADR document yet.*
 - [ ] Supported Claude observability surfaces and Bedrock coverage (#10). *Not started.*
-- [ ] CI, source-integrity and distribution audit (#11), including R11. *R11 merged (#37, PR #41): pinned actions, least permissions, signing / notarization plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md), plan only). Hosted CI green on `6d51227` ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), serial. The rest of #11 is open: Developer ID signing, notarization, a release gate in `release.yml`, and dependency and source-integrity review.*
+- [ ] CI, source-integrity and distribution audit (#11), including R11. *R11 merged (#37, PR #41): pinned actions, least permissions, signing / notarization plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md), plan only). Identity isolation merged (PR #65). The rest of #11 is open: an effective branch ruleset with required checks, a release gate in `release.yml`, private vulnerability reporting, Developer ID signing, notarization, and Intel and macOS 14 runs. The 2026-10-18 findings are on #11.*
 
-**Exit:** known risks recorded, core arithmetic regression-tested, and first hardening changes planned with measurable acceptance criteria. *Status: risks recorded at code level; hardening planned and mostly merged; arithmetic regression fixtures (#6) and performance baseline (#8) missing.*
+**Exit:** known risks recorded, core arithmetic regression-tested, and first hardening changes planned with measurable acceptance criteria. *Status: risks recorded and runtime-checked on one Mac; arithmetic regression fixtures done (#6); performance baseline (#8), ADR (#9) and the release-hardening list (#11) still open. The exit criteria themselves are tracked on #2.*
 
 ## M1 — Privacy-first foundation (in progress, ahead of M0 exit)
 
@@ -69,7 +71,7 @@ The remediation series landed here because the #3 audit found these changes safe
 
 - [x] Explicit permission model; no credential extraction on default startup. *R1, R2, R4 (#15, #17); collection follows the menu-bar toggles (R3, #19); honest identity and 401 backoff (R9, #24) [mocked].*
 - [ ] Opt-in login-item registration and reversible integration installation. *Login item opt-in done (#15). Integration lifecycle spec is part of #4; no integrations exist yet.*
-- [ ] Storage / retention policy, data classification and migration / versioning. *R8 merged (#34): cache schema v4, retention and migration documented in `USAGE_CACHE.md`; the rest of #5 is open.*
+- [ ] Storage / retention policy, data classification and migration / versioning. *R8 merged (#34); the cache is now v7, and retention and migration are documented in `USAGE_CACHE.md`. #5 closed 2026-10-18 with no automatic migration of Headroom state (owner decision).*
 - [ ] No data written outside SpanDeck's own storage without consent. *R10 merged (#39): `--snapshot` is refused in release builds and writes only synthetic images in debug builds; not verified at OS level.*
 - [ ] Extract adapters and reconciliation behind testable interfaces without changing working UI behavior. *Test seams exist (R12); extraction waits on the #9 ADR.*
 - [ ] Document unsupported or unauthorized quota sources. *Partly in the #3 audit; capability matrix in #4, #10.*
@@ -118,7 +120,8 @@ Nothing should be published as a SpanDeck release until these are cleared:
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
 3. ~~**`--snapshot` can write real usage data to any path** until R10 merges (#36).~~ Resolved in source by R10 (#39); not verified by running a release binary.
 4. **No signing or notarization.** Builds are signed ad hoc, and the Developer ID plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)) hasn't been carried out. If triggered, `release.yml` would still publish an ad-hoc-signed, unnotarized DMG; the release gate is open in #11. Hosted CI now passes ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), but it runs tests only, serially (#46).
-5. **No accounting regression fixtures or performance baseline** (#6, #8), so M0 cannot exit.
+5. ~~**No accounting regression fixtures**~~ (#6 closed). **No performance baseline** (#8), so M0 cannot exit.
+6. **No effective repository protection.** The `main` ruleset targets no branch, so there is no PR requirement or required check, and private vulnerability reporting is off (#11, 2026-10-18).
 
 ## Dependencies
 

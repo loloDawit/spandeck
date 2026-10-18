@@ -4,6 +4,8 @@
 
 ## Where things stand (checked locally, 2026-10-15, macOS 26.5, Xcode 26.6, Swift 6.3.3)
 
+**Historical:** this table was recorded on the pre-#11 `Headroom.app` build. It hasn't been re-recorded on `SpanDeck.app`; that is tracked on #11. The signing and Gatekeeper results are expected to be the same, since the build is still ad hoc, but that is unverified.
+
 | Check | Command | Result today |
 |---|---|---|
 | Universal binary | `lipo -archs build/Headroom.app/Contents/MacOS/Headroom` | `x86_64 arm64` |

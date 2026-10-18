@@ -1,6 +1,6 @@
 # Claude Code instructions for SpanDeck
 
-This repository is **SpanDeck**, an early-stage local-first observability fork of `sandrich/headroom`. The application source, binary name, cache paths and existing UI are still inherited Headroom code. Do not assume a complete rebrand or secured implementation.
+This repository is **SpanDeck**, an early-stage local-first observability fork of `sandrich/headroom`. The application source, Swift module and target (`Headroom`), app icon and existing UI are still inherited Headroom code. Since #11 the app name, executable, bundle id (`io.github.lolodawit.SpanDeck`), preferences domain and `~/Library/Application Support/SpanDeck/` are SpanDeck's own, from `Resources/identity.env`. Do not assume a complete rebrand or secured implementation.
 
 ## Read before changes
 - `docs/PRODUCT.md` — mission, current/planned feature distinction.

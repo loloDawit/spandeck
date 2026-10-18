@@ -4,7 +4,7 @@
 
 SpanDeck aims to help engineers understand sessions, context usage, model and agent execution, tokens, and estimated cost — with explicit provenance and privacy controls.
 
-> **Early-stage fork, not a completed product.** SpanDeck currently contains the inherited [Headroom](https://github.com/sandrich/headroom) macOS menu-bar implementation. The runtime app, binary, icons, cache paths, and existing integrations have not yet been rebranded or hardened. These changes are tracked in the [roadmap](docs/ROADMAP.md). Do not mistake planned protections for implemented protections.
+> **Early-stage fork, not a completed product.** SpanDeck currently contains the inherited [Headroom](https://github.com/sandrich/headroom) macOS menu-bar implementation. Since #11 the macOS identity is SpanDeck's own: `SpanDeck.app`, `io.github.lolodawit.SpanDeck` and `~/Library/Application Support/SpanDeck/` (`Resources/identity.env`). The Swift module (`Headroom`), the app icon and the existing integrations are still inherited and not yet fully hardened. These changes are tracked in the [roadmap](docs/ROADMAP.md). Do not mistake planned protections for implemented protections.
 
 ## Project direction
 
@@ -38,9 +38,9 @@ swift test
 swift build
 ```
 
-Those commands compile and test; they **do not install or launch** the application. Since #11 the app is `SpanDeck.app` (`io.github.lolodawit.SpanDeck`, `~/Library/Application Support/SpanDeck/`), separate from upstream Headroom's identity and data. The Swift module and target are still named `Headroom` internally. `./build.sh install` replaces only `/Applications/SpanDeck.app` and never touches Headroom, but don't use it on an account with real history until the trial gates on #5 and #11 are passed.
+Those commands compile and test; they **do not install or launch** the application. Since #11 the app is `SpanDeck.app` (`io.github.lolodawit.SpanDeck`, `~/Library/Application Support/SpanDeck/`), separate from upstream Headroom's identity and data. The Swift module and target are still named `Headroom` internally. `./build.sh install` replaces only `/Applications/SpanDeck.app` and never touches Headroom, but don't use it on an account with real history: the personal-account trial is still **NO-GO** and needs a separate owner decision, even though #5 is closed.
 
-Current CI: [Swift tests](.github/workflows/test.yml), carried forward from Headroom and hardened in R11. The first green hosted run is [38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `6d51227`: 187 tests on `macos-15`, run serially (#46). CI runs the mocked test suite only. It doesn't verify the app on a real Mac, and nothing is signed or notarized ([roadmap](docs/ROADMAP.md#release-blockers)).
+Current CI: [Swift tests](.github/workflows/test.yml), carried forward from Headroom and hardened in R11. The first green hosted run is [38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831) on `6d51227`: 187 tests on `macos-15`, run serially (#46). At `37623fe`, [run 39078822895](https://github.com/loloDawit/spandeck/actions/runs/39078822895) passed 296 tests. CI runs the mocked test suite only. It doesn't verify the app on a real Mac, and nothing is signed or notarized ([roadmap](docs/ROADMAP.md#release-blockers)).
 
 ## Working with Claude Code
 
