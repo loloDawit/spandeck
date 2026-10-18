@@ -55,6 +55,24 @@ struct WorkflowPolicyTests {
         }
     }
 
+    /// #11: `release.yml` uploads only after `scripts/verify-release.sh` has passed on the DMG, and no workflow tells
+    /// users to bypass Gatekeeper. `scripts/check-workflows.py` enforces this per step.
+    @Test func releasePublishesOnlyAfterTheGate() throws {
+        let release = try #require(try Self.files().first { $0.name == "release.yml" }?.text)
+        let gate = try #require(release.range(of: #"scripts/verify-release.sh "build/"#))
+        for publish in [#"gh release create "$TAG""#, #"gh release upload "$TAG""#] {
+            let at = try #require(release.range(of: publish), "\(publish)")
+            #expect(gate.upperBound < at.lowerBound, "\(publish) before the gate")
+        }
+        for (name, text) in try Self.files() {
+            #expect(!text.localizedCaseInsensitiveContains("open anyway"), "\(name)")
+            #expect(!text.contains("com.apple.quarantine"), "\(name)")
+        }
+        let script = Self.workflows.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("scripts/verify-release.sh").path
+        #expect(FileManager.default.isExecutableFile(atPath: script))
+    }
+
     @Test func checkoutDoesNotPersistCredentials() throws {
         for (name, text) in try Self.files() {
             let checkouts = text.components(separatedBy: "actions/checkout@").count - 1

@@ -58,6 +58,29 @@ jobs:
 """
 
 
+PREFLIGHT_STEP = """      - name: Release signing configured
+        env:
+          SPANDECK_TEAM_ID: ${{ vars.SPANDECK_TEAM_ID }}
+        run: scripts/verify-release.sh --preflight
+"""
+BUILD_STEP = """      - name: Build DMG
+        run: ./build.sh dmg
+"""
+GATE_STEP = """      - name: Verify release
+        env:
+          SPANDECK_TEAM_ID: ${{ vars.SPANDECK_TEAM_ID }}
+        run: scripts/verify-release.sh "build/SpanDeck-${TAG#v}.dmg"
+"""
+PUBLISH_STEP = """      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg"
+"""
+GATED = RELEASE.replace("      - name: Publish\n", PREFLIGHT_STEP + BUILD_STEP + GATE_STEP + "      - name: Publish\n") \
+    .replace('gh release view "$TAG"', 'gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg"')
+
+
 class CheckerTests(unittest.TestCase):
     def run_checker(self, files):
         with tempfile.TemporaryDirectory() as d:
@@ -119,6 +142,46 @@ class CheckerTests(unittest.TestCase):
     def test_unknown_workflow_or_job_rejected(self):
         self.assert_rejected({"deploy.yml": TEST}, "not in the workflow policy")
         self.assert_rejected({"test.yml": TEST.replace("  test:\n", "  lint:\n")}, "job lint is not in the workflow policy")
+
+    # Release safety (#11): nothing is published unless scripts/verify-release.sh passed first in the same job.
+    def test_gated_release_passes(self):
+        self.assertEqual(self.run_checker({"release.yml": GATED}), (0, ""))
+
+    def test_publish_without_gate_rejected(self):
+        # The configuration preflight (still present here) verifies no artifact, so it doesn't count as the gate.
+        self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, "")}, "publishes without passing scripts/verify-release.sh")
+        # Nor does a mention in text, such as release notes naming the script.
+        mention = "      - name: Notes\n        run: echo \"checked by scripts/verify-release.sh before upload\"\n"
+        self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, mention)}, "publishes without")
+        for publish in ('gh release upload "$TAG" x.dmg --clobber', "gh api repos/o/r/releases -f tag_name=v1"):
+            self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, "").replace(
+                'gh release create "$TAG" "build/SpanDeck-${TAG#v}.dmg"', publish)}, "publishes without")
+        action = f"      - uses: softprops/action-gh-release@{SHA} # v2.0.0\n"
+        self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, "").replace(PUBLISH_STEP, action)}, "publishes without")
+
+    def test_gate_after_publish_rejected(self):
+        moved = GATED.replace(GATE_STEP, "").replace(PUBLISH_STEP, PUBLISH_STEP + GATE_STEP)
+        self.assert_rejected({"release.yml": moved}, "publishes without passing scripts/verify-release.sh")
+
+    def test_gate_cannot_be_skipped_or_ignored(self):
+        for weaken in ("        if: ${{ vars.SPANDECK_TEAM_ID != '' }}\n", "        continue-on-error: true\n"):
+            gate = GATE_STEP.replace("        env:\n", weaken + "        env:\n", 1)
+            self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, gate)}, "release gate step must not have")
+        tolerant = GATE_STEP.replace('.dmg"\n', '.dmg" || true\n')
+        self.assert_rejected({"release.yml": GATED.replace(GATE_STEP, tolerant)}, "release gate step must not have")
+
+    def test_nothing_rebuilt_between_gate_and_publish(self):
+        for rebuild in (BUILD_STEP, "      - name: Re-sign\n        run: codesign --force --sign - build/SpanDeck.app\n"):
+            self.assert_rejected({"release.yml": GATED.replace(PUBLISH_STEP, rebuild + PUBLISH_STEP)},
+                                 "changes the build after the release gate")
+
+    def test_gatekeeper_bypass_instructions_rejected(self):
+        for text in ("allow it under System Settings > Privacy & Security > Open Anyway",
+                     "xattr -d com.apple.quarantine SpanDeck.app", "xattr -cr SpanDeck.app", "sudo spctl --master-disable",
+                     "spctl --global-disable"):
+            notes = GATED.replace('gh release create "$TAG"', f'echo "{text}"\n          gh release create "$TAG"')
+            self.assert_rejected({"release.yml": notes}, "Gatekeeper bypass")
+            self.assert_rejected({"test.yml": TEST.replace("run: swift test", f"run: echo '{text}'")}, "Gatekeeper bypass")
 
     def test_docker_images_need_digest(self):
         step = "      - uses: docker://alpine:3.20\n"
