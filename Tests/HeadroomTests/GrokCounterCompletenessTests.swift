@@ -18,7 +18,8 @@ struct GrokCounterCompletenessTests {
         }
 
         /// One `usage.json` whose turns are given as the JSON members after `endedAt` and the model.
-        func grok(session: String = "s", _ turns: [String], ended: Date = Date()) throws {
+        /// One timestamp for every file of a test, so copies in two sessions share `endedAt` even across a second.
+        func grok(session: String = "s", _ turns: [String], ended: Date = GrokCounterCompletenessTests.ended) throws {
             let stamp = ISO8601DateFormatter().string(from: ended)
             let list = turns.map { #"{"endedAt":"\#(stamp)","primaryModelId":"grok-test","# + $0 + "}" }
             try box.write(".grok/sessions/proj/\(session)/usage.json", #"{"turns":["# + list.joined(separator: ",") + "]}")
@@ -31,6 +32,8 @@ struct GrokCounterCompletenessTests {
             }
         }
     }
+
+    nonisolated static let ended = Date()
 
     /// 100 input of which 20 cached, 50 output, 5 cache writes: 80 + 20 + 50 + 5 = 155 tokens.
     private static let counters: [(String, String)] = [
@@ -131,15 +134,88 @@ struct GrokCounterCompletenessTests {
 
     // MARK: Dedupe identity
 
-    /// An absent `totalTokens` and a reported 0 are different turns. Before the fix both keys read 0, so one of the two
-    /// turns vanished.
-    @Test func absentTotalIsNotZeroTotal() async throws {
+    /// Both file orders, so neither the order of sessions nor of files decides the result.
+    private static let orders = [("a", "b"), ("b", "a")]
+
+    /// A copy whose `totalTokens` is missing agrees with a reported turn on every counter: it is that turn, and the
+    /// complete copy counts. Missing metadata alone doesn't make a new operation (owner, review of #80). Before this
+    /// rule the two counted twice (310), and the total of 0 vs absent made no difference.
+    @Test(arguments: ["155", "0"])
+    func copyWithoutTotalIsTheReportedTurn(_ total: String) async throws {
+        for (reported, missing) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: reported, [Self.turn("totalTokens", total)])
+            try rig.grok(session: missing, [Self.turn("totalTokens", nil)])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 155, "\(reported) first, total \(total)")
+            #expect(grok.month.completeness.isComplete && grok.month.identity.isExact, "\(reported) first, total \(total)")
+        }
+    }
+
+    /// A copy without a total that disagrees on a counter is a different turn: counted, and flagged for its total.
+    @Test func turnWithoutTotalThatDisagreesIsDistinct() async throws {
+        for (reported, missing) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: reported, [Self.turn()])
+            try rig.grok(session: missing, [Self.turn("totalTokens", nil).replacingOccurrences(of: #""outputTokens":50"#,
+                                                                                             with: #""outputTokens":60"#)])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 155 + 165, "\(reported) first")
+            #expect(grok.month.completeness == DataCompleteness(flawed: 1) && grok.month.identity.isExact, "\(reported) first")
+        }
+    }
+
+    /// A turn without a total or any token counter to compare can't be told apart from the reported turn at its time.
+    /// It isn't counted again; the merge is flagged as uncertain identity, since it might have been a distinct turn.
+    @Test func turnWithNothingToCompareIsMergedAndFlagged() async throws {
+        for (reported, bare) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: reported, [Self.turn()])
+            try rig.grok(session: bare, [#""costUsdTicks":10"#])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 155, "\(reported) first")
+            #expect(grok.month.identity == IdentityCoverage(ambiguous: 1), "\(reported) first")
+            #expect(grok.today.identity.ambiguous == 1 && grok.week.identity.ambiguous == 1)
+        }
+    }
+
+    /// A copy without a total that agrees with two reported turns could be either: it is counted with neither, and
+    /// the merge is flagged. Before this rule it counted a third time (465).
+    @Test func copyMatchingTwoTurnsIsMergedAndFlagged() async throws {
+        for (first, second) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: first, [Self.turn("totalTokens", "155"), Self.turn("totalTokens", "156")])
+            try rig.grok(session: second, [Self.turn("totalTokens", nil)])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 310, "\(first) first")
+            #expect(grok.month.identity == IdentityCoverage(ambiguous: 1) && grok.month.completeness.isComplete)
+        }
+    }
+
+    /// Two turns without a total that disagree on a counter are two turns. Before this rule both keyed `-` and one
+    /// vanished.
+    @Test func turnsWithoutTotalThatDisagreeAreDistinct() async throws {
+        for (a, b) in Self.orders {
+            let rig = try Rig()
+            try rig.grok(session: a, [Self.turn("totalTokens", nil)])
+            try rig.grok(session: b, [Self.turn("totalTokens", nil).replacingOccurrences(of: #""outputTokens":50"#,
+                                                                                       with: #""outputTokens":60"#)])
+            let grok = await rig.summaries().grok
+            #expect(grok.month.tokens == 155 + 165, "\(a) first")
+            #expect(grok.month.completeness == DataCompleteness(flawed: 2), "\(a) first")
+        }
+    }
+
+    /// Documented, not fixed here (review of #80, item 3): the cost part of the key is the R7 one, so a copy without a
+    /// cost and a copy reporting a nonzero cost key apart and count twice. Only a reported $0 matches a missing cost.
+    @Test func copyWithoutCostOfACostedTurnCountsTwice() async throws {
         let rig = try Rig()
-        try rig.grok(session: "a", [Self.turn("totalTokens", "0")])
-        try rig.grok(session: "b", [Self.turn("totalTokens", nil)])
+        try rig.grok(session: "a", [Self.turn()])
+        try rig.grok(session: "b", [Self.turn("costUsdTicks", nil)])
         let grok = await rig.summaries().grok
-        #expect(grok.month.tokens == 310)
-        #expect(grok.month.completeness == DataCompleteness(flawed: 1)) // the turn without a total
+        withKnownIssue("A missing cost doesn't match a reported nonzero cost in the dedupe key (follow-up on #7)") {
+            #expect(grok.month.tokens == 155)
+        }
     }
 
     /// Copies of one turn (resumed or forked sessions) still count once, whether the shared total is reported,
