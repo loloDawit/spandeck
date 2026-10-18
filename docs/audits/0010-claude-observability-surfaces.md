@@ -1,6 +1,7 @@
 # Audit 0010 — Claude observability surfaces, Enterprise and Bedrock coverage (#10)
 
 **Issue:** #10 (M0). **Base:** `main` at `fff19fd`. **Companions:** [ADR 0001](../adr/0001-canonical-events-identity-and-storage.md) (D1–D8), [metric contract](../METRIC_CONTRACT.md) 0.3.
+**Status:** research direction and the §7 adapter decision **accepted by the owner on 2026-10-18**. The findings remain documentation-based, not runtime-verified.
 **Scope:** documentation, repository code and synthetic examples only. Nothing here was run against Claude Code. No credentials or transcripts were read, telemetry wasn't enabled, no hooks were installed and no Claude settings were changed. Research only: no code changes.
 
 **Evidence labels:**
@@ -257,7 +258,7 @@ This is the proposed fixture for the P11 follow-up (§8), as a new F-numbered ca
   1. The status line drops a window at its `resets_at`. That matches the accepted stale direction: unavailable after the reset.
   2. Claude Code's own `/usage` shows last-known plan usage for **up to 60 minutes** after a failed fetch, with a note. As a candidate for contract §3's open threshold: *stale with its age for up to 60 minutes and while now < `resets_at`, then unavailable*. Whether that endpoint is the one SpanDeck polls is unknown, so this is an input to the owner's decision, not a decision.
 
-## 7. Decision: the smallest supported adapter to prototype first
+## 7. Decision: the smallest supported adapter to prototype first [accepted 2026-10-18]
 
 **The status line, as a parser-only slice.**
 
