@@ -180,6 +180,14 @@ extension Dictionary where Key == String, Value == Any {
         return n.intValue
     }
     func double(_ k: String) -> Double? { (self[k] as? NSNumber)?.doubleValue }
+    /// A provider-reported percent from 0 to 100 (F-2, #4). nil when it is missing, null, not a number, a boolean, not
+    /// finite or out of range: the percent is unavailable, never 0%. The range is provisional (metric contract 0.3, §4):
+    /// neither endpoint documents one, so a real reading above 100% is unsupported and shows as unavailable.
+    func percent(_ k: String) -> Double? {
+        guard let n = self[k] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+        let d = n.doubleValue
+        return d.isFinite && (0...100).contains(d) ? d : nil
+    }
     func dict(_ k: String) -> [String: Any]? { self[k] as? [String: Any] }
     func string(_ k: String) -> String? { self[k] as? String }
 }
