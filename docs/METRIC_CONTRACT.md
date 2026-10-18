@@ -2,6 +2,7 @@
 
 - **Status:** Partly accepted. Contract version **0.3**. Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
   - **0.3:** a valid quota percent is a finite number from 0 to 100 (§4, provisional); F-2 addressed in #81 (§5).
+  - **Also in 0.3, no rule change:** F-1 addressed in #80 (§5).
   - **Accepted by the owner on 2026-10-18:** missing is not zero; the value statuses and qualifiers (§3); F-1 → #7, F-2 → #4; the F-3 direction; Bedrock/Vertex labelling (§8).
   - **Still open:** the stale threshold (§3); P10 display (ADR §D4.1).
 - **Date:** 2026-10-18
@@ -29,7 +30,7 @@ This contract says what each number SpanDeck shows means, where it comes from, h
 |---|---|---|---|---|---|
 | Claude tokens | `claude.jsonl` | slot (15 min UTC) × model | today / 7 d / 30 d / 5 h window, local days | at most one refresh behind: hot files tailed each refresh, full scan ≤5 min | P2 snapshots, P4 identity, P6 pending, P7 unread, P8 flawed, P9 cache tiers, P10/P11 open |
 | Claude estimated cost | tokens × price table | model | as tokens | price revision and retrieval date (`PricingInfo`) | unpriced models unknown (P17); tier-unresolved is a lower bound; disputed is unpriced |
-| Grok tokens | `grok.usage-json` | slot × model | as Claude, no 5 h window | each refresh (`mtime` change) | dedupe on `endedAt`, `totalTokens`, `costUsdTicks`; **missing counters read as 0 today (F-1)** |
+| Grok tokens | `grok.usage-json` | slot × model | as Claude, no 5 h window | each refresh (`mtime` change) | a missing or invalid counter flags the turn (F-1, #80); copies deduped on `endedAt`, the reported total and the R7 cost part, a copy without a total matched on its counters; an uncertain match is flagged; no input/cache split claimed for a conflict |
 | Grok reported cost | `costUsdTicks` | slot × model | as Grok tokens | as Grok tokens | turns without it are unknown (R7) |
 | Claude quota | `claude.quota-endpoint` (opt-in, unofficial) | limit kind (session, weekly, model-scoped) | the provider's window, ending at `resets_at` | `fetchedAt` per poll | a missing or invalid percent is unavailable (F-2, #81); above 100 % is unsupported; shape can change without notice |
 | Grok quota | `grok.billing` (opt-in) | plan, products | the provider's billing period | `fetchedAt`; stale shown after a temporary failure (#21) | a product's missing or invalid `usagePercent` is unavailable; an invalid top-level percent is a malformed answer (F-2, #81) |
@@ -94,14 +95,21 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 2. **Real zero is a value.** `"output_tokens": 0`, `"costUsdTicks": 0` and `"percent": 0` are exact zeros.
 3. **No data in a period** (no records at all) is exactly 0 tokens with `complete` coverage. But if any source that covers the period failed or is unread, the total carries **incomplete data**.
 4. **Sums keep their worst status.** One unknown term makes a sum partial; all unknown makes it unavailable (`CostEstimate +`, `UsageSummary.combine`).
-5. **Clamping hides data.** A derived counter that would be negative is a data conflict, flagged, not clamped to 0. Today: Grok `max(inputTokens − cachedReadTokens, 0)`; see F-1.
+5. **Clamping hides data.** A derived counter that would be negative is a data conflict, flagged, not clamped to 0. Grok's `max(inputTokens − cachedReadTokens, 0)` was such a clamp; see F-1.
 
 ## 5. Violations found, and their status
 - **F-1, Grok local usage reads missing as 0.**
-  - `parseGrokUsage` (`Ledger.swift:1469–1476`) uses `int(_:)`, which returns 0 for an absent or non-numeric key (`Util.swift:176`). This covers `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cachedReadTokens`, `modelCalls`, and `totalTokens` in the dedupe key.
-  - `int(_:)` also accepts JSON booleans as 1 or 0, which `optionalInt` rejects (`Util.swift:178–181`).
-  - It also clamps `input − cached` at 0.
-  - **Proposed:** read counters with the P8 `Ledger.counter` rules; flag Grok turns like Claude groups (Grok gains a `DataCompleteness`); the dedupe key uses `optionalInt` with absent spelled distinctly (the open "Grok dedupe identity" item from #7's 2026-10-15 comment).
+  - **Found:** `parseGrokUsage` used `int(_:)`, which returns 0 for an absent or non-numeric key (`Util.swift:176`) and reads booleans as 1 or 0. This covered `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cachedReadTokens`, `modelCalls`, and `totalTokens` in the dedupe key. It also clamped `input − cached` at 0, and took an invalid `costUsdTicks` as a cost.
+  - **Addressed in #80:**
+    - Counters follow the P8 `Ledger.counter` rules. A missing or invalid one is left out and flags the turn (Grok's `DataCompleteness.flawed`); the valid ones count; a reported 0 is exact. An invalid cost is unknown (R7).
+    - Cache reads above the input are a flagged conflict: only `min(input, cached)` counts, and **no input/cache split is claimed** for it. No view shows Grok's split, and Grok cost comes from `costUsdTicks`, not the price table.
+    - Dedupe: a missing or invalid total never makes a new operation on its own. A copy without a total is matched to the kept turns at its `endedAt` on the counters valid in both: one agreeing turn, sharing a nonzero token counter, is its copy (the complete copy counts); disagreeing with all is a distinct turn; several agreeing turns, or no nonzero token counter to compare, merge it into the first and flag *uncertain identity* (`IdentityCoverage.ambiguous`, one per merged turn, §3).
+    - Both notes on the usage card cover Grok (counts only). Tests: `GrokCounterCompletenessTests`.
+  - **Limitations kept:**
+    - On Grok an absent counter flags the turn; on Claude (P8) it doesn't.
+    - An uncertain merge may drop a turn that was distinct (flagged; totals may be low).
+    - The cost part of the key is R7's (`Dictionary.int`), reviewed and unchanged. **Collisions:** a missing, `null`, non-numeric or `false` cost keys like a reported $0, by design, so the costed copy can win; `true` and `1.5` key like a real 1 tick; other invalid numbers key by their truncated value (`-5` as −5). **Split:** a copy without a cost and a copy reporting a nonzero cost key apart and count twice (known issue in `GrokCounterCompletenessTests`, follow-up on #7).
+    - A turn without a parseable `endedAt`, or a `usage.json` that isn't valid JSON, is still dropped without being counted as unread.
   - **Tracked in #7** (owner decision, 2026-10-18).
 - **F-2, quota parsing reads missing as 0 %.**
   - **Found:** `ClaudeLimitsClient.fetch` used `l.double("percent") ?? 0` and `utilization ?? 0`, and `GrokClient` product `usagePercent ?? 0`; `double` also read booleans as 1 or 0. A weekly-share percent of `1e300` trapped `Int(_:)`, and a share without `limit_index` attached to limit 0.
@@ -152,6 +160,7 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 ## 9. Golden tests already covering this contract
 - `CostCompletenessTests`;
 - `DataCompletenessTests`;
+- `GrokCounterCompletenessTests` (F-1);
 - `QuantityTests`;
 - `IdentityCoverageTests`;
 - `QuotaVisibilityTests`;
@@ -160,7 +169,7 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 - `LedgerFixtureTests` F01–F49;
 - `TimeZoneTests`.
 
-**New ones needed per slice:** F-1 (Grok missing counters), P10 decision (F12), P15 boundary slot (F22).
+**New ones needed per slice:** P10 decision (F12), P15 boundary slot (F22).
 
 ## 10. Decisions and open points
 

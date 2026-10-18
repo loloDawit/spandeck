@@ -295,7 +295,7 @@ struct CostCompletenessTests {
     /// whichever is read first, so coverage doesn't depend on file order.
     @Test func grokDuplicateChoiceIgnoresOrder() {
         func turn(_ ticks: Int?, _ model: String = "grok-test") -> Ledger.GrokTurn {
-            Ledger.GrokTurn(key: "t|150|0", slot: 1, model: model,
+            Ledger.GrokTurn(group: "t|0", total: 150, slot: 1, model: model,
                             agg: Agg(input: 100, output: 50, calls: 1, costTicks: ticks))
         }
         let turns = [turn(nil), turn(0), turn(nil, "grok-a")]
