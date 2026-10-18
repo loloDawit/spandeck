@@ -200,7 +200,7 @@ struct IdentityCoverage: Codable, Equatable, Sendable {
 }
 
 /// What the ledger couldn't read (#58, P7/P8), independent of identity (#55), cost coverage (R7) and cache issues (R8).
-/// Claude only. Records that can't be read aren't in any total, so a total with any of them may be low; a message
+/// Claude reports every field; Grok only `flawed` (F-1, #7). Records that can't be read aren't in any total, so a total with any of them may be low; a message
 /// counted with an invalid counter left out is a lower bound too. Records that aren't usage (user records,
 /// `<synthetic>`, other types, an assistant record without usage) are ignored and never counted here.
 struct DataCompleteness: Decodable, Equatable, Sendable {
@@ -281,7 +281,8 @@ struct Totals {
     var cost = CostEstimate.zero
     /// Claude only; Grok turns are deduplicated by their own rule and aren't counted here.
     var identity = IdentityCoverage()
-    /// Claude only (#58): an unread Claude record says nothing about Grok.
+    /// Per provider (#58), and added field by field when they are combined: an unread Claude record says nothing about
+    /// Grok. Grok reports only flawed turns (F-1, #7).
     var completeness = DataCompleteness()
     /// Claude only (#58).
     var quantity = QuantityUncertainty()
@@ -702,7 +703,8 @@ final class Ledger {
     private static let ambiguous = "ambiguous"
     static let cacheName = "claude-ledger.json"
     static let keyName = "claude-ledger.key"
-    struct GrokTurn { var key: String; var slot: Int; var model: String; var agg: Agg }
+    /// `flawed`: a counter was missing or invalid and left out, or the cache reads exceeded the input (F-1, #7).
+    struct GrokTurn { var key: String; var slot: Int; var model: String; var agg: Agg; var flawed = false }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
     static let retentionDays = 32
@@ -841,9 +843,10 @@ final class Ledger {
             let cal = calendar
             let key = "\(changeCounter)|\(windowStart?.timeIntervalSince1970 ?? 0)|\(cal.timeZone.identifier)|\(cal.startOfDay(for: now()).timeIntervalSince1970)|\(pricing.generation)"
             if key != lastSummaryKey || cachedSummaries == nil {
+                let grok = grokSlots()
                 cachedSummaries = (summarize(claudeSlots(), identity: state.identity, completeness: claudeCompleteness(),
                                              windowStart: windowStart),
-                                   summarize(grokSlots(), identity: [:], completeness: ([:], DataCompleteness()),
+                                   summarize(grok.slots, identity: [:], completeness: (grok.flawed, DataCompleteness()),
                                              windowStart: nil))
                 lastSummaryKey = key
             }
@@ -1466,25 +1469,47 @@ final class Ledger {
               let turns = json["turns"] as? [[String: Any]] else { return [] }
         return turns.compactMap { t in
             guard let ended = t.string("endedAt"), let date = ISO.parse(ended) else { return nil }
-            let cached = t.int("cachedReadTokens")
-            let agg = Agg(input: max(t.int("inputTokens") - cached, 0), output: t.int("outputTokens"),
-                          cacheWrite5m: t.int("cacheCreationTokens"), cacheRead: cached,
-                          calls: t.int("modelCalls"), costTicks: t.optionalInt("costUsdTicks"))
-            // Resumed and forked sessions repeat inherited turns, so dedupe on content. The key (unchanged by R7) reads
-            // a missing cost as 0, so a turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns`
-            // decides which copy counts.
-            let key = "\(ended)|\(t.int("totalTokens"))|\(t.int("costUsdTicks"))"
+            // F-1 (#7): every turn carries these counters, so one that is missing or invalid (P8 rules) is left out
+            // and flags the turn; the valid ones still count. A reported 0 is a value.
+            var flawed = false
+            func read(_ k: String) -> Int? {
+                guard case .value(let n) = Self.counter(t[k]) else { flawed = true; return nil }
+                return n
+            }
+            let input = read("inputTokens"), cached = read("cachedReadTokens")
+            var agg = Agg(output: read("outputTokens") ?? 0, cacheWrite5m: read("cacheCreationTokens") ?? 0,
+                          calls: read("modelCalls") ?? 0, costTicks: t.optionalInt("costUsdTicks"))
+            switch (input, cached) {
+            case let (i?, c?) where c <= i: agg.input = i - c; agg.cacheRead = c
+            // More cache reads than input is a conflict, not 0 uncached input: only what both allow counts, and the
+            // split is unknown, so it's taken as cache reads.
+            case let (i?, _?): agg.cacheRead = i; flawed = true
+            // Without cache reads the input can't be split: all of it counts as input.
+            case let (i?, nil): agg.input = i
+            case let (nil, c): agg.cacheRead = c ?? 0
+            }
+            // Resumed and forked sessions repeat inherited turns, so dedupe on content. An absent or invalid total is
+            // spelled apart from a reported one (F-1). The cost part (unchanged by R7) reads a missing cost as 0, so a
+            // turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns` decides which counts.
+            let total: String
+            switch Self.counter(t["totalTokens"]) {
+            case .value(let n): total = String(n)
+            case .absent: total = "-"; flawed = true
+            case .invalid: total = "?" + String(describing: t["totalTokens"]!); flawed = true
+            }
+            let key = "\(ended)|\(total)|\(t.int("costUsdTicks"))"
             return GrokTurn(key: key, slot: Self.slot(of: date),
-                            model: t.string("primaryModelId").map(Self.modelID) ?? "grok", agg: agg)
+                            model: t.string("primaryModelId").map(Self.modelID) ?? "grok", agg: agg, flawed: flawed)
         }
     }
 
     /// One turn per dedupe key, chosen the same way whatever order the files and turns are read in (R7): a copy that
-    /// reports a cost wins over one that doesn't, then the lowest model and token counts. Otherwise whether a turn's
-    /// cost is known would depend on which file came first.
+    /// reports a cost wins over one that doesn't, then one with valid counters over a flawed one (F-1), then the lowest
+    /// model and token counts. Otherwise whether a turn's cost is known would depend on which file came first.
     static func uniqueGrokTurns(_ turns: [GrokTurn]) -> [GrokTurn] {
         func rank(_ t: GrokTurn) -> (Int, String, Int, Int, Int, Int) {
-            (t.agg.costTicks == nil ? 1 : 0, t.model, t.agg.input, t.agg.output, t.agg.cacheWrite5m, t.agg.cacheRead)
+            ((t.agg.costTicks == nil ? 2 : 0) + (t.flawed ? 1 : 0), t.model, t.agg.input, t.agg.output, t.agg.cacheWrite5m,
+             t.agg.cacheRead)
         }
         var best: [String: GrokTurn] = [:]
         for t in turns {
@@ -1494,16 +1519,18 @@ final class Ledger {
         return Array(best.values)
     }
 
-    private func grokSlots() -> [Int: [String: Agg]] {
-        var slots: [Int: [String: Agg]] = [:]
+    /// Grok's usage per slot and model, and its flawed turns per slot (F-1), from the same deduplicated turns.
+    private func grokSlots() -> (slots: [Int: [String: Agg]], flawed: [Int: DataCompleteness]) {
+        var slots: [Int: [String: Agg]] = [:], flawed: [Int: DataCompleteness] = [:]
         for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
+            if t.flawed { flawed[t.slot, default: DataCompleteness()].flawed += 1 }
             var a = slots[t.slot, default: [:]][t.model, default: Agg()]
             a.add(t.agg)
             // A turn without a reported cost stays unknown after merging with turns that have one (R7).
             if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
             slots[t.slot, default: [:]][t.model] = a
         }
-        return slots
+        return (slots, flawed)
     }
 
     // MARK: Summaries
