@@ -166,6 +166,22 @@ struct UsageBar: View {
     }
 }
 
+/// Copy for a quota limit (F-2, #4), kept apart from the views so tests can check it. Provisional wording until #7
+/// settles the qualifier text.
+enum LimitText {
+    static let unavailable = "Usage not reported"
+
+    /// The row's note: the reason first when the percent is unavailable, then any note the limit has.
+    static func note(_ e: LimitEntry) -> String? {
+        e.percent == nil ? ([unavailable] + [e.note].compactMap { $0 }).joined(separator: " · ") : e.note
+    }
+
+    /// Each product's percent when Grok reports more than one; an unavailable one shows "--", never 0%.
+    static func products(_ p: GrokPlan) -> String? {
+        p.products.count > 1 ? p.products.map { "\($0.name) \(Fmt.pct($0.percent))" }.joined(separator: "  ") : nil
+    }
+}
+
 struct LimitRow: View {
     let entry: LimitEntry
     let tint: Color
@@ -185,7 +201,7 @@ struct LimitRow: View {
             }
             UsageBar(percent: entry.percent, tint: Color.severity(entry.percent, base: tint), pace: pace)
             HStack {
-                if let note = entry.note { Text(note) }
+                if let note = LimitText.note(entry) { Text(note) }
                 Spacer()
                 if let r = entry.resetsAt { Text("resets in \(Fmt.until(r))") }
             }
@@ -487,7 +503,7 @@ struct LimitsCard: View {
                                trailing: view.staleBecause == nil ? p.periodName.capitalized + " credits" : "Stale")
                     LimitRow(entry: LimitEntry(id: "grok", name: "Credits used", percent: p.percent, resetsAt: p.periodEnd,
                                                window: window(p),
-                                               note: p.products.count > 1 ? p.products.map { "\($0.name) \(Fmt.pct($0.percent))" }.joined(separator: "  ") : nil),
+                                               note: LimitText.products(p)),
                              tint: .grok)
                     if let failure = view.staleBecause {
                         Text("\(failure.title). Not current: last updated \(Fmt.ago(p.fetchedAt)). \(failure.guidance)")
