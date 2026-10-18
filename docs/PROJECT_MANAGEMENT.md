@@ -35,7 +35,7 @@ Labels are not used for any of these, so nothing is tracked twice. The default r
 
 ## Views
 
-Views are created in the web UI; the GitHub API cannot create them.
+The four views below exist (views 2–5, created on 2026-10-18). The GraphQL API (`createProjectV2View`, `updateProjectV2View`) can set a view's name, layout, filter and visible fields. **Grouping, sorting and board card fields can be set only in the web UI.**
 
 | View | Layout | Filter | Group / columns | Sort | Answers |
 |---|---|---|---|---|---|
@@ -76,7 +76,7 @@ scripts/project/setup-github-project.sh --dry-run   # review what would change
 scripts/project/setup-github-project.sh
 ```
 
-Then create the four views and turn on the workflows above. That is about five minutes in the browser.
+Then, in the browser, set each view's grouping and sort from the table above and turn on the workflows. The views themselves can be created by the API (see *Views*). The API can't turn workflows on: it lists them and can delete one, but it has no mutation to enable or edit one.
 
 ## Day-to-day rules
 
