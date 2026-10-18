@@ -170,4 +170,11 @@ struct QuotaPercentTests {
         #expect(LimitText.note(e) == LimitText.unavailable + " · 12% of weekly used, 40% allowed")
         #expect(LimitText.note(LimitEntry(id: "y", name: "W", percent: 3, resetsAt: nil, note: "n")) == "n")
     }
+
+    /// Without a percent there's no bar to compare a pace marker with, so none is drawn (review of #81).
+    @Test func noPaceMarkerWithoutAPercent() {
+        let resets = Date().addingTimeInterval(3600)
+        #expect(LimitRow.pace(LimitEntry(id: "s", name: "S", percent: nil, resetsAt: resets, window: 5 * 3600)) == nil)
+        #expect(LimitRow.pace(LimitEntry(id: "s", name: "S", percent: 0, resetsAt: resets, window: 5 * 3600)) != nil)
+    }
 }
