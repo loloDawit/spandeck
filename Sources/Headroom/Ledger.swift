@@ -279,7 +279,8 @@ struct QuantityUncertainty: Decodable, Equatable, Sendable {
 struct Totals {
     var tokens = 0
     var cost = CostEstimate.zero
-    /// Claude only; Grok turns are deduplicated by their own rule and aren't counted here.
+    /// Claude counts every identity group. Grok turns are deduplicated by their own rule, and only those whose
+    /// identity is uncertain are counted here, as `ambiguous` (F-1, #7).
     var identity = IdentityCoverage()
     /// Per provider (#58), and added field by field when they are combined: an unread Claude record says nothing about
     /// Grok. Grok reports only flawed turns (F-1, #7).
@@ -703,8 +704,15 @@ final class Ledger {
     private static let ambiguous = "ambiguous"
     static let cacheName = "claude-ledger.json"
     static let keyName = "claude-ledger.key"
-    /// `flawed`: a counter was missing or invalid and left out, or the cache reads exceeded the input (F-1, #7).
-    struct GrokTurn { var key: String; var slot: Int; var model: String; var agg: Agg; var flawed = false }
+    /// One Grok turn as read (F-1, #7). `group` is its `endedAt` and the R7 cost part of the dedupe key; `total` is the
+    /// reported `totalTokens`, nil when missing or invalid; `raw` holds the counters as written (input, cached reads,
+    /// output, cache writes, model calls), nil where missing or invalid, so copies are compared before `input − cached`.
+    /// `flawed`: a counter was missing or invalid and left out, or the cache reads exceeded the input. `ambiguous`: a
+    /// turn without a total that this one may duplicate was merged into it (`uniqueGrokTurns`).
+    struct GrokTurn {
+        var group: String; var total: Int?; var raw: [Int?] = []
+        var slot: Int; var model: String; var agg: Agg; var flawed = false; var ambiguous = false
+    }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
     static let retentionDays = 32
@@ -846,8 +854,8 @@ final class Ledger {
                 let grok = grokSlots()
                 cachedSummaries = (summarize(claudeSlots(), identity: state.identity, completeness: claudeCompleteness(),
                                              windowStart: windowStart),
-                                   summarize(grok.slots, identity: [:], completeness: (grok.flawed, DataCompleteness()),
-                                             windowStart: nil))
+                                   summarize(grok.slots, identity: grok.identity,
+                                             completeness: (grok.flawed, DataCompleteness()), windowStart: nil))
                 lastSummaryKey = key
             }
             completion(cachedSummaries!.0, cachedSummaries!.1, lastActivity)
@@ -1476,9 +1484,9 @@ final class Ledger {
                 guard case .value(let n) = Self.counter(t[k]) else { flawed = true; return nil }
                 return n
             }
-            let input = read("inputTokens"), cached = read("cachedReadTokens")
-            var agg = Agg(output: read("outputTokens") ?? 0, cacheWrite5m: read("cacheCreationTokens") ?? 0,
-                          calls: read("modelCalls") ?? 0)
+            let raw = ["inputTokens", "cachedReadTokens", "outputTokens", "cacheCreationTokens", "modelCalls"].map(read)
+            let input = raw[0], cached = raw[1]
+            var agg = Agg(output: raw[2] ?? 0, cacheWrite5m: raw[3] ?? 0, calls: raw[4] ?? 0)
             // A missing or invalid cost is unknown (R7): never a negative, truncated or held cost.
             if case .value(let ticks) = Self.counter(t["costUsdTicks"]) { agg.costTicks = ticks }
             switch (input, cached) {
@@ -1490,49 +1498,80 @@ final class Ledger {
             case let (i?, nil): agg.input = i
             case let (nil, c): agg.cacheRead = c ?? 0
             }
-            // Resumed and forked sessions repeat inherited turns, so dedupe on content. An absent or invalid total is
-            // spelled apart from a reported one, and every invalid total alike (F-1). The cost part (unchanged by R7) reads a missing cost as 0, so a
-            // turn without a cost and a copy reporting $0 are the same turn; `uniqueGrokTurns` decides which counts.
-            let total: String
-            switch Self.counter(t["totalTokens"]) {
-            case .value(let n): total = String(n)
-            case .absent: total = "-"; flawed = true
-            case .invalid: total = "?"; flawed = true
-            }
-            let key = "\(ended)|\(total)|\(t.int("costUsdTicks"))"
-            return GrokTurn(key: key, slot: Self.slot(of: date),
+            // Resumed and forked sessions repeat inherited turns, so `uniqueGrokTurns` dedupes on content. The cost part
+            // (unchanged by R7) reads a missing cost as 0, so a turn without a cost and a copy reporting $0 are the same
+            // turn. A missing or invalid total flags the turn but doesn't make it a new one (F-1).
+            var total: Int?
+            if case .value(let n) = Self.counter(t["totalTokens"]) { total = n } else { flawed = true }
+            return GrokTurn(group: "\(ended)|\(t.int("costUsdTicks"))", total: total, raw: raw, slot: Self.slot(of: date),
                             model: t.string("primaryModelId").map(Self.modelID) ?? "grok", agg: agg, flawed: flawed)
         }
     }
 
-    /// One turn per dedupe key, chosen the same way whatever order the files and turns are read in (R7): a copy that
-    /// reports a cost wins over one that doesn't, then one with valid counters over a flawed one (F-1), then the lowest
-    /// model and token counts. Otherwise whether a turn's cost is known would depend on which file came first.
+    /// One turn per operation, chosen the same way whatever order the files and turns are read in. Turns at the same
+    /// `endedAt` with the same R7 cost part are compared:
+    /// - Reported totals that are equal are copies of one turn (R7). A copy that reports a cost wins over one that
+    ///   doesn't, then one with valid counters over a flawed one (F-1), then the lowest model and token counts.
+    ///   Otherwise whether a turn's cost is known would depend on which file came first.
+    /// - A turn whose total is missing or invalid never makes a new operation on missing metadata alone (F-1, owner
+    ///   review of #80). It is compared with the turns kept so far (reported totals first, then the most complete) on
+    ///   the counters valid in both. If it disagrees on one with every kept turn, it is a distinct turn. If it agrees with
+    ///   exactly one, sharing at least one token counter, it is that turn's copy, and the kept turn counts. Otherwise
+    ///   (it agrees with several, or shares no token counter to compare) it is still merged, into the first, which is
+    ///   marked `ambiguous`: it may have been a distinct turn, so its tokens may be missing from the total.
     static func uniqueGrokTurns(_ turns: [GrokTurn]) -> [GrokTurn] {
-        func rank(_ t: GrokTurn) -> (Int, String, Int, Int, Int, Int) {
-            ((t.agg.costTicks == nil ? 2 : 0) + (t.flawed ? 1 : 0), t.model, t.agg.input, t.agg.output, t.agg.cacheWrite5m,
-             t.agg.cacheRead)
+        func precedes(_ a: GrokTurn, _ b: GrokTurn) -> Bool {
+            func head(_ t: GrokTurn) -> [Int] {
+                [t.total == nil ? 1 : 0, t.agg.costTicks == nil ? 1 : 0, t.flawed ? 1 : 0, t.raw.filter { $0 == nil }.count]
+            }
+            func tail(_ t: GrokTurn) -> [Int] {
+                [t.agg.input, t.agg.output, t.agg.cacheWrite5m, t.agg.cacheRead, t.agg.calls, t.total ?? -1]
+                    + t.raw.map { $0 ?? -1 }
+            }
+            if head(a) != head(b) { return head(a).lexicographicallyPrecedes(head(b)) }
+            if a.model != b.model { return a.model < b.model }
+            return tail(a).lexicographicallyPrecedes(tail(b))
         }
-        var best: [String: GrokTurn] = [:]
-        for t in turns {
-            if let b = best[t.key], rank(b) < rank(t) || (rank(b) == rank(t) && b.agg.calls <= t.agg.calls) { continue }
-            best[t.key] = t
+        enum Match { case same, distinct, unknown }
+        /// How a turn without a total compares with a kept turn, on the counters valid in both.
+        func compare(_ t: GrokTurn, _ kept: GrokTurn) -> Match {
+            let common = zip(t.raw, kept.raw).enumerated().compactMap { i, p in p.0.flatMap { a in p.1.map { (i, a, $0) } } }
+            if common.contains(where: { $0.1 != $0.2 }) { return .distinct }
+            return common.contains(where: { $0.0 < 4 }) ? .same : .unknown // 0–3 are token counters, 4 is model calls
         }
-        return Array(best.values)
+        var out: [GrokTurn] = []
+        for group in Dictionary(grouping: turns, by: \.group).values {
+            var kept: [GrokTurn] = []
+            for t in group.sorted(by: precedes) {
+                if let total = t.total {
+                    if !kept.contains(where: { $0.total == total }) { kept.append(t) }
+                    continue
+                }
+                let found = kept.indices.map { (i: $0, match: compare(t, kept[$0])) }.filter { $0.match != .distinct }
+                guard let first = found.first else { kept.append(t); continue }
+                if found.count > 1 || first.match == .unknown { kept[first.i].ambiguous = true }
+            }
+            out += kept
+        }
+        return out
     }
 
-    /// Grok's usage per slot and model, and its flawed turns per slot (F-1), from the same deduplicated turns.
-    private func grokSlots() -> (slots: [Int: [String: Agg]], flawed: [Int: DataCompleteness]) {
+    /// Grok's usage per slot and model, its flawed turns and its turns of uncertain identity per slot (F-1), from the
+    /// same deduplicated turns.
+    private func grokSlots() -> (slots: [Int: [String: Agg]], flawed: [Int: DataCompleteness],
+                                 identity: [Int: IdentityCoverage]) {
         var slots: [Int: [String: Agg]] = [:], flawed: [Int: DataCompleteness] = [:]
+        var identity: [Int: IdentityCoverage] = [:]
         for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
             if t.flawed { flawed[t.slot, default: DataCompleteness()].flawed += 1 }
+            if t.ambiguous { identity[t.slot, default: IdentityCoverage()].ambiguous += 1 }
             var a = slots[t.slot, default: [:]][t.model, default: Agg()]
             a.add(t.agg)
             // A turn without a reported cost stays unknown after merging with turns that have one (R7).
             if t.agg.costTicks == nil { a.uncostedTokens = (a.uncostedTokens ?? 0) + t.agg.total }
             slots[t.slot, default: [:]][t.model] = a
         }
-        return (slots, flawed)
+        return (slots, flawed, identity)
     }
 
     // MARK: Summaries

@@ -266,6 +266,20 @@ struct GrokCounterCompletenessTests {
     }
 
     // MARK: Totals and notes
+    /// The card says when a Grok copy was merged into a turn it may not duplicate: tokens may be missing.
+    @Test func identityNoteCarriesGrokMerges() async throws {
+        let rig = try Rig()
+        try rig.grok(session: "a", [Self.turn()])
+        try rig.grok(session: "b", [#""costUsdTicks":10"#])
+        let (claude, grok) = await rig.summaries()
+        let note = try #require(IdentityText.note(claude, grok: grok))
+        #expect(note.text == IdentityText.approximate)
+        #expect(note.detail.contains("In Grok's usage files for the last 30 days, 1 turn without a total couldn't be "
+                                     + "told apart from another turn and was counted with it"))
+        #expect(!note.detail.contains("from Claude"))
+        #expect(UsageNotes.notes(claude, grok: grok).map(\.text) == [IdentityText.approximate])
+    }
+
 
     /// A flawed Grok turn keeps the combined Claude + Grok total qualified.
     @Test func combinedTotalsCarryGrokFlaws() async throws {
@@ -287,6 +301,26 @@ struct GrokCounterCompletenessTests {
                                      + "missing, isn't a valid number or contradicts another"))
         #expect(!note.detail.contains("Claude Code's logs"))
         #expect(UsageNotes.notes(claude, grok: grok).map(\.text) == [CompletenessText.incomplete])
+    }
+}
+
+/// Identity copy for Grok, without a ledger: Claude's wording is unchanged when every Grok turn is certain.
+struct GrokIdentityTextTests {
+    private func summary(_ c: IdentityCoverage) -> UsageSummary {
+        var s = UsageSummary()
+        s.month = Totals(tokens: 10, cost: CostEstimate(known: 1, knownTokens: 10), identity: c)
+        return s
+    }
+
+    @Test func grokOnlyAndBoth() throws {
+        #expect(IdentityText.note(nil, grok: summary(IdentityCoverage())) == nil)
+        let two = try #require(IdentityText.note(nil, grok: summary(IdentityCoverage(ambiguous: 2))))
+        #expect(two.detail.contains("2 turns without a total couldn't be told apart from another turn and were counted "
+                                    + "with it, so token totals may be low."))
+        let claude = summary(IdentityCoverage(identified: 1, fingerprinted: 1))
+        #expect(try #require(IdentityText.note(claude)) == (try #require(IdentityText.note(claude, grok: summary(IdentityCoverage())))))
+        let both = try #require(IdentityText.note(claude, grok: summary(IdentityCoverage(ambiguous: 1))))
+        #expect(both.detail.contains("from Claude in the last 30 days") && both.detail.contains("In Grok's usage files"))
     }
 }
 
