@@ -1,6 +1,7 @@
 # Metric and provenance contract
 
-- **Status:** Partly accepted. Contract version **0.2** (design only; no code change). Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+- **Status:** Partly accepted. Contract version **0.3**. Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+  - **0.3:** a valid quota percent is a finite number from 0 to 100 (§4, provisional); F-2 addressed in #81 (§5).
   - **Accepted by the owner on 2026-10-18:** missing is not zero; the value statuses and qualifiers (§3); F-1 → #7, F-2 → #4; the F-3 direction; Bedrock/Vertex labelling (§8).
   - **Still open:** the stale threshold (§3); P10 display (ADR §D4.1).
 - **Date:** 2026-10-18
@@ -30,8 +31,8 @@ This contract says what each number SpanDeck shows means, where it comes from, h
 | Claude estimated cost | tokens × price table | model | as tokens | price revision and retrieval date (`PricingInfo`) | unpriced models unknown (P17); tier-unresolved is a lower bound; disputed is unpriced |
 | Grok tokens | `grok.usage-json` | slot × model | as Claude, no 5 h window | each refresh (`mtime` change) | dedupe on `endedAt`, `totalTokens`, `costUsdTicks`; **missing counters read as 0 today (F-1)** |
 | Grok reported cost | `costUsdTicks` | slot × model | as Grok tokens | as Grok tokens | turns without it are unknown (R7) |
-| Claude quota | `claude.quota-endpoint` (opt-in, unofficial) | limit kind (session, weekly, model-scoped) | the provider's window, ending at `resets_at` | `fetchedAt` per poll | **missing percent read as 0 today (F-2)**; shape can change without notice |
-| Grok quota | `grok.billing` (opt-in) | plan, products | the provider's billing period | `fetchedAt`; stale shown after a temporary failure (#21) | product `usagePercent` missing read as 0 today (F-2) |
+| Claude quota | `claude.quota-endpoint` (opt-in, unofficial) | limit kind (session, weekly, model-scoped) | the provider's window, ending at `resets_at` | `fetchedAt` per poll | a missing or invalid percent is unavailable (F-2, #81); above 100 % is unsupported; shape can change without notice |
+| Grok quota | `grok.billing` (opt-in) | plan, products | the provider's billing period | `fetchedAt`; stale shown after a temporary failure (#21) | a product's missing or invalid `usagePercent` is unavailable; an invalid top-level percent is a malformed answer (F-2, #81) |
 | Actual charges | none | n/a | n/a | n/a | always *unavailable* |
 | Session, project, agent, tool metrics | none today | n/a | n/a | n/a | blocked #10 / ADR D7 |
 
@@ -88,14 +89,14 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 ## 4. Null versus zero [decided as a principle; rules proposed]
 1. **Absent ≠ 0.** A counter, percent or cost that is missing, `null`, non-numeric, negative, fractional or too large is **absent**.
    - Absent counters make the operation `flawed` (P8).
-   - An absent quota percent makes the quota **unavailable**.
+   - An absent quota percent makes the quota **unavailable**. A valid percent is a finite number from 0 to 100 inclusive; a boolean, or a value outside that range, is absent too **[provisional, 0.3]**. Neither endpoint documents its range, so a real reading above 100 % is unsupported: it shows as unavailable.
    - An absent cost makes the cost **unknown** (R7).
 2. **Real zero is a value.** `"output_tokens": 0`, `"costUsdTicks": 0` and `"percent": 0` are exact zeros.
 3. **No data in a period** (no records at all) is exactly 0 tokens with `complete` coverage. But if any source that covers the period failed or is unread, the total carries **incomplete data**.
 4. **Sums keep their worst status.** One unknown term makes a sum partial; all unknown makes it unavailable (`CostEstimate +`, `UsageSummary.combine`).
 5. **Clamping hides data.** A derived counter that would be negative is a data conflict, flagged, not clamped to 0. Today: Grok `max(inputTokens − cachedReadTokens, 0)`; see F-1.
 
-## 5. Current violations to fix (findings, not fixed here)
+## 5. Violations found, and their status
 - **F-1, Grok local usage reads missing as 0.**
   - `parseGrokUsage` (`Ledger.swift:1469–1476`) uses `int(_:)`, which returns 0 for an absent or non-numeric key (`Util.swift:176`). This covers `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cachedReadTokens`, `modelCalls`, and `totalTokens` in the dedupe key.
   - `int(_:)` also accepts JSON booleans as 1 or 0, which `optionalInt` rejects (`Util.swift:178–181`).
@@ -103,10 +104,9 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
   - **Proposed:** read counters with the P8 `Ledger.counter` rules; flag Grok turns like Claude groups (Grok gains a `DataCompleteness`); the dedupe key uses `optionalInt` with absent spelled distinctly (the open "Grok dedupe identity" item from #7's 2026-10-15 comment).
   - **Tracked in #7** (owner decision, 2026-10-18).
 - **F-2, quota parsing reads missing as 0 %.**
-  - `ClaudeLimitsClient.fetch` uses `l.double("percent") ?? 0` and `utilization ?? 0`.
-  - `GrokClient` product `usagePercent ?? 0`.
-  - The Grok top-level percent is already strict (#21).
-  - **Proposed:** a missing percent makes that limit unavailable, kept with its reset time if present.
+  - **Found:** `ClaudeLimitsClient.fetch` used `l.double("percent") ?? 0` and `utilization ?? 0`, and `GrokClient` product `usagePercent ?? 0`; `double` also read booleans as 1 or 0. A weekly-share percent of `1e300` trapped `Int(_:)`, and a share without `limit_index` attached to limit 0.
+  - **Addressed in #81:** `Dictionary.percent` (§4.1). An unusable percent makes that limit unavailable (`--`, an empty bar, a blank gauge segment and "Usage not reported"), kept with its name, window, reset time and note. A reported 0 stays exact. The Grok top-level percent, already strict for a missing value (#21), also treats an out-of-range value as a malformed answer. Tests: `QuotaPercentTests`.
+  - **Limitations kept:** the 0–100 range is provisional, and above 100 % reads as unavailable (for the Grok top level, the plan is discarded). The hover shows `--` without the reason. The wording is provisional (§10). Staleness after a failed refresh is F-3, unchanged.
   - **Tracked in #4** (owner decision, 2026-10-18).
 - **F-3, Claude quota staleness is inconsistent.**
   - On an error the menu-bar gauge blanks (`StatusRenderer.claudeGauge`, `StatusRenderer.swift:71`; test `claudeGaugeBlankOnOtherErrors`).
@@ -155,11 +155,12 @@ These hold in today's code unless marked, and every refactor must keep them (fix
 - `QuantityTests`;
 - `IdentityCoverageTests`;
 - `QuotaVisibilityTests`;
+- `QuotaPercentTests` (F-2);
 - `GrokErrorStateTests`;
 - `LedgerFixtureTests` F01–F49;
 - `TimeZoneTests`.
 
-**New ones needed per slice:** F-1 (Grok missing counters), F-2 (quota missing percent), P10 decision (F12), P15 boundary slot (F22).
+**New ones needed per slice:** F-1 (Grok missing counters), P10 decision (F12), P15 boundary slot (F22).
 
 ## 10. Decisions and open points
 
