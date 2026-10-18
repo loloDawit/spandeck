@@ -1,6 +1,6 @@
 # Developer ID signing and notarization plan (R11, #37)
 
-**Status: plan only.** Nothing here is set up. SpanDeck has no Apple Developer account, certificate, signing secret or notarized build. `build.sh` signs ad hoc and `release.yml` publishes an unsigned DMG. **This document doesn't authorize a release.** A public or enterprise distribution also needs the open items in #3, #11 and the [roadmap](ROADMAP.md) release blockers.
+**Status: plan only.** Nothing here is set up. SpanDeck has no Apple Developer account, certificate, signing secret or notarized build. `build.sh` signs ad hoc. Since #11, `release.yml` publishes nothing that [`scripts/verify-release.sh`](../scripts/verify-release.sh) doesn't accept as a notarized Developer ID build, and with no Team ID configured every release run stops before building. **This document doesn't authorize a release.** A public or enterprise distribution also needs the open items in #3, #11 and the [roadmap](ROADMAP.md) release blockers.
 
 ## Where things stand (checked locally, 2026-10-15, macOS 26.5, Xcode 26.6, Swift 6.3.3)
 
@@ -95,7 +95,7 @@ Run from a clean checkout of the **tagged** commit, with the toolchain recorded 
    - the `stapler validate` and `spctl` results.
 
    Reproducibility goal: a clean build of the same tag with the same toolchain on a second Mac gives the same **unsigned** binary hash. Signatures and DMG timestamps differ by design.
-10. **Publish** only after steps 1–9, by uploading the stapled DMG to the release. Remove the "Not notarized yet … Open Anyway" sentence from `release.yml`'s notes in the same change that starts shipping signed builds.
+10. **Verify, then publish.** `SPANDECK_TEAM_ID=<TEAMID> scripts/verify-release.sh build/SpanDeck-<version>.dmg` checks steps 4–8 in one go: the DMG and the app inside it are signed with this team's Developer ID, with a secure timestamp; the app has Hardened Runtime, the bundle id from `Resources/identity.env`, and both architectures; the notarization ticket is stapled; and Gatekeeper reports `source=Notarized Developer ID` for both. It prints the SHA-256 values for step 9. Publish only a DMG it accepts. `release.yml` runs the same gate before any upload (#11), and its notes no longer tell users to use Open Anyway.
 
 ## If signing later moves to CI (not planned now)
 
@@ -107,7 +107,11 @@ This needs, in its own reviewed change with a threat-model update:
 - pinned actions and least permissions, as `scripts/check-workflows.py` enforces;
 - a budget decision for hosted macOS minutes.
 
-Until then `release.yml` stays unsigned and must not be given signing secrets.
+Until then `release.yml` doesn't sign and must not be given signing secrets. Its release gate refuses the unsigned DMG it builds, so a tag or a published release produces no download. `scripts/check-workflows.py` refuses a workflow that publishes before the gate, weakens it (`if:`, `continue-on-error:`, `|| true`), rebuilds between gate and upload, or tells users to bypass Gatekeeper.
+
+## Development builds without bypassing Gatekeeper
+
+Build from source: `./build.sh` makes `build/SpanDeck.app`, signed ad hoc. A locally built app carries no quarantine attribute, so Gatekeeper doesn't block it, and nothing needs to be overridden; `scripts/runtime-verify.sh` checks this for staged builds. Don't download an unsigned SpanDeck DMG, and don't use *Open Anyway*, `xattr -d com.apple.quarantine` or `spctl --master-disable` to run one. Any SpanDeck download is a release only if the gate accepted it.
 
 ## Certificates over time
 
@@ -126,6 +130,6 @@ Until then `release.yml` stays unsigned and must not be given signing secrets.
 | Today, locally, without Apple credentials | Needs a Developer ID and notarization credentials |
 |---|---|
 | `lipo -archs`, ad-hoc `codesign --verify`, `codesign -dvv` flags, `hdiutil verify`, `spctl` (expected to reject) | `codesign --sign "Developer ID Application: …"` with `--options runtime --timestamp` |
-| `actionlint`, `scripts/check-workflows.py`, `scripts/test_check_workflows.py`, `swift test` (`WorkflowPolicyTests`) | `notarytool submit` / `log`, `stapler staple` / `validate` |
+| `actionlint`, `scripts/check-workflows.py`, `scripts/test_check_workflows.py`, `swift test` (`WorkflowPolicyTests`), `scripts/test-verify-release.sh` (the gate refuses every shortfall, and a real ad-hoc DMG) | `notarytool submit` / `log`, `stapler staple` / `validate`; `scripts/verify-release.sh` **accepting** a real DMG |
 | Clean-build hash comparison on two Macs (unsigned binary) | `spctl` accepting with `source=Notarized Developer ID` |
 | Reviewing `build.sh` and `release.yml` changes | Runtime launch on Apple Silicon and Intel test machines (also needs #3 Phase 2 setup) |
