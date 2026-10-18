@@ -707,11 +707,11 @@ final class Ledger {
     /// One Grok turn as read (F-1, #7). `group` is its `endedAt` and the R7 cost part of the dedupe key; `total` is the
     /// reported `totalTokens`, nil when missing or invalid; `raw` holds the counters as written (input, cached reads,
     /// output, cache writes, model calls), nil where missing or invalid, so copies are compared before `input − cached`.
-    /// `flawed`: a counter was missing or invalid and left out, or the cache reads exceeded the input. `ambiguous`: a
-    /// turn without a total that this one may duplicate was merged into it (`uniqueGrokTurns`).
+    /// `flawed`: a counter was missing or invalid and left out, or the cache reads exceeded the input. `uncertain`:
+    /// how many turns without a total were merged into this one although they may not duplicate it (`uniqueGrokTurns`).
     struct GrokTurn {
         var group: String; var total: Int?; var raw: [Int?] = []
-        var slot: Int; var model: String; var agg: Agg; var flawed = false; var ambiguous = false
+        var slot: Int; var model: String; var agg: Agg; var flawed = false; var uncertain = 0
     }
     private struct GrokFile { var mtime: Date; var turns: [GrokTurn] }
 
@@ -1516,9 +1516,10 @@ final class Ledger {
     /// - A turn whose total is missing or invalid never makes a new operation on missing metadata alone (F-1, owner
     ///   review of #80). It is compared with the turns kept so far (reported totals first, then the most complete) on
     ///   the counters valid in both. If it disagrees on one with every kept turn, it is a distinct turn. If it agrees with
-    ///   exactly one, sharing at least one token counter, it is that turn's copy, and the kept turn counts. Otherwise
-    ///   (it agrees with several, or shares no token counter to compare) it is still merged, into the first, which is
-    ///   marked `ambiguous`: it may have been a distinct turn, so its tokens may be missing from the total.
+    ///   exactly one, sharing at least one nonzero token counter, it is that turn's copy, and the kept turn counts.
+    ///   Otherwise (it agrees with several, or shares no nonzero token counter, since 0 is too common to tell turns
+    ///   apart) it is still merged, into the first, and counted in its `uncertain`: it may have been a distinct turn, so
+    ///   its tokens may be missing from the total. Groups are processed in key order, so the output order is fixed too.
     static func uniqueGrokTurns(_ turns: [GrokTurn]) -> [GrokTurn] {
         func precedes(_ a: GrokTurn, _ b: GrokTurn) -> Bool {
             func head(_ t: GrokTurn) -> [Int] {
@@ -1537,10 +1538,10 @@ final class Ledger {
         func compare(_ t: GrokTurn, _ kept: GrokTurn) -> Match {
             let common = zip(t.raw, kept.raw).enumerated().compactMap { i, p in p.0.flatMap { a in p.1.map { (i, a, $0) } } }
             if common.contains(where: { $0.1 != $0.2 }) { return .distinct }
-            return common.contains(where: { $0.0 < 4 }) ? .same : .unknown // 0–3 are token counters, 4 is model calls
+            return common.contains(where: { $0.0 < 4 && $0.1 != 0 }) ? .same : .unknown // 0–3: token counters
         }
         var out: [GrokTurn] = []
-        for group in Dictionary(grouping: turns, by: \.group).values {
+        for (_, group) in Dictionary(grouping: turns, by: \.group).sorted(by: { $0.key < $1.key }) {
             var kept: [GrokTurn] = []
             for t in group.sorted(by: precedes) {
                 if let total = t.total {
@@ -1549,7 +1550,7 @@ final class Ledger {
                 }
                 let found = kept.indices.map { (i: $0, match: compare(t, kept[$0])) }.filter { $0.match != .distinct }
                 guard let first = found.first else { kept.append(t); continue }
-                if found.count > 1 || first.match == .unknown { kept[first.i].ambiguous = true }
+                if found.count > 1 || first.match == .unknown { kept[first.i].uncertain += 1 }
             }
             out += kept
         }
@@ -1564,7 +1565,7 @@ final class Ledger {
         var identity: [Int: IdentityCoverage] = [:]
         for t in Self.uniqueGrokTurns(grokFiles.values.flatMap(\.turns)) {
             if t.flawed { flawed[t.slot, default: DataCompleteness()].flawed += 1 }
-            if t.ambiguous { identity[t.slot, default: IdentityCoverage()].ambiguous += 1 }
+            if t.uncertain > 0 { identity[t.slot, default: IdentityCoverage()].ambiguous += t.uncertain }
             var a = slots[t.slot, default: [:]][t.model, default: Agg()]
             a.add(t.agg)
             // A turn without a reported cost stays unknown after merging with turns that have one (R7).

@@ -101,12 +101,12 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
   - **Addressed in #80:**
     - Counters follow the P8 `Ledger.counter` rules. A missing or invalid one is left out and flags the turn (Grok's `DataCompleteness.flawed`); the valid ones count; a reported 0 is exact. An invalid cost is unknown (R7).
     - Cache reads above the input are a flagged conflict: only `min(input, cached)` counts, and **no input/cache split is claimed** for it. No view shows Grok's split, and Grok cost comes from `costUsdTicks`, not the price table.
-    - Dedupe: a missing or invalid total never makes a new operation on its own. A copy without a total is matched to the kept turns at its `endedAt` on the counters valid in both: one agreeing turn is its copy (the complete copy counts); disagreeing with all is a distinct turn; several agreeing turns, or nothing to compare, merge it into the first and flag *uncertain identity* (`IdentityCoverage.ambiguous`, §3).
+    - Dedupe: a missing or invalid total never makes a new operation on its own. A copy without a total is matched to the kept turns at its `endedAt` on the counters valid in both: one agreeing turn, sharing a nonzero token counter, is its copy (the complete copy counts); disagreeing with all is a distinct turn; several agreeing turns, or no nonzero token counter to compare, merge it into the first and flag *uncertain identity* (`IdentityCoverage.ambiguous`, one per merged turn, §3).
     - Both notes on the usage card cover Grok (counts only). Tests: `GrokCounterCompletenessTests`.
   - **Limitations kept:**
     - On Grok an absent counter flags the turn; on Claude (P8) it doesn't.
     - An uncertain merge may drop a turn that was distinct (flagged; totals may be low).
-    - The cost part of the key is R7's: a missing cost matches only a reported $0, so a copy without a cost and a copy reporting a nonzero cost count twice (known issue, follow-up on #7). Invalid costs `true` and `1.5` key as 1 tick, like a real one.
+    - The cost part of the key is R7's (`Dictionary.int`), reviewed and unchanged. **Collisions:** a missing, `null`, non-numeric or `false` cost keys like a reported $0, by design, so the costed copy can win; `true` and `1.5` key like a real 1 tick; other invalid numbers key by their truncated value (`-5` as −5). **Split:** a copy without a cost and a copy reporting a nonzero cost key apart and count twice (known issue in `GrokCounterCompletenessTests`, follow-up on #7).
     - A turn without a parseable `endedAt`, or a `usage.json` that isn't valid JSON, is still dropped without being counted as unread.
   - **Tracked in #7** (owner decision, 2026-10-18).
 - **F-2, quota parsing reads missing as 0 %.**
