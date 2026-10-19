@@ -18,4 +18,6 @@
 
   `ab-final-vs-832a160/` measures their cost. The full run wasn't repeated, so the top-level figures are `832a160`'s.
 - **Heartbeat at `832a160`:** the top-level 9c/9d heartbeat statistics still include the last, cancelled sleep. It is never longer than a full sleep, so it can't raise the worst.
-- **Not committed:** run `run86e-small-recheck` (small at `832a160`, load 5.6), and the full runs on `121aebd`, `83fa19b` and `86236c3`. They're summarized on PR #90.
+- **`ab-abba-final-vs-main/`:** the primary before/after comparison. The PR's final code `7bec306` (`final`) against `main` `587f1c3` (`main`), small and medium, in ABBA order per dataset (final, main, main, final). Every file carries an `ab` block. Compare with `scripts/bench-ab.py ab-abba-final-vs-main main final`.
+- **`recheck-small/`:** run `run86e-small-recheck`, small only at `832a160` (load 5.6), quoted in `PERFORMANCE.md` §4.5.
+- **Not committed:** the full runs on `121aebd`, `83fa19b` and `86236c3`, made while the PR was reviewed. They're superseded by run86e, and their quit figures are summarized in the PR #90 description.
