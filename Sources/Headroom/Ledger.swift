@@ -752,6 +752,11 @@ final class Ledger {
     /// (`ingestClaudeLine` → `count`) is done before the next starts. A mark behind what was counted is harmless:
     /// reading again counts nothing twice (identity dedupe).
     /// `listing`: while transcripts are listed, every 256 entries, before anything is read.
+    ///
+    /// Not interruptible, so a stop waits for them: decoding the cache at the first refresh (`loadCache`, about 1.6 s
+    /// for the #8 benchmark's large set), one line however long, mapping a file and hashing its anchor (at most 72 KiB),
+    /// the hot-file listing between full scans (`discoverNewFiles`, recently touched folders only), and a save already
+    /// under way.
     enum Checkpoint: Equatable, Sendable { case beforeScan, listing, betweenFiles, inFile, grok }
     private var _stopCheckLines = 2048
     private var _stopCheckBytes = 4 << 20
@@ -869,7 +874,6 @@ final class Ledger {
     func refresh(windowStart: Date?, progress: @escaping (String?) -> Void,
                  completion: @escaping (_ claude: UsageSummary, _ grok: UsageSummary, _ lastActivity: Date) -> Void) {
         queue.async { [self] in
-            // #86: once stopping, nothing is scanned or saved again, but the caller still gets an answer.
             // Once stopping (#86), nothing is scanned or saved, but the caller still gets an answer: the last
             // summaries, or empty ones. They aren't a new measurement, so `ProviderServices` drops them (it checks
             // `isStopping`); a stopped ledger only exists while the app quits.
@@ -1017,13 +1021,19 @@ final class Ledger {
 
         hotFiles = hot
         // Progress for a first index, and for one resumed after a quit (#86), when some marks exist already: files
-        // without a mark are what's left to index. A rescan of files that grew isn't an index.
-        let initial = state.files.isEmpty || candidates.filter { state.files[$0.id] == nil }.count >= 25
-        for (i, (path, id, size, stamp)) in candidates.enumerated() {
+        // without a mark are what's left to index, and the count shows those only. A rescan of files that grew isn't
+        // an index; 25 or more new transcripts at once (a restore, a bulk import) are, and show progress too.
+        let unmarked = Set(candidates.filter { state.files[$0.id] == nil }.map(\.id))
+        let initial = unmarked.count >= 25 || (state.files.isEmpty && !unmarked.isEmpty)
+        var indexed = 0
+        for (path, id, size, stamp) in candidates {
             // #86: files not reached keep their marks. Pruning is skipped too: the first refresh after a relaunch is
             // always a full scan (`lastFullScan` isn't saved), and it prunes.
             if checkpoint(.betweenFiles) { return }
-            if initial, i % 25 == 0 { progress("Indexing Claude logs \(i)/\(candidates.count)") }
+            if initial, unmarked.contains(id) {
+                if indexed % 25 == 0 { progress("Indexing Claude logs \(indexed)/\(unmarked.count)") }
+                indexed += 1
+            }
             readClaudeFile(path, id: id, size: size, stamp: stamp)
         }
         if isStopping { return } // stopped inside the last file

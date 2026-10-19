@@ -638,6 +638,8 @@ struct ShutdownCoordinatorTests {
         let beginMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
         while replies.isEmpty { try? await Task.sleep(nanoseconds: 5_000_000) }
         beat.cancel()
+        await beat.value
+        if !lateness.isEmpty { lateness.removeLast() } // the last, cancelled sleep
         _ = await refreshed.value
         #expect(replies == [.saved])
         #expect(beginMs < 16, "begin returned in \(beginMs) ms")

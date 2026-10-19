@@ -225,18 +225,24 @@ One ledger per process (memory runs):
 | … save = total to the reply (cache size) | 42 ms (1.4 MB) | 0.34 s (13 MB) | **1.39 s** (48 MB) |
 | Outcome, every quit | saved | saved | saved |
 
-Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit.
+Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit, with the last (cancelled) sleep dropped.
+- 9c's quits last only 23–48 ms, so they hold 4–8 beats.
+- 9d's large quit holds 233, and is the stronger evidence for the main actor staying responsive.
+- `begin` is the synchronous call from `applicationShouldTerminate`. The hop that delivers the reply, AppKit's own run loop while it waits, and the termination itself aren't in these figures.
 
-- **B3 passes.** The main thread is held at most 0.074 ms, against the 1 s budget, and the main actor is never late by more than 1.15 ms.
-- **Total quit time** while AppKit keeps the event loop running is at most 1.39 s on large: the full 48 MB save, well under the 5 s timeout.
+- **B3 passes.** The main thread is held at most 0.074 ms, against the 1 s budget, and in these quits the main actor was never late by more than 1.15 ms.
+- **Total quit time** while AppKit keeps the event loop running was 1.39 s on large with the full 48 MB to save (9d, measured).
+  - **The worst case is analysed, not measured.** A quit can also wait for work that has no checkpoint: decoding the cache at the first refresh (about 1.6 s on large, the warm-start figure), a save already under way, or one very long line.
+  - The stop's own save then follows only if something is still unsaved. A quit during a periodic save finds it saved, so it doesn't save twice.
+  - The worst case on large is therefore about one decode plus one save, about 3 s, still under the 5 s timeout on this machine. A slower disk or a larger cache could reach the timeout. The previous cache then stays valid, and what wasn't saved is read again at the next launch.
 - **Before #86** the main thread was blocked for the rest of the scan: 18.0 s on large.
 
 **Scan throughput and accounting cost.**
-- **Interleaved A/B** (`ab-vs-main/`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Every scenario was within **±4.2 %** (CPU median):
-  - small: cold start −0.8 %, rebuild +1.8 %, warm start −4.2 %, save +1.8 %, ticks +0.2 % and −4.1 %;
-  - medium: −1.8 %, −1.0 %, +0.6 %, −2.5 %, −1.2 % and −2.7 %;
-  - throughput 36.2 → 36.5 MB/s (small) and 36.8 → 37.1 MB/s (medium).
-- **The review fixes alone** (`ab-vs-121aebd/`, small): −1.3 % to +0.3 %.
+- **Interleaved A/B** (`ab-vs-main/`, reproduce with `scripts/bench-ab.py <dir> main new`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Each side's CPU median is averaged over its two rounds.
+  - **Within ±4.4 %:** every scenario on small and medium (cold start, rebuild, warm start, save, both ticks, summary and simulated wake), except one.
+  - **The exception:** medium's 5-minute full scan with nothing new, −40.5 %. It is a 2–5 ms figure whose `main` side alone varied from 2.2 to 4.9 ms between rounds: noise.
+  - **First-scan throughput:** 36.8 → 37.2 MB/s (small) and 36.6 → 37.3 MB/s (medium). The script computes it as the bytes scanned divided by the cold-start CPU minus the first save's CPU, in 10⁶ bytes, the mean over rounds.
+- **The review fixes alone** (`ab-vs-121aebd/`, small, `scripts/bench-ab.py <dir> old new`): every scenario −7.2 % to +1.7 %, and the negative end is faster (the no-change tick and simulated wake). Throughput 36.7 → 37.2 MB/s.
 - **Against run 4** (a different time and load), run86e's large set is 4.9–12.8 % *faster* in CPU, 37.2 against 33.7 MB/s, and medium within ±10 %.
   - Small's +13.4 % cold-start CPU in run86e, and +12.8 % in a recheck at load 5.6, came at higher load than run 4. The interleaved A/B, which holds the load equal, shows none of it.
   - Large has no A/B. Its comparison is across runs only.
@@ -251,7 +257,11 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
   - a save under way when the quit arrives is waited for on the ledger queue, never on the caller;
   - relaunch matches an uninterrupted scan at every interruption point.
 
+**Checkpoint limits** (also in `Ledger.Checkpoint`): a stop can't interrupt the cache decode at the first refresh, one line however long, mapping a file and hashing its anchor (at most 72 KiB), the hot-file listing between full scans, or a save already under way. The 17–42 ms cancellation latency above is for the synthetic dataset, which has no very long lines.
+
 **Not measured:** AppKit's own termination after the reply, logout or restart, and quitting from the real app. Those need the owner's run in a test account (§3).
+- The stop is for the rest of the process. If the system didn't terminate after the reply (not expected once an app agrees), usage would stop updating until a relaunch.
+- The app registers one reply per termination and relies on AppKit pairing it with the one pending `.terminateLater`.
 
 ## 5. Budgets
 

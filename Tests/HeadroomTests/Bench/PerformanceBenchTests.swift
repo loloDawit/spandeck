@@ -210,6 +210,8 @@ struct PerformanceBenchTests {
         let beginMs = Double(ns() - tBegin) / 1e6
         while outcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         quitBeat.cancel()
+        await quitBeat.value // its last, cancelled sleep is dropped below, and nothing appends after this
+        if !quitLate.isEmpty { quitLate.removeLast() }
         // A mark that never came is reported as missing (null), never as 0 s, and the difference is signed, so a mark
         // earlier than its start can't trap (review of #90).
         func span(_ from: UInt64?, _ to: UInt64?) -> Any {
@@ -247,6 +249,8 @@ struct PerformanceBenchTests {
             _ = await first
         }
         beat.cancel()
+        await beat.value // drop the last, cancelled sleep; nothing appends after this
+        if !lateness.isEmpty { lateness.removeLast() }
         report["main_thread_during_cold_scan"] = ["scan_wall_s": scan.wall, "heartbeat_late_ms": Bench.stats(lateness),
                                                   "overlapping_refreshes_dropped_of_10": dropped]
 
@@ -345,6 +349,8 @@ struct PerformanceBenchTests {
         let fullBeginMs = Double(ns() - fullBegin) / 1e6
         while fullOutcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         fullBeat.cancel()
+        await fullBeat.value
+        if !fullLate.isEmpty { fullLate.removeLast() }
         report["quit_coordinator_full_cache"] = [
             "outcome": "\(fullOutcome!)", "begin_ms": fullBeginMs, "heartbeat_late_ms": Bench.stats(fullLate),
             "save_s": span(fullBegin, fullMarks.get("saved")), "total_to_reply_s": span(fullBegin, fullMarks.get("reply")),
