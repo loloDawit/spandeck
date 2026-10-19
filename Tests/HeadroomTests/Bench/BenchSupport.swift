@@ -72,6 +72,14 @@ enum Bench {
     }
 }
 
+/// Time stamps set once, from any thread (#86 benchmark).
+final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: UInt64] = [:]
+    func set(_ key: String, _ t: UInt64) { lock.withLock { if values[key] == nil { values[key] = t } } }
+    func get(_ key: String) -> UInt64? { lock.withLock { values[key] } }
+}
+
 /// A clock the ledger reads, moved forward by the benchmark to force full scans, a sleep or a new day.
 final class BenchClock: @unchecked Sendable {
     private let lock = NSLock()

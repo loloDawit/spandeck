@@ -74,7 +74,14 @@ row("Disk read, first scan (median; file cache warm)", lambda r: f"{mb(r['cold_f
 row("All-scenario process: footprint peak (incl. generator, several ledgers)",
     lambda r: f"{mb(r['memory_bytes']['footprint_peak'])} MB")
 row("10 refreshes at once (ledger queue)", lambda r: f"{ms(r['ledger_burst_10']['wall_s'])} ms")
-row("Quit (`flush`) 50 ms into a cold scan: main thread blocked", lambda r: f"{ms(r['quit_flush_during_cold_scan']['wall_s'])} ms")
+row("Old quit path (`flush`) 50 ms into a cold scan: main thread blocked", lambda r: f"{ms(r['quit_flush_during_cold_scan']['wall_s'])} ms")
+if all("quit_coordinator_during_cold_scan" in res[s_] for s_ in sets):
+    q = lambda r: r['quit_coordinator_during_cold_scan']
+    row("Quit since #86, 50 ms into a cold scan: `begin` on main / heartbeat late, worst",
+        lambda r: f"{q(r)['begin_ms']:.2f} ms / {q(r)['heartbeat_late_ms'].get('max', 0):.1f} ms")
+    row("  cancellation latency / save / total to the reply",
+        lambda r: f"{ms(q(r)['cancel_latency_s'])} / {ms(q(r)['save_s'])} / {ms(q(r)['total_to_reply_s'])} ms")
+    row("  outcome", lambda r: q(r)['outcome'])
 row("Hover top consumers, cpu / memory (median)",
     lambda r: " / ".join(f"{r['hover_top_consumers_median_ms'][k]:.2f}" for k in ("cpu", "memory")) + " ms")
 row("App refreshes dropped while one runs", lambda r: f"{r['main_thread_during_cold_scan']['overlapping_refreshes_dropped_of_10']} of 10")

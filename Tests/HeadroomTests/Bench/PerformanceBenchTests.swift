@@ -182,6 +182,43 @@ struct PerformanceBenchTests {
         let quit = await Bench.measure { quitting.flush() }
         report["quit_flush_during_cold_scan"] = ["wall_s": quit.wall]
 
+        // 9c. Quit as the app does since #86, 50 ms into a cold scan: `ShutdownCoordinator.begin` asks the ledger to
+        //     stop at its next checkpoint and save on its own queue, and replies once that's done (or after 5 s).
+        //     Main-thread blocking is how long `begin` takes plus how late a 5 ms main-actor heartbeat runs meanwhile.
+        //     Cancellation latency runs from `begin` to the stopped refresh's completion; the save from there to the
+        //     ledger's stop result; total to the reply.
+        @Sendable func ns() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+        let stoppingSupport = try freshSupport("quit-new")
+        let stopping = ledger(stoppingSupport)
+        let marks = Once()
+        stopping.refresh(windowStart: nil, progress: { _ in }, completion: { _, _, _ in marks.set("stopped", ns()) })
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        var quitLate: [Double] = []
+        let quitBeat = Task { @MainActor in
+            while !Task.isCancelled {
+                let t0 = ns()
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                quitLate.append(Double(ns() - t0) / 1e6 - 5)
+            }
+        }
+        let coordinator = ShutdownCoordinator(stop: { done in
+            stopping.requestStop { r in marks.set("saved", ns()); done(r) }
+        })
+        var outcome: ShutdownCoordinator.Outcome?
+        let tBegin = ns()
+        coordinator.begin { outcome = $0; marks.set("reply", ns()) }
+        let beginMs = Double(ns() - tBegin) / 1e6
+        while outcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
+        quitBeat.cancel()
+        func since(_ k: String, _ from: UInt64) -> Double { Double((marks.get(k) ?? from) - from) / 1e9 }
+        let stoppedAt = marks.get("stopped") ?? tBegin
+        report["quit_coordinator_during_cold_scan"] = [
+            "outcome": "\(outcome!)", "begin_ms": beginMs, "heartbeat_late_ms": Bench.stats(quitLate),
+            "cancel_latency_s": since("stopped", tBegin), "save_s": Double((marks.get("saved") ?? stoppedAt) - stoppedAt) / 1e9,
+            "total_to_reply_s": since("reply", tBegin), "cache_bytes": Self.fileSize(stoppingSupport.appendingPathComponent(Ledger.cacheName)),
+            "bytes_scanned_before_stop": await Self.readBytes(stopping),
+        ]
+
         // 10. Main thread and the app-level guard: ProviderServices runs a cold scan while a main-actor heartbeat
         //     ticks every 5 ms; the largest lateness is how long the main thread was held. Ten more refreshes are
         //     requested while it runs; `refreshUsage` drops those (returns nil) instead of queueing them.
