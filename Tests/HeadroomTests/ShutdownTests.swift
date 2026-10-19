@@ -456,6 +456,28 @@ struct ShutdownTests {
         #expect(seen.isEmpty, "30 grown files with marks aren't a first index: \(seen.prefix(2))")
     }
 
+    /// The progress count is over the files left to index (no mark yet), at 25 or more of them; with fewer left,
+    /// none is shown (review of #90).
+    @Test func progressCountsOnlyFilesLeftToIndex() async throws {
+        let rig = try Rig()
+        try rig.writeDataset(files: 40, messages: 400, bigFile: 0, grokSessions: 0)
+        func messages(_ l: Ledger) async -> [String] {
+            var seen: [String] = []
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                l.refresh(windowStart: nil, progress: { if let m = $0 { seen.append(m) } }, completion: { _, _, _ in c.resume() })
+            }
+            return seen
+        }
+        for (stopAfter, expected) in [(10, ["Indexing Claude logs 0/30", "Indexing Claude logs 25/30"]), (20, [])] {
+            let s = try rig.support()
+            let l = rig.ledger(s)
+            let box = Self.stopAt(l, stopAfter + 1, where: { $0 == .betweenFiles }) // `stopAfter` files counted
+            _ = await Self.refresh(l)
+            #expect(await box.result() == .saved)
+            #expect(await messages(rig.ledger(s)) == expected, "\(stopAfter) of 40 files counted before the stop")
+        }
+    }
+
     /// Budgets below 1 are clamped, so a checkpoint always comes after at least one counted line.
     @Test func checkpointBudgetsAreClamped() {
         let l = Ledger(home: URL(fileURLWithPath: "/nonexistent"), appSupport: URL(fileURLWithPath: "/nonexistent"),
@@ -616,7 +638,14 @@ struct ShutdownCoordinatorTests {
         let rig = try ShutdownTests.Rig()
         try rig.writeDataset(files: 4, messages: 400, bigFile: 800)
         let s = try rig.support()
-        let l = rig.ledger(s)
+        let gate = DispatchSemaphore(value: 0)
+        var storage = PrivateDirectory(url: s)
+        storage.markExcluded = { file in
+            // Holds the stop's save (on the ledger's dispatch queue) until the test has checked `begin`.
+            if file.lastPathComponent.hasPrefix("." + Ledger.cacheName + ".tmp-") { gate.wait() }
+            try PrivateDirectory.setExcludedFromBackup(file)
+        }
+        let l = rig.ledger(s, storage: storage)
         let scanning = ShutdownTests.Once<Bool>()
         l.checkpointHook = { c in if c == .inFile { scanning.set(true) } }
         l.stopCheckLines = 200
@@ -627,21 +656,23 @@ struct ShutdownCoordinatorTests {
         let beat = Task { @MainActor in
             while !Task.isCancelled {
                 let t0 = DispatchTime.now().uptimeNanoseconds
-                try? await Task.sleep(nanoseconds: 5_000_000)
+                do { try await Task.sleep(nanoseconds: 5_000_000) } catch { break } // a cancelled sleep isn't a beat
                 lateness.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6 - 5)
             }
         }
-        let c = ShutdownCoordinator(stop: { l.requestStop(completion: $0) })
+        // The save is held until after `begin` has returned and been checked: a `begin` that waited for the ledger
+        // (on the main actor) would never return, and the suite's time limit would fail the test (review of #90).
+        let completed = ShutdownTests.Once<Bool>()
+        let c = ShutdownCoordinator(stop: { done in l.requestStop { r in completed.set(true); done(r) } })
         var replies: [ShutdownCoordinator.Outcome] = []
         let t0 = DispatchTime.now().uptimeNanoseconds
         c.begin { replies.append($0) }
         let beginMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
-        // Structural, not a timing bound: `begin` returned before the ledger had even stopped, let alone saved.
-        #expect(replies.isEmpty, "begin returned before the stop completed")
+        #expect(completed.peek == nil && replies.isEmpty, "begin returned while the save was still held")
+        gate.signal()
         while replies.isEmpty { try? await Task.sleep(nanoseconds: 5_000_000) }
         beat.cancel()
         await beat.value
-        if !lateness.isEmpty { lateness.removeLast() } // the last, cancelled sleep
         _ = await refreshed.value
         #expect(replies == [.saved])
         // A loose guard only (a blocking begin would take the whole scan and save here); the benchmark measures it.

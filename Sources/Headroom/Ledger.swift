@@ -1027,15 +1027,17 @@ final class Ledger {
         // without a mark are what's left to index, and the count shows those only. A rescan of files that grew isn't
         // an index; 25 or more new transcripts at once (a restore, a bulk import) are, and show progress too. A file a
         // stop left part-read has a mark, like one that grew, so it isn't counted (no saved state tells them apart).
-        let unmarked = Set(candidates.filter { state.files[$0.id] == nil }.map(\.id))
-        let initial = unmarked.count >= 25 || (state.files.isEmpty && !unmarked.isEmpty)
+        let unmarkedCount = candidates.reduce(0) { $0 + (state.files[$1.id] == nil ? 1 : 0) }
+        let initial = unmarkedCount >= 25 || (state.files.isEmpty && unmarkedCount > 0)
+        // Each file counted once, even if it were listed twice.
+        var toIndex: Set<String> = initial ? Set(candidates.filter { state.files[$0.id] == nil }.map(\.id)) : []
         var indexed = 0
         for (path, id, size, stamp) in candidates {
             // #86: files not reached keep their marks. Pruning is skipped too: the first refresh after a relaunch is
             // always a full scan (`lastFullScan` isn't saved), and it prunes.
             if checkpoint(.betweenFiles) { return }
-            if initial, unmarked.contains(id) {
-                if indexed % 25 == 0 { progress("Indexing Claude logs \(indexed)/\(unmarked.count)") }
+            if initial, toIndex.remove(id) != nil {
+                if indexed % 25 == 0 { progress("Indexing Claude logs \(indexed)/\(unmarkedCount)") }
                 indexed += 1
             }
             readClaudeFile(path, id: id, size: size, stamp: stamp)

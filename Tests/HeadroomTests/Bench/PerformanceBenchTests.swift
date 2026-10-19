@@ -197,7 +197,8 @@ struct PerformanceBenchTests {
         let quitBeat = Task { @MainActor in
             while !Task.isCancelled {
                 let t0 = ns()
-                try? await Task.sleep(nanoseconds: 5_000_000)
+                // A cancelled sleep ends the series: it isn't a beat (review of #90).
+                do { try await Task.sleep(nanoseconds: 5_000_000) } catch { break }
                 quitLate.append(Double(ns() - t0) / 1e6 - 5)
             }
         }
@@ -210,8 +211,7 @@ struct PerformanceBenchTests {
         let beginMs = Double(ns() - tBegin) / 1e6
         while outcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         quitBeat.cancel()
-        await quitBeat.value // its last, cancelled sleep is dropped below, and nothing appends after this
-        if !quitLate.isEmpty { quitLate.removeLast() }
+        await quitBeat.value // nothing appends after this
         // A mark that never came is reported as missing (null), never as 0 s, and the difference is signed, so a mark
         // earlier than its start can't trap (review of #90).
         func span(_ from: UInt64?, _ to: UInt64?) -> Any {
@@ -237,7 +237,8 @@ struct PerformanceBenchTests {
         let beat = Task { @MainActor in
             while !Task.isCancelled {
                 let t0 = DispatchTime.now().uptimeNanoseconds
-                try? await Task.sleep(nanoseconds: 5_000_000)
+                // A cancelled sleep ends the series: it isn't a beat (review of #90).
+                do { try await Task.sleep(nanoseconds: 5_000_000) } catch { break }
                 lateness.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6 - 5)
             }
         }
@@ -249,8 +250,7 @@ struct PerformanceBenchTests {
             _ = await first
         }
         beat.cancel()
-        await beat.value // drop the last, cancelled sleep; nothing appends after this
-        if !lateness.isEmpty { lateness.removeLast() }
+        await beat.value // nothing appends after this
         report["main_thread_during_cold_scan"] = ["scan_wall_s": scan.wall, "heartbeat_late_ms": Bench.stats(lateness),
                                                   "overlapping_refreshes_dropped_of_10": dropped]
 
@@ -338,7 +338,8 @@ struct PerformanceBenchTests {
         let fullBeat = Task { @MainActor in
             while !Task.isCancelled {
                 let t0 = ns()
-                try? await Task.sleep(nanoseconds: 5_000_000)
+                // A cancelled sleep ends the series: it isn't a beat (review of #90).
+                do { try await Task.sleep(nanoseconds: 5_000_000) } catch { break }
                 fullLate.append(Double(ns() - t0) / 1e6 - 5)
             }
         }
@@ -350,7 +351,6 @@ struct PerformanceBenchTests {
         while fullOutcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         fullBeat.cancel()
         await fullBeat.value
-        if !fullLate.isEmpty { fullLate.removeLast() }
         report["quit_coordinator_full_cache"] = [
             "outcome": "\(fullOutcome!)", "begin_ms": fullBeginMs, "heartbeat_late_ms": Bench.stats(fullLate),
             "save_s": span(fullBegin, fullMarks.get("saved")), "total_to_reply_s": span(fullBegin, fullMarks.get("reply")),
