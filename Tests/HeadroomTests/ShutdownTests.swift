@@ -373,6 +373,54 @@ struct ShutdownTests {
         #expect(getxattr(cache.path, "com.apple.metadata:com_apple_backup_excludeItem", nil, 0, 0, XATTR_NOFOLLOW) >= 0)
     }
 
+    // MARK: Review of #90
+
+    /// Listing many transcripts has its own checkpoints, so a stop doesn't wait for the whole listing.
+    @Test func stopWhileListingFiles() async throws {
+        let rig = try Rig()
+        try rig.writeDataset(files: 600, messages: 600, bigFile: 0, grokSessions: 0)
+        let s = try rig.support()
+        let l = rig.ledger(s)
+        let box = Self.stopAt(l, 1, where: { $0 == .listing })
+        _ = await Self.refresh(l)
+        let result = await box.result(), read = await Self.bytesRead(l)
+        #expect(result == .nothingToSave && read == 0)
+        await Self.expectSame((await Self.relaunched(rig, s), s), try await Self.baseline(rig), "while listing")
+    }
+
+    /// Long lines reach the in-file checkpoint by size, not only by count (the line count alone is never reached).
+    @Test func longLinesReachTheCheckpointBySize() async throws {
+        let rig = try Rig()
+        try rig.writeDataset(files: 1, messages: 10, bigFile: 300)
+        let s = try rig.support()
+        let l = rig.ledger(s)
+        l.stopCheckLines = .max
+        l.stopCheckBytes = 100_000
+        let box = Self.stopAt(l, 3, where: { $0 == .inFile })
+        _ = await Self.refresh(l)
+        #expect(await box.result() == .saved)
+        await Self.expectSame((await Self.relaunched(rig, s), s), try await Self.baseline(rig), "by size")
+    }
+
+    /// A first index stopped part-way still shows its progress when it resumes: many files are left to read.
+    @Test func resumedFirstIndexShowsProgress() async throws {
+        let rig = try Rig()
+        try rig.writeDataset(files: 60, messages: 600, bigFile: 0, grokSessions: 0)
+        let s = try rig.support()
+        let l = rig.ledger(s)
+        let box = Self.stopAt(l, 4, where: { $0 == .betweenFiles })
+        _ = await Self.refresh(l)
+        #expect(await box.result() == .saved)
+        let resumed = rig.ledger(s)
+        let messages = Once<[String]>()
+        var seen: [String] = []
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            resumed.refresh(windowStart: nil, progress: { if let m = $0 { seen.append(m) } },
+                            completion: { _, _, _ in messages.set(seen); c.resume() })
+        }
+        #expect(!(await messages.get()).isEmpty, "the resumed index reports progress")
+    }
+
     // MARK: 9. Every interruption point, on the accounting fixtures
 
     /// For every F-fixture, the files after its first step and after all its steps: stopping at **every** checkpoint
@@ -499,18 +547,23 @@ struct ShutdownCoordinatorTests {
         #expect(replies == [.timedOut] && Date().timeIntervalSince(t0) >= 0.2)
     }
 
-    /// 8. Asking again while a quit is under way starts nothing new and replies once.
+    /// 8. Asking again while a quit is under way starts nothing new, and every request gets the one outcome. After
+    /// the outcome, a new request is answered at once (review of #90: a dropped reply would hang the quit).
     @Test func repeatedBeginStartsOnce() async {
         let fake = FakeStop(), timers = ManualTimers()
         let c = ShutdownCoordinator(stop: fake.stop, after: timers.after)
-        var replies: [ShutdownCoordinator.Outcome] = []
-        #expect(c.begin { replies.append($0) })
-        #expect(!c.begin { replies.append($0) })
+        var first: [ShutdownCoordinator.Outcome] = [], second: [ShutdownCoordinator.Outcome] = []
+        #expect(c.begin { first.append($0) })
+        #expect(!c.begin { second.append($0) })
         #expect(fake.calls == 1 && timers.scheduled.count == 1)
         fake.complete(.saved)
         fake.complete(.failed) // a racing second completion
         await Self.settle()
-        #expect(replies == [.saved])
+        #expect(first == [.saved] && second == [.saved])
+        var late: [ShutdownCoordinator.Outcome] = []
+        #expect(!c.begin { late.append($0) })
+        #expect(late == [.saved], "a request after the outcome is answered at once")
+        #expect(fake.calls == 1 && timers.scheduled.count == 1)
     }
 
     /// With the real ledger: the main actor stays responsive while the ledger stops a scan and saves, and the
@@ -549,5 +602,24 @@ struct ShutdownCoordinatorTests {
         #expect((lateness.max() ?? 0) < 200, "main actor late by up to \(lateness.max() ?? 0) ms")
         await ShutdownTests.expectSame((await ShutdownTests.relaunched(rig, s), s), try await ShutdownTests.baseline(rig),
                                        "coordinator stop")
+    }
+}
+
+/// Review of #90: a refresh that ends because the ledger is stopping publishes nothing. An empty summary would show
+/// zero tokens as if measured (missing is not zero).
+@MainActor @Suite(.serialized)
+struct ShutdownPublishTests {
+    @Test func stoppedRefreshPublishesNothing() async throws {
+        let box = try Sandbox()
+        try BenchDataset(name: "t", files: 2, messages: 40, bigFile: 0, grokSessions: 1, grokTurns: 5)
+            .write(home: box.home, now: Date())
+        let services = ProviderServices(store: Store(), env: box.environment(transport: FakeTransport()))
+        _ = await services.refreshUsage(windowStart: nil)
+        let before = try #require(services.store.claudeUsage).month.tokens
+        #expect(before > 0)
+        let updated = services.store.usageUpdated
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in services.ledger.requestStop { _ in c.resume() } }
+        #expect(await services.refreshUsage(windowStart: nil) == nil)
+        #expect(services.store.claudeUsage?.month.tokens == before && services.store.usageUpdated == updated)
     }
 }
