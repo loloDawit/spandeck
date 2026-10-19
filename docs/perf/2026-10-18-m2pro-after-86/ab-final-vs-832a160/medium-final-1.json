@@ -1,0 +1,379 @@
+{
+  "ab": {
+    "build": "swift test -c release -Xswiftc -enable-testing -Xswiftc -DDEBUG",
+    "commit": "e8d6ec4e75550c4840238a5f77444014c99ef515",
+    "dirty_source_files": 0,
+    "load_after": "{ 3.31 3.12 3.46 }",
+    "load_before": "{ 2.96 3.04 3.45 }",
+    "status": "ok"
+  },
+  "cache_bytes": 13073469,
+  "cache_save": {
+    "cpu_s": {
+      "max": 0.315528000000004,
+      "median": 0.2921630000000004,
+      "min": 0.27489399999999975,
+      "n": 10,
+      "p95": 0.315528000000004
+    },
+    "disk_read_bytes": {
+      "max": 28672,
+      "median": 24576,
+      "min": 20480,
+      "n": 10,
+      "p95": 28672
+    },
+    "disk_written_bytes": {
+      "max": 13234176,
+      "median": 13215744,
+      "min": 13197312,
+      "n": 10,
+      "p95": 13234176
+    },
+    "wall_s": {
+      "max": 0.322436625,
+      "median": 0.2986537495,
+      "min": 0.281036084,
+      "n": 10,
+      "p95": 0.322436625
+    }
+  },
+  "cold_first_scan": {
+    "bytes_scanned": 152520784,
+    "cpu_s": {
+      "max": 4.237655999999999,
+      "median": 4.232963,
+      "min": 4.211583999999999,
+      "n": 3,
+      "p95": 4.237655999999999
+    },
+    "disk_read_bytes": {
+      "max": 77824,
+      "median": 12288,
+      "min": 8192,
+      "n": 3,
+      "p95": 77824
+    },
+    "disk_written_bytes": {
+      "max": 13078528,
+      "median": 13078528,
+      "min": 13078528,
+      "n": 3,
+      "p95": 13078528
+    },
+    "first_run_wall_s": 4.258294542,
+    "month_tokens": 24600000,
+    "wall_s": {
+      "max": 4.258294542,
+      "median": 4.244534667,
+      "min": 4.223579917,
+      "n": 3,
+      "p95": 4.258294542
+    }
+  },
+  "dataset": "medium",
+  "footprint_after_cold_bytes": 171230000,
+  "full_scan_no_change": {
+    "cpu_s": {
+      "max": 0.002453000000002703,
+      "median": 0.0020574999999993793,
+      "min": 0.0019929999999952486,
+      "n": 10,
+      "p95": 0.002453000000002703
+    },
+    "disk_read_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 10,
+      "p95": 0
+    },
+    "disk_written_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 10,
+      "p95": 0
+    },
+    "wall_s": {
+      "max": 0.002432292,
+      "median": 0.0020597915,
+      "min": 0.001995875,
+      "n": 10,
+      "p95": 0.002432292
+    }
+  },
+  "hover_top_consumers_median_ms": {
+    "cpu": 0.837771,
+    "memory": 1.064646
+  },
+  "ledger_burst_10": {
+    "cpu_s": 0.05035600000000784,
+    "wall_s": 0.052875875
+  },
+  "main_thread_during_cold_scan": {
+    "heartbeat_late_ms": {
+      "max": 1.3498340000000004,
+      "median": 1.2965,
+      "min": 0.046499999999999986,
+      "n": 709,
+      "p95": 1.3103749999999996
+    },
+    "overlapping_refreshes_dropped_of_10": 10,
+    "scan_wall_s": 4.396946625
+  },
+  "memory_bytes": {
+    "footprint_at_start": 6554176,
+    "footprint_end": 290817128,
+    "footprint_peak": 290817128,
+    "max_rss": 350715904
+  },
+  "quit_coordinator_during_cold_scan": {
+    "begin_ms": 0.050209,
+    "bytes_scanned_before_stop": 3051300,
+    "cache_bytes": 261949,
+    "cancel_latency_s": 0.026609542,
+    "heartbeat_late_ms": {
+      "max": 1.0538749999999997,
+      "median": 1.0527920000000002,
+      "min": 1.045375,
+      "n": 5,
+      "p95": 1.0538749999999997
+    },
+    "outcome": "saved",
+    "save_s": 0.00640825,
+    "scan_ended_before_quit": false,
+    "total_to_reply_s": 0.033031417
+  },
+  "quit_coordinator_full_cache": {
+    "begin_ms": 0.027875,
+    "cache_bytes": 13271150,
+    "heartbeat_late_ms": {
+      "max": 1.0852079999999997,
+      "median": 1.0469999999999997,
+      "min": 0.20095799999999997,
+      "n": 55,
+      "p95": 1.0781660000000004
+    },
+    "outcome": "saved",
+    "save_s": 0.329449833,
+    "total_to_reply_s": 0.329472667
+  },
+  "quit_flush_during_cold_scan": {
+    "wall_s": 4.254941292
+  },
+  "rebuild_after_clear": {
+    "cpu_s": {
+      "max": 4.326596000000002,
+      "median": 4.262437999999996,
+      "min": 4.241233000000001,
+      "n": 3,
+      "p95": 4.326596000000002
+    },
+    "disk_read_bytes": {
+      "max": 148512768,
+      "median": 0,
+      "min": 0,
+      "n": 3,
+      "p95": 148512768
+    },
+    "disk_written_bytes": {
+      "max": 13271040,
+      "median": 13271040,
+      "min": 13271040,
+      "n": 3,
+      "p95": 13271040
+    },
+    "wall_s": {
+      "max": 4.74784775,
+      "median": 4.273819292,
+      "min": 4.252017417,
+      "n": 3,
+      "p95": 4.74784775
+    }
+  },
+  "render_ms": {
+    "menu_bar_strip": {
+      "max": 44.642416,
+      "median": 0.0080835,
+      "min": 0.00725,
+      "n": 200,
+      "p95": 0.011625
+    },
+    "popover_full_render": {
+      "max": 93.169875,
+      "median": 25.5300205,
+      "min": 24.396334,
+      "n": 20,
+      "p95": 29.151833
+    }
+  },
+  "sampler_median_ms": {
+    "battery": 0.644521,
+    "cpu": 0.0062705,
+    "gpu": 0.0216045,
+    "memory": 0.003167
+  },
+  "shape": {
+    "bytes": 152732004,
+    "generate_s": 0.26406002044677734,
+    "grok_sessions": 20,
+    "grok_turns": 1000,
+    "lines": 120000,
+    "messages": 30000,
+    "transcripts": 100
+  },
+  "summary_recompute": {
+    "cpu_s": {
+      "max": 0.038370999999997935,
+      "median": 0.036293999999999826,
+      "min": 0.03536899999999932,
+      "n": 10,
+      "p95": 0.038370999999997935
+    },
+    "disk_read_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 10,
+      "p95": 0
+    },
+    "disk_written_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 10,
+      "p95": 0
+    },
+    "wall_s": {
+      "max": 0.038631,
+      "median": 0.036310291499999994,
+      "min": 0.035360583,
+      "n": 10,
+      "p95": 0.038631
+    }
+  },
+  "tick_incremental_10_messages": {
+    "cpu_s": {
+      "max": 0.044332000000000704,
+      "median": 0.037717499999999404,
+      "min": 0.036517999999997386,
+      "n": 30,
+      "p95": 0.0412809999999979
+    },
+    "disk_read_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "disk_written_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "first_change_after_start_wall_s": 0.331374959,
+    "first_change_after_start_written_bytes": 13078528,
+    "samples_with_a_save": 0,
+    "wall_s": {
+      "max": 0.046719708,
+      "median": 0.0377516665,
+      "min": 0.036518833,
+      "n": 30,
+      "p95": 0.041531958
+    }
+  },
+  "tick_no_change": {
+    "cpu_s": {
+      "max": 0.0015730000000004907,
+      "median": 0.0011304999999968146,
+      "min": 0.0010869999999982838,
+      "n": 30,
+      "p95": 0.001273999999998665
+    },
+    "disk_read_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "disk_written_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "wall_s": {
+      "max": 0.001505458,
+      "median": 0.0011023335,
+      "min": 0.0010565,
+      "n": 30,
+      "p95": 0.001258917
+    }
+  },
+  "wake_after_8h": {
+    "cpu_s": {
+      "max": 0.3571729999999995,
+      "median": 0.3410210000000049,
+      "min": 0.32529399999999953,
+      "n": 5,
+      "p95": 0.3571729999999995
+    },
+    "disk_read_bytes": {
+      "max": 643072,
+      "median": 151552,
+      "min": 110592,
+      "n": 5,
+      "p95": 643072
+    },
+    "disk_written_bytes": {
+      "max": 13266944,
+      "median": 13254656,
+      "min": 13238272,
+      "n": 5,
+      "p95": 13266944
+    },
+    "wall_s": {
+      "max": 0.379190292,
+      "median": 0.34924825,
+      "min": 0.335028833,
+      "n": 5,
+      "p95": 0.379190292
+    }
+  },
+  "warm_launch": {
+    "cpu_s": {
+      "max": 0.4665680000000023,
+      "median": 0.4261080000000028,
+      "min": 0.3871389999999977,
+      "n": 5,
+      "p95": 0.4665680000000023
+    },
+    "disk_read_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 5,
+      "p95": 0
+    },
+    "disk_written_bytes": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 5,
+      "p95": 0
+    },
+    "wall_s": {
+      "max": 0.475490417,
+      "median": 0.428745542,
+      "min": 0.387437333,
+      "n": 5,
+      "p95": 0.475490417
+    }
+  }
+}

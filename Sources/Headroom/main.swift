@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private lazy var services = ProviderServices(store: store, env: env)
     private var ledger: Ledger { services.ledger }
     private let keepAwake = KeepAwake()
+    /// Quitting stops the ledger and saves off the main thread (#86). Made at the first quit request.
+    private var shutdown: ShutdownCoordinator?
 
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
@@ -58,8 +60,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    /// #86: the ledger stops at its next checkpoint and saves on its own queue while AppKit keeps the event loop
+    /// running; the quit goes ahead once that's done, or after the timeout. SpanDeck never cancels a quit: a save that
+    /// failed or didn't finish leaves the previous cache, and the next launch reads the rest from the transcripts.
+    /// The stop is for the rest of the process: if the system didn't terminate after the reply (not expected once an
+    /// app agrees), usage would stop updating until a relaunch. Not verified in the real app (owner check on #86).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Asked again after the reply: the ledger is already stopped and saved, so quit at once. Asked again while
+        // the quit is under way: the one pending termination is resolved by the reply already registered, so no
+        // second reply is registered (AppKit pairs one reply with one `.terminateLater`).
+        if let shutdown { return shutdown.outcome == nil ? .terminateLater : .terminateNow }
+        let ledger = ledger
+        let shutdown = ShutdownCoordinator(stop: { done in ledger.requestStop(completion: done) })
+        self.shutdown = shutdown
+        shutdown.begin { outcome in
+            if outcome == .failed || outcome == .timedOut {
+                // No path, id or count: only that the usage cache wasn't saved, so the previous one is kept.
+                NSLog("SpanDeck: usage cache not saved at quit (%@); the previous cache is kept", "\(outcome)")
+            }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        ledger.flush()
+        // The ledger already stopped and saved (or timed out) in `applicationShouldTerminate`; nothing waits here.
         keepAwake.release()
     }
 

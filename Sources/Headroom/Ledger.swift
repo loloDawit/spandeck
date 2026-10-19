@@ -636,6 +636,10 @@ enum LedgerClearFailure: Error, Equatable {
     }
 }
 
+/// What a ledger stop did (#86). `failed`: there was something to save and the save didn't complete; the previous
+/// cache on disk is untouched (it is only replaced by rename(2), after the new one is written and fsync'd).
+enum LedgerStopResult: Equatable, Sendable { case saved, nothingToSave, failed }
+
 /// Incremental token ledger over Claude Code transcripts and Grok session usage files.
 /// Claude: tail-reads ~/.claude/projects/**/*.jsonl by byte offset, dedupes on message id + request id
 /// (same rule as ccusage), and buckets per 15-minute UTC slot and model (#57). State is cached on disk so relaunches
@@ -737,6 +741,47 @@ final class Ledger {
     private var readStats = (bytes: 0, restarts: 0)
     private var lastSummaryKey = ""
     private var cachedSummaries: (UsageSummary, UsageSummary)?
+
+    /// #86: set by `requestStop` from any thread, without waiting for the queue, and read at every checkpoint. Once set
+    /// it stays set: the app is quitting, so no refresh scans or saves again.
+    private let stopLock = NSLock()
+    private var stopRequested = false
+    var isStopping: Bool { stopLock.withLock { stopRequested } }
+    /// Where a scan may stop (#86). At each one every line read so far is fully counted, and no file's mark is past a
+    /// line that wasn't: `readClaudeFile` sets a mark only after its lines are counted, and each line's counting
+    /// (`ingestClaudeLine` → `count`) is done before the next starts. A mark behind what was counted is harmless:
+    /// reading again counts nothing twice (identity dedupe).
+    /// `listing`: while transcripts are listed, every 256 entries, before anything is read.
+    ///
+    /// Not interruptible, so a stop waits for them: decoding the cache at the first refresh (`loadCache`, about 1.6 s
+    /// for the #8 benchmark's large set), one line however long, mapping a file and hashing its anchor (at most 72 KiB),
+    /// the hot-file listing between full scans (`discoverNewFiles`, recently touched folders only), and a save already
+    /// under way.
+    enum Checkpoint: Equatable, Sendable { case beforeScan, listing, betweenFiles, inFile, grok }
+    private var _stopCheckLines = 2048
+    private var _stopCheckBytes = 4 << 20
+    private var _checkpointHook: ((Checkpoint) -> Void)?
+    /// In-file checkpoints come every this many lines, or this many bytes, whichever is first: 2048 lines is about
+    /// 2.5 MB of the #8 benchmark's transcripts, under 0.1 s of scanning on the reference machine, and the byte budget
+    /// bounds a run of very long lines. Tests lower them. Read under `stopLock`, like the hook.
+    /// At least 1, so a checkpoint always comes after a counted line and a stop always makes progress.
+    var stopCheckLines: Int {
+        get { stopLock.withLock { _stopCheckLines } }
+        set { stopLock.withLock { _stopCheckLines = max(1, newValue) } }
+    }
+    var stopCheckBytes: Int {
+        get { stopLock.withLock { _stopCheckBytes } }
+        set { stopLock.withLock { _stopCheckBytes = max(1, newValue) } }
+    }
+    /// Tests only: called on the ledger queue at every checkpoint, before the stop flag is read.
+    var checkpointHook: ((Checkpoint) -> Void)? {
+        get { stopLock.withLock { _checkpointHook } }
+        set { stopLock.withLock { _checkpointHook = newValue } }
+    }
+    /// The three above, read once per refresh on the ledger queue (not per file or per checkpoint).
+    private var scanHook: ((Checkpoint) -> Void)?
+    private var scanLines = 2048
+    private var scanBytes = 4 << 20
     private let storage: PrivateDirectory
     /// Key for the opaque ids. Loaded (or made) before anything is scanned, since ids are computed while indexing.
     private var key = SymmetricKey(size: .bits256)
@@ -829,17 +874,29 @@ final class Ledger {
     func refresh(windowStart: Date?, progress: @escaping (String?) -> Void,
                  completion: @escaping (_ claude: UsageSummary, _ grok: UsageSummary, _ lastActivity: Date) -> Void) {
         queue.async { [self] in
-            if !loaded { loadCache(); loaded = true }
-            let full = now().timeIntervalSince(lastFullScan) >= 300
-            if full {
-                scanClaude(progress: progress)
-                scanGrok()
-                lastFullScan = now()
-            } else {
-                discoverNewFiles()
-                tailHotFiles()
-                scanGrok()
+            // Once stopping (#86), nothing is scanned or saved, but the caller still gets an answer: the last
+            // summaries, or empty ones. They aren't a new measurement, so `ProviderServices` drops them (it checks
+            // `isStopping`); a stopped ledger only exists while the app quits.
+            func stopped() {
+                progress(nil)
+                completion(cachedSummaries?.0 ?? UsageSummary(), cachedSummaries?.1 ?? UsageSummary(), lastActivity)
             }
+            if isStopping { return stopped() }
+            (scanHook, scanLines, scanBytes) = stopLock.withLock { (_checkpointHook, _stopCheckLines, _stopCheckBytes) }
+            if !loaded { loadCache(); loaded = true }
+            if !checkpoint(.beforeScan) {
+                if now().timeIntervalSince(lastFullScan) >= 300 {
+                    scanClaude(progress: progress)
+                    if !isStopping { scanGrok() }
+                    if !isStopping { lastFullScan = now() }
+                } else {
+                    discoverNewFiles()
+                    tailHotFiles()
+                    if !isStopping { scanGrok() }
+                }
+            }
+            // A stopped scan is saved by `requestStop`'s block, which runs next on this queue.
+            if isStopping { return stopped() }
             // Encoding the cache is the most expensive step, so only persist occasionally (and on quit).
             if dirty, lastSave == .distantPast || now().timeIntervalSince(lastSave) > 600 {
                 saveCache()
@@ -862,8 +919,36 @@ final class Ledger {
         }
     }
 
+    #if DEBUG
+    /// Saves now, waiting on the caller's thread for any refresh in flight. Tests and the #8 benchmark only, so it isn't
+    /// in release builds: the app quits with `requestStop`, which never waits (#86), and a main-thread caller of this
+    /// would bring back the quit that held the main thread for a whole scan.
     func flush() {
         queue.sync { if dirty { saveCache() } }
+    }
+    #endif
+
+    /// #86: stops the ledger for quitting, without waiting. The stop flag is set at once, so a scan in flight stops at
+    /// its next checkpoint (`Checkpoint`), and later refreshes don't scan or save. Then, on the ledger queue after
+    /// whatever is running there, what was counted is saved; `completion` is called there with the result. A failed
+    /// save is reported as failed, never as saved, and asking again tries again. Safe to call more than once and
+    /// from any thread.
+    func requestStop(completion: @escaping @Sendable (LedgerStopResult) -> Void) {
+        stopLock.withLock { stopRequested = true }
+        // The quit waits on this (under a timeout), so it isn't left at the queue's utility priority; enforcing the
+        // QoS also raises the block already running ahead of it.
+        queue.async(qos: .userInitiated, flags: .enforceQoS) { [self] in
+            guard loaded, dirty else { return completion(.nothingToSave) }
+            saveCache()
+            completion(dirty ? .failed : .saved)
+        }
+    }
+
+    /// Whether to stop here (#86). On the ledger queue only.
+    private func checkpoint(_ c: Checkpoint) -> Bool {
+        // The hook was read when the refresh began; it's called outside the lock, since it may call `requestStop`.
+        scanHook?(c)
+        return isStopping
     }
 
     /// Deletes the usage cache and its key (R8), on the ledger queue so it can't interleave with a refresh or a save.
@@ -918,9 +1003,14 @@ final class Ledger {
         var hot = Set<String>()
         let hotCutoff = now().addingTimeInterval(-2 * 3600)
 
+        var listed = 0
         for root in claudeRoots {
             guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { continue }
-            for case let url as URL in en where url.pathExtension == "jsonl" {
+            for case let url as URL in en {
+                // #86: listing thousands of transcripts takes a while; nothing has been read or changed yet.
+                listed += 1
+                if listed % 256 == 0, checkpoint(.listing) { return }
+                guard url.pathExtension == "jsonl" else { continue }
                 guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true,
                       let mtime = v.contentModificationDate, mtime >= cutoff else { continue }
                 let path = url.path
@@ -933,11 +1023,29 @@ final class Ledger {
         }
 
         hotFiles = hot
-        let initial = state.files.isEmpty
-        for (i, (path, id, size, stamp)) in candidates.enumerated() {
-            if initial, i % 25 == 0 { progress("Indexing Claude logs \(i)/\(candidates.count)") }
+        // Progress for a first index, and for one resumed after a quit (#86), when some marks exist already: files
+        // without a mark are what's left to index, and the count shows those only. A rescan of files that grew isn't
+        // an index; 25 or more new transcripts at once (a restore, a bulk import) are, and show progress too. A file a
+        // stop left part-read has a mark, like one that grew, so it isn't counted (no saved state tells them apart).
+        let listedUnmarked = candidates.reduce(0) { $0 + (state.files[$1.id] == nil ? 1 : 0) }
+        // The set (each file once, even if it were listed twice) is only built when progress may show.
+        var toIndex: Set<String> = listedUnmarked >= 25 || (state.files.isEmpty && listedUnmarked > 0)
+            ? Set(candidates.filter { state.files[$0.id] == nil }.map(\.id)) : []
+        let unmarkedCount = toIndex.count
+        let initial = unmarkedCount >= 25 || (state.files.isEmpty && unmarkedCount > 0)
+        if !initial { toIndex = [] }
+        var indexed = 0
+        for (path, id, size, stamp) in candidates {
+            // #86: files not reached keep their marks. Pruning is skipped too: the first refresh after a relaunch is
+            // always a full scan (`lastFullScan` isn't saved), and it prunes.
+            if checkpoint(.betweenFiles) { return }
+            if initial, toIndex.remove(id) != nil {
+                if indexed % 25 == 0 { progress("Indexing Claude logs \(indexed)/\(unmarkedCount)") }
+                indexed += 1
+            }
             readClaudeFile(path, id: id, size: size, stamp: stamp)
         }
+        if isStopping { return } // stopped inside the last file
 
         // Forget files that aged out or were removed, and prune old buckets and dedupe keys.
         let stale = state.files.keys.filter { !present.contains($0) }
@@ -992,6 +1100,7 @@ final class Ledger {
     private func tailHotFiles() {
         let keys: Set<URLResourceKey> = [.contentModificationDateKey, .attributeModificationDateKey, .fileSizeKey]
         for path in hotFiles {
+            if checkpoint(.betweenFiles) { return } // #86
             let id = fileID(path)
             guard let v = try? URL(fileURLWithPath: path).resourceValues(forKeys: keys), let n = v.fileSize
             else { setPending(id, false); continue }
@@ -1073,8 +1182,19 @@ final class Ledger {
     private func ingestLines(_ raw: UnsafeRawBufferPointer, from offset: Int) -> Int {
         guard let base = raw.baseAddress else { return offset }
         let n = raw.count
-        var start = offset
+        var start = offset, lines = 0, checked = offset
+        let maxLines = scanLines, maxBytes = scanBytes
         while start < n, let nl = memchr(base + start, 0x0A, n - start) {
+            // #86: every `stopCheckLines` lines or `stopCheckBytes` bytes, a checkpoint. Every line before `start` is
+            // fully counted, so the mark set from the returned offset resumes exactly there; the stamp and size are
+            // unchanged, so the next read resumes from it through the anchor, like a file whose last line was
+            // incomplete.
+            if lines >= maxLines || start - checked >= maxBytes {
+                lines = 0
+                checked = start
+                if checkpoint(.inFile) { return start }
+            }
+            lines += 1
             let end = base.distance(to: UnsafeRawPointer(nl))
             if end > start, Self.hasUsageKey(UnsafeRawBufferPointer(start: base + start, count: end - start)) {
                 autoreleasepool {
@@ -1459,6 +1579,9 @@ final class Ledger {
             let dir = root.appendingPathComponent(p)
             guard let sessions = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { continue }
             for s in sessions {
+                // #86: Grok turns aren't saved; the next launch reads them all again. Returning here also keeps
+                // `grokFiles` from being cut down to the files seen so far.
+                if checkpoint(.grok) { return }
                 let url = dir.appendingPathComponent(s).appendingPathComponent("usage.json")
                 guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { continue }
                 present.insert(url.path)

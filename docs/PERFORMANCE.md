@@ -198,6 +198,91 @@ One ledger per process (memory runs):
   - An open popover redraws on each store change (every 1 s sample). A full render is an upper bound for one update.
 - **Hover:** the top-consumer list takes about 0.9 ms per refresh (1.6 ms under the large set's load).
 
+### 4.5 After #86: non-blocking quit
+
+**Run:**
+- `run86e`, on the reference machine (Apple M2 Pro, `Mac14,10`, 12 cores, 16 GB, macOS 26.5 `25F71`, Swift 6.3.3, Xcode 26.6), at commit `832a160` with no local changes.
+- Raw results: [`perf/2026-10-18-m2pro-after-86/`](perf/2026-10-18-m2pro-after-86/), whose README gives the provenance. All 12 benchmark processes passed.
+- Load average 3.7–10.6, given per dataset in the JSON. Small ran first, under the most load.
+
+**Which numbers are which:**
+- Every figure below was **measured** by the benchmark.
+- **Simulated:** none of these scenarios is simulated. Simulated wake (§2) is a separate scenario.
+- **Not measured:** AppKit's own termination after the reply, and logout or restart (§3).
+- The quit runs through `ShutdownCoordinator` and `Ledger.requestStop`, the app's path since #86. The coordinator's 5 s timer was armed in every run, and none fired.
+
+**Main thread and quit time.** 9c quits 50 ms into a cold scan. 9d quits with every operation held and unsaved changes, the longest save a quit can wait for.
+
+| Quit | small | medium | large |
+|---|---|---|---|
+| **Before #86** (9b, `flush` → `queue.sync`), 50 ms into a cold scan: main thread blocked | 0.42 s | 4.3 s | **18.0 s** |
+| **9c**, 50 ms into a cold scan: `begin` on main | 0.074 ms | 0.047 ms | 0.047 ms |
+| … heartbeat late, worst (n beats) | 1.05 ms (4) | 1.06 ms (5) | 1.07 ms (8) |
+| … cancellation latency (the scan was still running when the quit began: checked) | 17 ms | 24 ms | 42 ms |
+| … save / total to the reply | 6 / 23 ms | 6 / 30 ms | 7 / 48 ms |
+| **9d**, with the whole cache to save: `begin` on main | 0.043 ms | 0.033 ms | 0.038 ms |
+| … heartbeat late, worst (n beats) | 1.15 ms (7) | 1.07 ms (57) | 1.13 ms (233) |
+| … save = total to the reply (cache size) | 42 ms (1.4 MB) | 0.34 s (13 MB) | **1.39 s** (48 MB) |
+| Outcome, every quit | saved | saved | saved |
+
+Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit.
+- At `832a160` the last sample, the sleep that the end of the quit cancels, was still included; later commits drop it.
+- A cancelled sleep is always shorter than a full one, so it can lower the minimum but never raise the worst.
+- 9c's quits last only 23–48 ms, so they hold 4–8 beats.
+- 9d's large quit holds 233, and is the stronger evidence for the main actor staying responsive.
+- `begin` is the synchronous call from `applicationShouldTerminate`. The hop that delivers the reply, AppKit's own run loop while it waits, and the termination itself aren't in these figures.
+
+- **B3 passes.** The main thread is held at most 0.074 ms, against the 1 s budget, and in these quits the main actor was never late by more than 1.15 ms.
+- **Total quit time** while AppKit keeps the event loop running was 1.39 s on large with the full 48 MB to save (9d, measured).
+  - **The worst case is analysed, not measured.** A quit can also wait for work that has no checkpoint: decoding the cache at the first refresh (about 1.6 s on large, the warm-start figure), a save already under way, or one very long line.
+  - The stop's own save then follows only if something is still unsaved. A quit during a periodic save finds it saved, so it doesn't save twice.
+  - The worst case on large is therefore about one decode plus one save, about 3 s, still under the 5 s timeout on this machine. A slower disk or a larger cache could reach the timeout. The previous cache then stays valid, and what wasn't saved is read again at the next launch.
+- **Before #86** the main thread was blocked for the rest of the scan: 18.0 s on large.
+
+**Scan throughput and accounting cost.**
+- **Primary evidence: an order-balanced A/B of the final code against pre-#86 `main`** (`ab-abba-final-vs-main/`, `scripts/bench-ab.py <dir> main final`).
+  - The PR's final code (`7bec306`) and `main` (`587f1c3`) ran in ABBA order per dataset (final, main, main, final), so neither side always runs first.
+  - Each file carries an `ab` block: commit, local changes (none), load, status.
+  - **Every scenario on small and medium was within −6.3 % to +4.0 %**. Both ends are ticks of about a millisecond or less: medium's no-change tick (1.1–1.2 ms) and small's full scan with nothing new (0.5 ms). Without those two, the range is −3.9 % to +1.7 %.
+  - **First-scan throughput:** 37.6 → 37.3 MB/s (small) and 38.6 → 38.3 MB/s (medium).
+  - **Load:** round 1 of both datasets, and round 2 of small, ran at a load average of 2.5–4.9.
+    - Round 2 of medium ran under a load from other work that peaked at 14.9: `main` ended there, and `final` started at 14.9 and ended at 7.9. The figures are in each file's `ab` block.
+    - **Round 1 alone** (2.6–4.9), a weaker check since `final` runs first in every round 1, points the same way. Medium is within −3.8 % to +1.6 % apart from its 1–2 ms ticks, which swing ±10–12 %. Small is within −3.2 % to +4.0 % apart from the 0.5 ms full-scan tick. Throughput is 37.5 → 37.0 MB/s (small) and 38.5 → 38.9 MB/s (medium).
+- **Earlier A/Bs (supporting).** They ran the candidate side first in every round, so any order effect fell on one side.
+- **Interleaved A/B** (`ab-vs-main/`, reproduce with `scripts/bench-ab.py <dir> main new`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Commits, order and each run's load are in its `provenance.json`, written from the run log afterwards. Each side's CPU median is averaged over its two rounds. **Two rounds per side** can show no change to within a few per cent; they can't resolve smaller differences.
+  - **Within ±4.4 %:** every scenario on small and medium (cold start, rebuild, warm start, save, both ticks, summary and simulated wake), except one.
+  - **The exception:** medium's 5-minute full scan with nothing new, −40.5 %. It is a 2–5 ms figure whose `main` side alone varied from 2.2 to 4.9 ms between rounds: noise.
+  - **First-scan throughput:** 36.8 → 37.2 MB/s (small) and 36.6 → 37.3 MB/s (medium). The script computes it as the bytes scanned divided by the cold-start CPU minus the first save's CPU, in 10⁶ bytes, the mean over rounds.
+- **The review fixes alone** (`ab-vs-121aebd/`, small, `scripts/bench-ab.py <dir> old new`): every scenario −7.2 % to +1.7 %, and the negative end is faster (the no-change tick and simulated wake). Throughput 36.7 → 37.2 MB/s.
+- **The final head against the benchmarked commit** (`ab-final-vs-832a160/`, `scripts/bench-ab.py <dir> base final`).
+  - `e8d6ec4` and `832a160` alternated, two rounds each, at a load average of 3.0–3.5. Each file carries an `ab` block: commit, whether `Sources`/`Tests` had local changes (none), load, status.
+  - The later commits changed the scan loop's progress counting (one set and one lookup per file) and moved `flush` behind `DEBUG`.
+  - Every scenario was within −4.6 % to +8.0 %. The +8.0 % is the 0.44 ms no-change tick on small; medium's simulated wake was +6.2 %.
+  - Throughput 37.0 → 37.8 MB/s (small) and 38.8 → 38.3 MB/s (medium).
+- **Against run 4** (a different time and load), run86e's large set is 4.9–12.8 % *faster* in CPU, 37.2 against 33.7 MB/s, and medium within ±10 %.
+  - **Small was slower in run86e:** cold start +13.4 %, warm start +10.7 %, rebuild +5.1 %, 5-minute full scan +17.9 %, no-change tick +30.7 % (a 0.5 ms figure), and throughput 38.8 → 33.7 MB/s.
+  - A recheck at a load of 5.6 (`recheck-small/`) gave cold start +12.8 %. Both ran under more load than run 4: 8.4–10.6 and 5.6.
+  - The A/Bs, which pair each side with the other under nearly the same load (except medium's loaded round 2 above), found no such slowdown: the order-balanced one within ±4 % on small; the earlier ones within ±4.4 % of `main`, except one noisy 2–5 ms tick, and within ±8 % between the final head and `832a160`. With two rounds each, they rule out a change of this size, not a few per cent.
+  - Large has no A/B. Its comparison is across runs only.
+
+**Timeout and failure behaviour** are verified by tests, not by this benchmark:
+- `ShutdownCoordinatorTests`:
+  - the 5 s timeout replies `timedOut`, and a late result changes nothing;
+  - with a 0.2 s timer, the real timer fires;
+  - one request gets one reply; a request after the outcome is answered at once.
+- `ShutdownTests`:
+  - a failed save reports `failed`, keeps the previous cache byte for byte, and leaves no temporary file;
+  - a save under way when the quit arrives is waited for on the ledger queue, never on the caller;
+  - relaunch matches an uninterrupted scan at every interruption point.
+
+**Checkpoint limits** (also in `Ledger.Checkpoint`): a stop can't interrupt the cache decode at the first refresh, one line however long, mapping a file and hashing its anchor (at most 72 KiB), the hot-file listing between full scans, or a save already under way. The 17–42 ms cancellation latency above is for the synthetic dataset, which has no very long lines.
+
+**Not measured:** AppKit's own termination after the reply, logout or restart, and quitting from the real app. Those need the owner's run in a test account (§3).
+- **Recommended before merging, as the owner's B3 check in the real app:** both the 5 s timer and the hop that delivers the ledger's result run on the main dispatch queue.
+- GCD services that queue in the run loop's common modes, which include the modal-panel mode AppKit uses while it waits on `.terminateLater`. That is documented behaviour, not observed here.
+- The stop is for the rest of the process. If the system didn't terminate after the reply (not expected once an app agrees), usage would stop updating until a relaunch.
+- The app registers one reply per termination and relies on AppKit pairing it with the one pending `.terminateLater`.
+
 ## 5. Budgets
 
 ### 5.1 Owner decisions (2026-10-18)
@@ -219,7 +304,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 |---|---|---|---|---|
 | B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.17 % | met | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
 | B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only) | met for scans; **post-refresh publish not measured** (#88) | one 60 Hz frame. The first popover render is a UI action under B11 |
-| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s | **fails**: accepted priority failure (#86) | a quit that takes seconds looks hung |
+| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.074 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, pending merge) | a quit that takes seconds looks hung |
 | B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
 | B5 | Tick with new data, **excluding cache saves**: p95 ≤ **100 ms** | 59.6 ms; no timed sample saved (checked) | met | runs every 10 s during active use. Saves are B6; the first change after a start (1.67 s, it saves) is reported apart |
 | B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.30 / 1.4 s | met | it blocks the ledger queue: ticks wait behind it |
@@ -231,10 +316,9 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 
 ## 6. Bottlenecks, ranked
 
-1. **Quit waits for an in-flight scan (B3: accepted priority failure, #86).**
-   - The main thread is held for the rest of the scan: up to 19.7 s on large.
-   - It is worst on a first launch, after a clear, and after a version bump, which is exactly when a user is likely to quit an app that looks busy.
-   - [code] `main.swift` `applicationWillTerminate` → `Ledger.flush()` → `queue.sync`.
+1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, pending merge).**
+   - The main thread was held for the rest of the scan: up to 19.7 s on large.
+   - Now the scan stops at a checkpoint and saves on the ledger queue while AppKit waits. The main thread is held ≤ 0.074 ms, and quitting takes at most 1.39 s on large (§4.5).
 2. **Memory per message, and its warm-start variance (B9, #87).**
    - 279 MB resident after a cold scan on large, and 377–545 MB after a warm start.
    - The cause isn't located yet.
@@ -268,7 +352,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 - **Sleep and wake are simulated:** the clock moves 8 h and the three newest files grow. The machine doesn't sleep, and no `didWakeNotification` fires.
   - The work the wake handler starts is a full scan, a summary and, with new data after more than 10 minutes, a cache save: 0.35 s (medium) and 1.4 s (large), most of it the save.
   - The OS transition and network recovery aren't measured.
-- **Cancellation:**
-  - Ledger scans can't be cancelled.
-  - `ProviderServices` drops overlapping usage refreshes, and drops results that arrive after a consent change (existing tests).
-  - The quit path is the one place a long scan reaches the main thread (§6.1, #86).
+- **Cancellation (since #86):**
+  - A scan stops at checkpoints: before the scan, every 256 listed entries, between files, every 2048 lines or 4 MB inside a file, and between Grok files.
+  - Only quitting requests a stop. A stopped ledger never scans again, and its refreshes publish nothing.
+  - `ProviderServices` still drops overlapping usage refreshes, and results that arrive after a consent change.

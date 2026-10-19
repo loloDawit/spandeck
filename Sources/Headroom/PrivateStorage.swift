@@ -98,6 +98,11 @@ struct PrivateDirectory {
         defer { if !moved { unlink(temp) } }
         var failure: StorageFailure?
         if fchmod(fd, 0o600) != 0 { failure = .permissions }
+        // Marked while still empty, before any data is written (review of #90): a process that exits mid-write (a quit
+        // that times out, #86) leaves no unmarked temporary file holding data. If it can't be marked, nothing is written.
+        if failure == nil, excludedFromBackup {
+            do { try markExcluded(URL(fileURLWithPath: temp)) } catch { failure = .backupExclusion }
+        }
         if failure == nil {
             failure = data.withUnsafeBytes { buf -> StorageFailure? in
                 var offset = 0
@@ -114,9 +119,6 @@ struct PrivateDirectory {
         }
         if failure == nil, fsync(fd) != 0 { failure = .io(errno) }
         close(fd)
-        if failure == nil, excludedFromBackup {
-            do { try markExcluded(URL(fileURLWithPath: temp)) } catch { failure = .backupExclusion }
-        }
         if let failure { throw failure }
         guard rename(temp, url.appendingPathComponent(name).path) == 0 else { throw StorageFailure.io(errno) }
         moved = true

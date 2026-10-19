@@ -220,6 +220,23 @@ struct BackupExclusionTests {
         }
     }
 
+    /// A new file's temporary file is marked before any of its data is written (review of #90): a process that exits
+    /// mid-write, as a quit that times out may (#86), leaves no unmarked temporary file holding cache data.
+    @Test func temporaryFileIsMarkedBeforeItsData() throws {
+        let box = try Sandbox()
+        let sizes = Marker()
+        var d = PrivateDirectory(url: box.appSupport)
+        var seen: [Int] = []
+        d.markExcluded = { file in
+            seen.append(((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.intValue ?? -1)
+            try PrivateDirectory.setExcludedFromBackup(file)
+        }
+        _ = sizes
+        try d.write(Data(repeating: 7, count: 4096), to: "probe.json", excludedFromBackup: true)
+        #expect(seen == [0], "marked while still empty: \(seen)")
+        #expect(try Data(contentsOf: box.appSupport.appendingPathComponent("probe.json")).count == 4096)
+    }
+
     /// A new cache or key is marked as a temporary file, before rename(2) puts it in place; the final name is only
     /// marked when it already existed at load.
     @Test func newFilesAreMarkedBeforeTheyAreInPlace() async throws {

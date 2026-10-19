@@ -1,0 +1,36 @@
+{
+  "build": "swift test -c release -Xswiftc -enable-testing -Xswiftc -DDEBUG",
+  "machine": "see ../env.json",
+  "note": "recorded after the run from its console log; load is the 1/5/15-minute average when each process ended",
+  "sides": {
+    "old": "121aebd (before the review fixes)",
+    "new": "832a160"
+  },
+  "order": "new-1, old-1, new-2, old-2",
+  "runs": [
+    {
+      "dataset": "small",
+      "side": "new",
+      "round": 1,
+      "load_after": "{ 4.98 5.06 6.20 }"
+    },
+    {
+      "dataset": "small",
+      "side": "old",
+      "round": 1,
+      "load_after": "{ 4.69 4.99 6.16 }"
+    },
+    {
+      "dataset": "small",
+      "side": "new",
+      "round": 2,
+      "load_after": "{ 4.95 5.04 6.17 }"
+    },
+    {
+      "dataset": "small",
+      "side": "old",
+      "round": 2,
+      "load_after": "{ 4.96 5.04 6.15 }"
+    }
+  ]
+}

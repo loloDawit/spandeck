@@ -187,7 +187,8 @@ final class ProviderServices {
                 c.resume(returning: (claude, grok, activity, ledger.cacheIssue))
             })
         }
-        guard generation == usageGeneration else { return nil }
+        // A refresh ended by a stop (#86) is dropped: its summary isn't a measurement.
+        guard generation == usageGeneration, !ledger.isStopping else { return nil }
         store.claudeUsage = claude
         store.grokUsage = grok
         store.usageUpdated = Date()

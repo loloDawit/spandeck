@@ -97,6 +97,12 @@ What it doesn't protect against:
 - Unread lines stay counted when their transcript is deleted or rewritten without them, like usage already counted: the totals still lack them. A cleared cache only reports what is still on disk.
 - A transcript that disappears is dropped from `files`.
 - The cache is saved at most every 10 minutes, and again on quit.
+- **Quitting during a scan (#86):**
+  - The scan stops at a checkpoint where every line read so far is fully counted: between files, or between lines inside a file. What was counted is then saved on the ledger's queue while macOS waits; the main thread isn't held.
+  - A file stopped part-way keeps a mark just past its last counted line, the same state as a file whose last line is still being written. The next launch resumes there, so nothing is counted twice and nothing is skipped.
+  - Files not reached keep their previous marks. Pruning waits for the next full scan, which is always the first refresh after a launch.
+  - **No format change and no version bump.**
+  - **If the save fails, or doesn't finish within 5 seconds,** the quit goes ahead and the previous cache stays as it was: a cache is only replaced, by rename(2), after the new one is written and fsync'd. The next launch reads the rest from the transcripts.
 - **Claude Code's own cleanup [doc, not runtime-verified]:**
   - Claude Code deletes transcripts, and their subagent transcripts, once they're older than its `cleanupPeriodDays` setting, **30 days by default**. Claude Desktop and Cowork transcripts follow their own rule (`desktopSessionCleanupPeriodDays`).
   - Sources: Claude Code docs, *sessions › Where transcripts are stored* and *.claude directory › cleaned up automatically*, retrieved 2026-10-18 ([audit 0010](audits/0010-claude-observability-surfaces.md) §2.1). The docs don't say whether "older" means last modified or created.
