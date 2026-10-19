@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private lazy var services = ProviderServices(store: store, env: env)
     private var ledger: Ledger { services.ledger }
     private let keepAwake = KeepAwake()
+    /// Quitting stops the ledger and saves off the main thread (#86). Made at the first quit request.
+    private var shutdown: ShutdownCoordinator?
 
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
@@ -58,8 +60,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    /// #86: the ledger stops at its next checkpoint and saves on its own queue while AppKit keeps the event loop
+    /// running; the quit goes ahead once that's done, or after the timeout. Quitting is never cancelled: a save that
+    /// failed or didn't finish leaves the previous cache, and the next launch reads the rest from the transcripts.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let ledger = ledger
+        let shutdown = self.shutdown ?? ShutdownCoordinator(stop: { done in ledger.requestStop(completion: done) })
+        self.shutdown = shutdown
+        shutdown.begin { outcome in
+            if outcome == .failed || outcome == .timedOut {
+                // No path, id or count: only that the usage cache wasn't saved, so the previous one is kept.
+                NSLog("SpanDeck: usage cache not saved at quit (%@); the previous cache is kept", "\(outcome)")
+            }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        ledger.flush()
+        // The ledger already stopped and saved (or timed out) in `applicationShouldTerminate`; nothing waits here.
         keepAwake.release()
     }
 
