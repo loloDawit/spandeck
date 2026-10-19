@@ -7,6 +7,8 @@ final class ProviderServices {
     let store: Store
     let pricing: Pricing
     let ledger: Ledger
+    /// Opt-in local diagnostics (#94). Off unless the user starts a session; see `Diagnostics`.
+    let diagnostics: Diagnostics
     private let claudeClient: ClaudeLimitsClient
     private let grokClient: GrokClient
     private let preferences: PreferenceStore
@@ -35,7 +37,8 @@ final class ProviderServices {
     init(store: Store, env: AppEnvironment) {
         self.store = store
         pricing = Pricing(directory: env.appSupport, transport: env.pricingTransport, now: env.now)
-        ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing)
+        diagnostics = Diagnostics(directory: PrivateDirectory(url: env.appSupport), preferences: env.preferences, now: env.now)
+        ledger = Ledger(home: env.home, appSupport: env.appSupport, pricing: pricing, diagnostics: diagnostics)
         claudeClient = ClaudeLimitsClient(credentials: env.credentials, transport: env.providerTransport)
         grokClient = GrokClient(home: env.home, credentials: env.grokCredentials, transport: env.providerTransport,
                                 runner: env.processRunner, now: env.now)
@@ -163,6 +166,42 @@ final class ProviderServices {
     /// launch at login is only enabled from Settings, and an existing registration is left as it is (#15).
     @MainActor func start() {
         store.pricing = pricing.load()
+        diagnostics.restore()
+        publishDiagnostics()
+    }
+
+    // MARK: Diagnostics (#94)
+
+    /// Starts a diagnostic session after the user confirmed the disclosure. Replaces any earlier session's data.
+    @MainActor func startDiagnostics() {
+        store.diagnosticsStartRequested = false
+        diagnostics.start()
+        store.diagnosticsMessage = nil
+        publishDiagnostics()
+    }
+
+    /// Stops the session; its file stays until deleted, exported or past retention.
+    @MainActor func stopDiagnostics() {
+        diagnostics.stop()
+        publishDiagnostics()
+    }
+
+    /// Stops any session and deletes its file.
+    @MainActor func deleteDiagnostics() {
+        do {
+            try diagnostics.delete()
+            store.diagnosticsMessage = DiagnosticsText.deleted
+        } catch {
+            store.diagnosticsMessage = DiagnosticsText.deleteFailed((error as? StorageFailure ?? .io(EIO)).text)
+        }
+        publishDiagnostics()
+    }
+
+    /// Mirrors the session's state into the store for Settings.
+    @MainActor func publishDiagnostics() {
+        store.diagnosticsActive = diagnostics.isActive
+        store.diagnosticsSince = diagnostics.startedAt
+        store.diagnosticsHasData = diagnostics.hasData
     }
 
     // MARK: Local usage (R8)
@@ -199,6 +238,7 @@ final class ProviderServices {
         store.claudeUsage = claude
         store.grokUsage = grok
         store.usageUpdated = Date()
+        if issue != nil, store.usageCacheIssue == nil { diagnostics.record(.error, .usageCache) }
         store.usageCacheIssue = issue?.text
         if store.claudeSource != source { store.claudeSource = source }
         return activity
@@ -235,7 +275,9 @@ final class ProviderServices {
         store.pricingUpdating = false
         switch result {
         case .success(let info): store.pricing = info
-        case .failure(let error): store.pricingError = error
+        case .failure(let error):
+            store.pricingError = error
+            diagnostics.record(.error, .pricing)
         }
     }
 
@@ -268,6 +310,7 @@ final class ProviderServices {
             store.claudeAvailable = false
             store.claudeLimits = nil
         } catch {
+            diagnostics.record(.error, .claudeQuota)
             store.claudeAvailable = true
             store.claudeError = error.localizedDescription
             if case ClientError.http(429) = error { claudeBackoffUntil = now().addingTimeInterval(300) }
@@ -310,6 +353,7 @@ final class ProviderServices {
             // Every failure is shown; none hides Grok once the user opted in (#21). Only a temporary failure keeps
             // the last plan, which the UI labels stale.
             let failure = error as? GrokError ?? .unexpectedResponse
+            if failure != .notConfigured { diagnostics.record(.error, .grokQuota) }
             store.grokFailure = failure
             if case .authRejected = failure { grokAuthPause = (now().addingTimeInterval(Self.grokAuthPause), failure) }
             if !failure.isTemporary {

@@ -112,6 +112,13 @@ final class Store: ObservableObject {
     /// The user's explicit price download: running, and why the last one failed.
     @Published var pricingUpdating = false
     @Published var pricingError: PricingUpdateError?
+    /// Opt-in diagnostics (#94): whether a session runs, since when, whether a session file exists to export or
+    /// delete, the disclosure card requested from Settings, and the outcome of the last export or delete.
+    @Published var diagnosticsActive = false
+    @Published var diagnosticsSince: Date?
+    @Published var diagnosticsHasData = false
+    @Published var diagnosticsStartRequested = false
+    @Published var diagnosticsMessage: String?
     /// Keep awake: end of the manual session (.distantFuture = indefinitely), and whether working agents hold it.
     @Published var awakeUntil: Date?
     @Published var awakeForAgents = false

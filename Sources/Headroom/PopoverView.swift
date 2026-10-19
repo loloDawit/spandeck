@@ -31,6 +31,11 @@ struct PopoverActions {
     var updatePricing: () -> Void
     /// Deletes SpanDeck's usage cache after the user confirmed it (R8).
     var clearUsageCache: () -> Void
+    /// Opt-in diagnostics (#94): start after the disclosure, stop, export a copy where the user chooses, delete.
+    var startDiagnostics: () -> Void = {}
+    var stopDiagnostics: () -> Void = {}
+    var exportDiagnostics: () -> Void = {}
+    var deleteDiagnostics: () -> Void = {}
 }
 
 /// One-line keep-awake state, shared by the footer and the menu bar hover.
@@ -60,6 +65,9 @@ struct PopoverView: View {
             }
             if store.usageCacheClearRequested || store.usageCacheClearing || store.usageCacheResult != nil {
                 UsageCacheCard(store: store, clear: actions.clearUsageCache)
+            }
+            if store.diagnosticsStartRequested || store.diagnosticsMessage != nil {
+                DiagnosticsCard(store: store, start: actions.startDiagnostics)
             }
             Footer(store: store, actions: actions)
         }
@@ -645,6 +653,55 @@ struct UsageCacheCard: View {
     }
 }
 
+/// Discloses what a diagnostic session records before it starts, then shows export or delete outcomes (#94).
+struct DiagnosticsCard: View {
+    @ObservedObject var store: Store
+    var start: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            CardHeader(title: "Diagnostics", icon: "stopwatch", tint: .secondary)
+            if let message = store.diagnosticsMessage {
+                Text(message).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Done") { store.diagnosticsMessage = nil }.controlSize(.small)
+            } else {
+                Text(DiagnosticsText.disclosure).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Start diagnostic session", action: start)
+                    Button("Cancel") { store.diagnosticsStartRequested = false }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CardBackground())
+    }
+}
+
+/// Copy for diagnostics (#94), kept apart from the views so tests can check it.
+enum DiagnosticsText {
+    static let disclosure = "A diagnostic session measures SpanDeck itself: how long it takes to start, open this "
+        + "window, refresh and save its usage index and quit; its CPU and memory use every 30 seconds; pauses of 100 ms "
+        + "or more on its main thread; and how many operations failed, by kind. It records numbers and fixed labels "
+        + "only: no file names, paths, transcript content, prompts, model names, account details or credentials. It "
+        + "stays on this Mac in SpanDeck's Application Support folder (at most 5,000 entries) and is never uploaded. "
+        + "It continues across relaunches so start-up and quit are measured, stops by itself after 24 hours, and its "
+        + "file is deleted 7 days after it was last written. Export saves a copy where you choose. Starting replaces "
+        + "the previous session's data."
+    static let deleted = "Diagnostic data deleted."
+    static func deleteFailed(_ reason: String) -> String { "Couldn't delete the diagnostic data: \(reason)." }
+    static func exported(_ name: String) -> String { "Diagnostics exported to \(name)." }
+    static let exportFailed = "Couldn't export the diagnostic data. Nothing was written."
+    static let nothingToExport = "There is no diagnostic data to export."
+
+    static func status(active: Bool, since: Date?) -> String {
+        guard active else { return "Off" }
+        return since.map { "On since \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "On"
+    }
+}
+
 /// Copy for the usage cache (R8), kept apart from the views so tests can check it.
 enum UsageCacheText {
     static let confirmation = "This deletes SpanDeck's locally stored usage index (claude-ledger.json and its key file). "
@@ -1062,6 +1119,17 @@ struct Footer: View {
                     if let issue = store.usageCacheIssue { Text(issue) }
                     Button("Clear cached usage data…") { store.usageCacheClearRequested = true }
                         .disabled(store.usageCacheClearing)
+                }
+                Section("Diagnostics · \(DiagnosticsText.status(active: store.diagnosticsActive, since: store.diagnosticsSince))") {
+                    if store.diagnosticsActive {
+                        Button("Stop diagnostic session", action: actions.stopDiagnostics)
+                    } else {
+                        Button("Start diagnostic session…") { store.diagnosticsStartRequested = true }
+                    }
+                    if store.diagnosticsHasData {
+                        Button("Export diagnostics…", action: actions.exportDiagnostics)
+                        Button("Delete diagnostic data", action: actions.deleteDiagnostics)
+                    }
                 }
                 Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 if store.claudeLimitsEnabled {
