@@ -814,8 +814,16 @@ final class Ledger {
     private let currentCalendar: @Sendable () -> Calendar
     private var calendar: Calendar { currentCalendar() }
 
+    /// Opt-in diagnostics (#94): refresh, cache load and save timings, recorded only while a session is active.
+    private let diagnostics: Diagnostics?
+    /// Whether the cache load at the first refresh kept a cache, for labelling the first full scan cold (diagnostics).
+    private var loadKept = false
+    private var scannedOnce = false
+
     init(home: URL, appSupport: URL, pricing: Pricing, storage: PrivateDirectory? = nil,
-         now: @escaping @Sendable () -> Date = { Date() }, calendar: @escaping @Sendable () -> Calendar = { .current }) {
+         now: @escaping @Sendable () -> Date = { Date() }, calendar: @escaping @Sendable () -> Calendar = { .current },
+         diagnostics: Diagnostics? = nil) {
+        self.diagnostics = diagnostics
         self.home = home
         self.storage = storage ?? PrivateDirectory(url: appSupport)
         self.pricing = pricing
@@ -913,18 +921,28 @@ final class Ledger {
             }
             if isStopping { return stopped() }
             (scanHook, scanLines, scanBytes) = stopLock.withLock { (_checkpointHook, _stopCheckLines, _stopCheckBytes) }
-            if !loaded { loadCache(); loaded = true }
+            if !loaded {
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                let bytes = loadCache()
+                loaded = true
+                diagnostics?.record(.cacheLoad, bytes == nil ? .absent : loadKept ? .kept : .discarded,
+                                    ms: Self.ms(since: t0), bytes: bytes)
+            }
             checkClaudeSource()
             if !checkpoint(.beforeScan) {
+                let t0 = DispatchTime.now().uptimeNanoseconds
                 if now().timeIntervalSince(lastFullScan) >= 300 {
                     scanClaude(progress: progress)
                     if !isStopping { scanGrok() }
                     if !isStopping { lastFullScan = now() }
+                    diagnostics?.record(.refresh, !scannedOnce && !loadKept ? .cold : .full, ms: Self.ms(since: t0))
                 } else {
                     discoverNewFiles()
                     tailHotFiles()
                     if !isStopping { scanGrok() }
+                    diagnostics?.record(.refresh, .tail, ms: Self.ms(since: t0))
                 }
+                scannedOnce = true
             }
             // A stopped scan is saved by `requestStop`'s block, which runs next on this queue.
             if isStopping { return stopped() }
@@ -1809,7 +1827,11 @@ final class Ledger {
     /// symlink.
     /// If the folder can't be made owner-only nothing is read, and usage is kept in memory with a fresh key.
     /// A key and cache that are kept are marked excluded from backup (audit 0007, P4); see `excludeExisting`.
-    private func loadCache() {
+    private static func ms(since t0: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6 }
+
+    /// Returns the size of the cache file read, or nil if there was none (diagnostics).
+    @discardableResult
+    private func loadCache() -> Int? {
         key = SymmetricKey(size: .bits256)
         keyPersisted = false
         keyExcluded = false
@@ -1819,27 +1841,28 @@ final class Ledger {
             try storage.removeTemporaryFiles(of: Self.keyName)
         } catch {
             setIssue(.notSaved(error as? StorageFailure ?? .io(EIO)))
-            return
+            return nil
         }
         if let k = try? storage.read(Self.keyName), k.count == 32 {
             key = SymmetricKey(data: k)
             keyPersisted = true
         }
         var cacheKept = false
-        defer { excludeExisting(cache: cacheKept) }
+        defer { excludeExisting(cache: cacheKept); loadKept = cacheKept }
         let data: Data?
         do { data = try storage.read(Self.cacheName) } catch { data = Data() } // unreadable: discard
-        guard let data else { return }
+        guard let data else { return nil }
         if keyPersisted, let s = try? JSONDecoder().decode(State.self, from: data), s.version == State().version,
            s.keyCheck == keyCheck {
             state = s
             cacheKept = true
             if normaliseModelIDs() { dirty = true; changeCounter += 1 }
-            return
+            return data.count
         }
         do { try storage.remove(Self.cacheName) } catch {
             setIssue(.legacyNotRemoved(error as? StorageFailure ?? .io(EIO)))
         }
+        return data.count
     }
 
     /// A version 7 cache written before #66 can hold any model id, in `slots` and in each operation's `parts`. Each
@@ -1892,8 +1915,10 @@ final class Ledger {
     /// written elsewhere; the issue is reported and the save retried later. A new file that can't be excluded isn't
     /// written (fail closed). A key from before #70 that can't be excluded is kept, and the issue stays until it is.
     private func saveCache() {
+        let t0 = DispatchTime.now().uptimeNanoseconds
         state.keyCheck = keyCheck
         guard let data = try? JSONEncoder().encode(state) else { return }
+        defer { diagnostics?.record(.cacheSave, dirty ? .failed : .saved, ms: Self.ms(since: t0), bytes: data.count) }
         lastSave = now()
         do {
             if !keyPersisted {

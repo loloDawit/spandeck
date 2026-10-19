@@ -19,6 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var tick = 0
     private var currentInterval = 0.0
     private var hover: HoverController?
+    /// Opt-in diagnostics instruments (#94); installed only while a session is active.
+    private lazy var monitor = DiagnosticsMonitor(diagnostics: services.diagnostics)
+    private var diagnostics: Diagnostics { services.diagnostics }
+    private var firstUsageRecorded = false
+    private var popoverCloseRequested: UInt64?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.register()
@@ -58,6 +63,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.refreshLimits()
             self?.refreshUsage()
         }
+        // A session that stops itself at its maximum age is shown as off at once (review of #97).
+        services.diagnostics.onExpire = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                MainActor.assumeIsolated { self.services.publishDiagnostics() }
+                self.monitor.sync()
+            }
+        }
+        monitor.sync()
+        if diagnostics.isActive, let started = ProcessMetrics.startDate() {
+            diagnostics.record(.launch, ms: Date().timeIntervalSince(started) * 1000)
+        }
     }
 
     /// #86: the ledger stops at its next checkpoint and saves on its own queue while AppKit keeps the event loop
@@ -70,10 +87,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // the quit is under way: the one pending termination is resolved by the reply already registered, so no
         // second reply is registered (AppKit pairs one reply with one `.terminateLater`).
         if let shutdown { return shutdown.outcome == nil ? .terminateLater : .terminateNow }
-        let ledger = ledger
+        let ledger = ledger, diagnostics = diagnostics
+        let quitStarted = mach_absolute_time()
         let shutdown = ShutdownCoordinator(stop: { done in ledger.requestStop(completion: done) })
         self.shutdown = shutdown
         shutdown.begin { outcome in
+            // #94: only while a session runs; the session file is small and written before the reply.
+            if diagnostics.isActive {
+                let detail: DiagnosticDetail
+                switch outcome {
+                case .saved: detail = .saved
+                case .nothingToSave: detail = .nothingToSave
+                case .failed: detail = .failed
+                case .timedOut: detail = .timedOut
+                }
+                diagnostics.record(.shutdown, detail, ms: DiagnosticsMonitor.ms(from: quitStarted, to: mach_absolute_time()))
+                diagnostics.persist(force: true, wait: true)
+            }
             if outcome == .failed || outcome == .timedOut {
                 // No path, id or count: only that the usage cache wasn't saved, so the previous one is kept.
                 NSLog("SpanDeck: usage cache not saved at quit (%@); the previous cache is kept", "\(outcome)")
@@ -173,6 +203,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let windowStart = ProviderServices.windowStart(store.claudeLimits, now: Date())
         Task { @MainActor in
             guard let lastActivity = await services.refreshUsage(windowStart: windowStart) else { return }
+            if !firstUsageRecorded {
+                firstUsageRecorded = true
+                if diagnostics.isActive, let started = ProcessMetrics.startDate() {
+                    diagnostics.record(.firstUsage, ms: Date().timeIntervalSince(started) * 1000)
+                }
+            }
             keepAwake.agentActivity = lastActivity
             syncAwake()
         }
@@ -213,9 +249,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
         if popover.isShown {
+            if diagnostics.isActive { popoverCloseRequested = mach_absolute_time() }
             popover.performClose(nil)
             return
         }
+        monitor.popoverRequested()
         hover?.hide()
         let view = PopoverView(store: store, actions: PopoverActions(
             refresh: { [weak self] in
@@ -229,7 +267,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             setGrokCredits: { [weak self] on in self?.setGrokCredits(on) },
             quotaSwitchChanged: { [weak self] provider, on in self?.quotaSwitchChanged(provider, on) },
             updatePricing: { [weak self] in self?.updatePricing() },
-            clearUsageCache: { [weak self] in self?.clearUsageCache() }))
+            clearUsageCache: { [weak self] in self?.clearUsageCache() },
+            startDiagnostics: { [weak self] in self?.setDiagnostics(true) },
+            stopDiagnostics: { [weak self] in self?.setDiagnostics(false) },
+            exportDiagnostics: { [weak self] in self?.exportDiagnostics() },
+            deleteDiagnostics: { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated { self.services.deleteDiagnostics() }
+                monitor.sync()
+            }))
         let host = NSHostingController(rootView: view)
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
@@ -237,7 +283,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    // MARK: Diagnostics (#94)
+
+    private func setDiagnostics(_ on: Bool) {
+        MainActor.assumeIsolated { on ? services.startDiagnostics() : services.stopDiagnostics() }
+        monitor.sync()
+    }
+
+    /// Saves a copy of the session where the user chooses. Nothing is written unless they confirm the panel.
+    private func exportDiagnostics() {
+        guard let data = diagnostics.exportData() else {
+            store.diagnosticsMessage = DiagnosticsText.nothingToExport
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "SpanDeck-diagnostics-\(Date().formatted(.iso8601.year().month().day())).json"
+        panel.allowedContentTypes = [.json]
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            store.diagnosticsMessage = DiagnosticsText.exported(url.lastPathComponent)
+        } catch {
+            store.diagnosticsMessage = DiagnosticsText.exportFailed
+        }
+    }
+
     func popoverDidClose(_ notification: Notification) {
+        if let since = popoverCloseRequested {
+            popoverCloseRequested = nil
+            diagnostics.record(.popoverClose, ms: DiagnosticsMonitor.ms(from: since, to: mach_absolute_time()))
+        }
         // Drop the SwiftUI tree so nothing renders while the popover is hidden.
         popover.contentViewController = nil
         // A clear that wasn't confirmed is dropped, and its result is only shown while the popover is open (R8).

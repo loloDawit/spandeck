@@ -26,6 +26,7 @@ Boundaries:
 | Supply-chain tampering | New upstream source, release DMG not yet Developer ID notarized | Pin reviewed commits, audit CI/dependencies, sign/notarize and verify releases |
 | Local disclosure | Usage history/cache and backups accessible to local account/processes | **R8 (#33):** cache holds opaque ids, not paths or ids; `0700`/`0600`; v3 caches deleted; Settings ▸ Clear cached usage data. **P4 (#70):** cache and key excluded from future backups (Time Machine and tools honouring the attribute). Still readable by any process running as the user (key stored alongside); earlier backups and snapshots keep their copies; deletion isn't secure erasure |
 | Instrumentation conflicts | Proposed future hooks or status-line changes could overwrite user settings | Never mutate silently; backup, consent, merge semantics, reversible uninstall |
+| Diagnostics disclosing usage or identity | Opt-in local diagnostic session (#94) | Off by default; explicit start/stop; closed kinds and labels, numbers only (no free text, paths, content, model names); owner-only file excluded from backups, ≤ 5,000 events, 24 h session limit, 7-day retention, user-chosen export only, no network ([DIAGNOSTICS.md](DIAGNOSTICS.md)) |
 | Excessive resource use | Frequent timers and long session files | Measure and budget scan CPU/memory, bounded indexing/retention, cancellation |
 
 ## Safeguards that are NOT yet implemented
