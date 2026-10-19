@@ -100,12 +100,13 @@ struct BenchDataset {
         ProcessInfo.processInfo.environment["SPANDECK_BENCH_DATASET"].flatMap { all[$0] }
     }
 
-    /// `gen`, `cold` or `warm` when `PerformanceMemoryBenchTests` should run (`SPANDECK_BENCH_MODE` and
-    /// `SPANDECK_BENCH_HOME` set, with a dataset); nil otherwise.
+    /// `gen`, `cold`, `warm` or a #87 mode (`repeat`, `idle`, `incremental`, `cancel`) when
+    /// `PerformanceMemoryBenchTests` should run (`SPANDECK_BENCH_MODE` and `SPANDECK_BENCH_HOME` set, with a dataset);
+    /// nil otherwise.
     static var memoryMode: String? {
         let e = ProcessInfo.processInfo.environment
         guard selected != nil, e["SPANDECK_BENCH_HOME"] != nil, let m = e["SPANDECK_BENCH_MODE"],
-              ["gen", "cold", "warm"].contains(m) else { return nil }
+              ["gen", "cold", "warm", "repeat", "idle", "incremental", "cancel"].contains(m) else { return nil }
         return m
     }
 

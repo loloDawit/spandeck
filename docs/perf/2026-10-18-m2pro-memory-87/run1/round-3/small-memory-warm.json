@@ -1,0 +1,91 @@
+{
+  "cpu_s": 0.050839999999999996,
+  "dataset": "small",
+  "footprint_after_scan": 16482952,
+  "footprint_before": 6455872,
+  "footprint_peak": 16499336,
+  "footprint_steady": 16499336,
+  "load_average": {
+    "after": "{ 5.76 7.16 7.58 }",
+    "before": "{ 5.76 7.16 7.58 }"
+  },
+  "max_rss": 43614208,
+  "mode": "warm",
+  "phases": [
+    {
+      "footprint": 6914648,
+      "footprint_peak": 6914648,
+      "malloc_allocated": 33554432,
+      "malloc_blocks": 2300,
+      "malloc_in_use": 622864,
+      "phase": "start",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 16482952,
+      "footprint_peak": 16482952,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 20643,
+      "malloc_in_use": 5626256,
+      "phase": "scanned",
+      "pressure_level": 2,
+      "series_max_footprint": 16433800,
+      "series_max_in_use": 8620352,
+      "series_ms_footprint_in_use": [
+        [
+          0,
+          6996568,
+          633440
+        ],
+        [
+          25,
+          14680664,
+          8620352
+        ],
+        [
+          48,
+          16433800,
+          5789840
+        ]
+      ]
+    },
+    {
+      "footprint": 16482952,
+      "footprint_peak": 16482952,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 20567,
+      "malloc_in_use": 4414928,
+      "phase": "saved",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 16499336,
+      "footprint_peak": 16499336,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 20579,
+      "malloc_in_use": 4421760,
+      "phase": "steady",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 16499336,
+      "footprint_peak": 16499336,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 20581,
+      "malloc_in_use": 4422848,
+      "phase": "after pressure relief (diagnostic)",
+      "pressure_level": 2,
+      "relief_bytes": 0
+    },
+    {
+      "footprint": 16499336,
+      "footprint_peak": 16499336,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 4399,
+      "malloc_in_use": 1108880,
+      "phase": "released",
+      "pressure_level": 2
+    }
+  ],
+  "wall_s": 0.051522291
+}

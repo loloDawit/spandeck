@@ -1,0 +1,27 @@
+(lldb) target create "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper"
+Current executable set to '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper' (arm64).
+(lldb) settings set -- target.run-args  "--test-bundle-path" "~/Desktop/project/spandeck/.build/arm64-apple-macosx/release/HeadroomPackageTests.xctest/Contents/MacOS/HeadroomPackageTests" "--filter" "PerformanceMemoryBenchTests" "~/Desktop/project/spandeck/.build/arm64-apple-macosx/release/HeadroomPackageTests.xctest/Contents/MacOS/HeadroomPackageTests" "--testing-library" "swift-testing"
+(lldb) settings set target.env-vars DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks DYLD_LIBRARY_PATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib SPANDECK_BENCH_DATASET=large SPANDECK_BENCH_MODE=warm SPANDECK_BENCH_HOME=~/Desktop/project/spandeck/.build/bench/data-large SPANDECK_BENCH_OUT=~/Desktop/project/spandeck/.build/bench/prof87-final/large-warm
+(lldb) breakpoint set -s HeadroomPackageTests -r 'Bench\.hold'
+Breakpoint 1: no locations (pending).
+WARNING:  Unable to resolve breakpoint to any actual locations.
+(lldb) breakpoint command add -o 'platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC' 1
+(lldb) breakpoint modify --auto-continue true 1
+(lldb) run
+1 location added to breakpoint 1
+[90m◇[0m Test run started.
+[90m↳ Testing Library Version: 1902[0m
+[90m↳ Target Platform: arm64e-apple-macos14.0[0m
+[90m◇[0m Suite PerformanceMemoryBenchTests started.
+[90m◇[0m Test memory() started.
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+(lldb)  platform shell /var/folders/_y/n6f615yn253ghz1p2m637j_m0000gn/T/spandeck-snap.8wLdNkSTlC
+[92m✔[0m Test memory() passed after 17.434 seconds.
+[92m✔[0m Suite PerformanceMemoryBenchTests passed after 17.434 seconds.
+[92m✔[0m Test run with 1 test in 1 suite passed after 17.434 seconds.
+Process 37237 launched: '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper' (arm64)
+Process 37237 exited with status = 0 (0x00000000)

@@ -1,0 +1,141 @@
+{
+  "cpu_s": 0.31232699999999997,
+  "dataset": "small",
+  "footprint_after_scan": 24855200,
+  "footprint_before": 6619712,
+  "footprint_peak": 24920736,
+  "footprint_steady": 24887968,
+  "load_average": {
+    "after": "{ 5.76 7.16 7.58 }",
+    "before": "{ 5.76 7.16 7.58 }"
+  },
+  "max_rss": 52232192,
+  "mode": "cold",
+  "phases": [
+    {
+      "footprint": 7127640,
+      "footprint_peak": 7127640,
+      "malloc_allocated": 41943040,
+      "malloc_blocks": 2303,
+      "malloc_in_use": 626976,
+      "phase": "start",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 24855200,
+      "footprint_peak": 24855200,
+      "malloc_allocated": 67108864,
+      "malloc_blocks": 24118,
+      "malloc_in_use": 4482048,
+      "phase": "scanned",
+      "pressure_level": 2,
+      "series_max_footprint": 18678432,
+      "series_max_in_use": 10773856,
+      "series_ms_footprint_in_use": [
+        [
+          0,
+          7209560,
+          636016
+        ],
+        [
+          25,
+          8258208,
+          1214832
+        ],
+        [
+          46,
+          8618656,
+          1495488
+        ],
+        [
+          71,
+          8979104,
+          1856512
+        ],
+        [
+          93,
+          9159328,
+          2080864
+        ],
+        [
+          118,
+          9831072,
+          2517360
+        ],
+        [
+          143,
+          10109600,
+          2823440
+        ],
+        [
+          169,
+          10388128,
+          3049344
+        ],
+        [
+          193,
+          10633888,
+          3301136
+        ],
+        [
+          215,
+          11600544,
+          3839552
+        ],
+        [
+          239,
+          11846304,
+          4100064
+        ],
+        [
+          264,
+          12042912,
+          4311904
+        ],
+        [
+          289,
+          18678432,
+          10773856
+        ]
+      ]
+    },
+    {
+      "footprint": 24855200,
+      "footprint_peak": 24855200,
+      "malloc_allocated": 67108864,
+      "malloc_blocks": 24081,
+      "malloc_in_use": 4456256,
+      "phase": "saved",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 24887968,
+      "footprint_peak": 24920736,
+      "malloc_allocated": 67108864,
+      "malloc_blocks": 24094,
+      "malloc_in_use": 4464368,
+      "phase": "steady",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 24887968,
+      "footprint_peak": 24920736,
+      "malloc_allocated": 67108864,
+      "malloc_blocks": 24096,
+      "malloc_in_use": 4465456,
+      "phase": "after pressure relief (diagnostic)",
+      "pressure_level": 2,
+      "relief_bytes": 0
+    },
+    {
+      "footprint": 24887968,
+      "footprint_peak": 24920736,
+      "malloc_allocated": 67108864,
+      "malloc_blocks": 10117,
+      "malloc_in_use": 1361344,
+      "phase": "released",
+      "pressure_level": 2
+    }
+  ],
+  "wall_s": 0.313638417
+}

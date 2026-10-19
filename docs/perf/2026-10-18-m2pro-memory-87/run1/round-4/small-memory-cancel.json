@@ -1,0 +1,103 @@
+{
+  "dataset": "small",
+  "footprint_before": 6554176,
+  "load_average": {
+    "after": "{ 6.59 7.00 7.45 }",
+    "before": "{ 6.99 7.09 7.49 }"
+  },
+  "mode": "cancel",
+  "phases": [
+    {
+      "footprint": 7012952,
+      "footprint_peak": 7012952,
+      "malloc_allocated": 37748736,
+      "malloc_blocks": 2300,
+      "malloc_in_use": 626848,
+      "phase": "start",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 17826464,
+      "footprint_peak": 17826464,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 16813,
+      "malloc_in_use": 3032624,
+      "phase": "stopped",
+      "pressure_level": 2,
+      "result": "saved",
+      "stop_ms": 150
+    },
+    {
+      "footprint": 17842848,
+      "footprint_peak": 17859232,
+      "malloc_allocated": 50331648,
+      "malloc_blocks": 8404,
+      "malloc_in_use": 1223264,
+      "phase": "released",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 27902624,
+      "footprint_peak": 27902624,
+      "malloc_allocated": 54525952,
+      "malloc_blocks": 28069,
+      "malloc_in_use": 5383168,
+      "phase": "resumed",
+      "pressure_level": 2,
+      "series_max_footprint": 27869856,
+      "series_max_in_use": 9429360,
+      "series_ms_footprint_in_use": [
+        [
+          0,
+          17908384,
+          1226992
+        ],
+        [
+          25,
+          20333216,
+          3952016
+        ],
+        [
+          50,
+          20529824,
+          4158528
+        ],
+        [
+          75,
+          20791968,
+          4787712
+        ],
+        [
+          100,
+          21004960,
+          5004912
+        ],
+        [
+          124,
+          21250720,
+          5288784
+        ],
+        [
+          145,
+          21398176,
+          9429360
+        ],
+        [
+          169,
+          27869856,
+          5547376
+        ]
+      ]
+    },
+    {
+      "footprint": 27902624,
+      "footprint_peak": 27902624,
+      "malloc_allocated": 54525952,
+      "malloc_blocks": 28027,
+      "malloc_in_use": 4653360,
+      "phase": "after pressure relief (diagnostic)",
+      "pressure_level": 2,
+      "relief_bytes": 0
+    }
+  ]
+}

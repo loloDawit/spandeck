@@ -7,6 +7,9 @@
 ```bash
 scripts/bench.sh [--out DIR] [--idle SECONDS] [small|medium|large ...]   # default: all three, no idle run
 scripts/bench-report.py DIR                                              # the tables in §4
+scripts/bench-memory.sh [--out DIR] [--rounds N] [small|medium|large ...] # #87 memory scenarios, untraced (§4.6)
+scripts/bench-memory-report.py DIR                                       # their tables
+scripts/bench-memory-profile.sh [--tools LIST] DATASET MODE OUTDIR       # heap, vmmap, footprint at each phase
 ```
 
 **What it does:**
@@ -283,13 +286,108 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
 - The stop is for the rest of the process. If the system didn't terminate after the reply (not expected once an app agrees), usage would stop updating until a relaunch.
 - The app registers one reply per termination and relies on AppKit pairing it with the one pending `.terminateLater`.
 
+### 4.6 Memory profile (#87)
+
+Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic data only; no code was changed to get it except the test-only, opt-in harness (`PerformanceMemoryBenchTests` modes, `scripts/bench-memory*.sh`, `scripts/bench-memory-report.py`).
+
+**Method:**
+- **Figures of record:** `scripts/bench-memory.sh --rounds 5` at `4d075f8`, untraced, one ledger scenario per process, the same build as §1. Median of 5 rounds, [range] when rounds differ by more than 5 %.
+- **Two measures, kept apart:**
+  - **live**: bytes in live allocations, the allocator's own count (`malloc_zone_statistics`, `size_in_use`);
+  - **footprint**: the kernel's `phys_footprint` (Activity Monitor's *Memory*), which also counts freed pages the allocator hasn't returned, stacks and other dirty memory.
+
+  A footprint figure alone can't tell retained objects from retained free pages.
+- **Attribution:** `scripts/bench-memory-profile.sh` stops the same process under lldb at each phase and runs `heap -s`, `vmmap --summary` and `footprint` (macOS 26.5; `lldb-2100.0.17.203`, Xcode 26.6), at `0046b36`. Peaks are located with a 20 ms in-process sampler.
+- **Conditions:** the machine wasn't idle. One-minute load average 4.6–9.7; the system memory pressure level was **2 (warning) at every recorded phase**, with little free memory. Footprint figures under pressure can include compressed pages; whether that raises or lowers them against an idle machine isn't known. Live figures are unaffected.
+
+**Results** (MB = 10⁶ bytes; per message = per logged message, 30,000 on medium and 120,000 on large):
+
+| | medium cold | medium warm | large cold | large warm |
+|---|---|---|---|---|
+| Wall time (scan, or load and first refresh) | 4.82 s | 0.51 s | 22.3 s | 2.06 s |
+| **Live, steady** | 36 MB (1.21 KB/msg) | 38 MB (1.28 KB/msg) | 129 MB (1.08 KB/msg) | 137 MB (1.14 KB/msg) |
+| Footprint, steady | 103 MB (3.42 KB/msg) | 109 MB (3.64 KB/msg) | 280 MB (2.34 KB/msg) | 383 [381–471] MB (3.19 [3.18–3.93] KB/msg) |
+| **Live, highest during the scan or load** (20 ms samples) | 140 [130–151] MB, in the save | 94 [87–97] MB | 522 [522–564] MB, in the save | 356 [336–410] MB, in the decode |
+| Footprint peak | 166 MB | 109 MB | 586 MB | 383 [381–545] MB |
+| Footprint after the ledger is released | 103 MB | 33 MB | 280 MB | 23 [12–24] MB |
+| Live after the ledger is released | 1.5 MB | 1.3 MB | 1.5 MB | 1.3 MB |
+
+| Scenario (large unless stated) | Result |
+|---|---|
+| **Repeated warm loads**, 5 in one process, each ledger released before the next | live loaded 186–189 MB every time; live released 1.3–1.6 MB. Footprint after a release: 23 MB after the first, then 278–543 MB, no upward trend beyond the first load's peak. Medium: live 52 MB loaded, 1.2–1.5 MB released |
+| **Idle**: 30 refreshes back to back after a warm load | live 186 → 137 MB after the first tick, then flat; footprint median 381 MB at the first tick and at the last (one round fell 476 → 381 MB during the ticks). No growth |
+| **Idle at the app's cadence**: 13 refreshes 10 s apart, 2 runs (profiles, `0046b36`) | footprint 380/384 MB began falling after 10–20 s and reached **146 MB** after about 60 s (run 1) and 30 s (run 2), then stayed flat (live 137 MB). The first drop in each run coincided with a tick that read pressure level 2; the last step did in run 1, not in run 2 |
+| **Stop during a cold scan**, 10 s in (`requestStop`, as quit does since #86) | result `saved` in 5 of 5; live 67 [64–74] MB at the stop (what was counted); footprint peak to the stop 320 MB. **Ledger released: live 1.4 MB**, footprint 164 [148–202] MB. The resume: live 160 MB, highest 592 [552–598] MB in its save. Medium (2 s in): live 15 MB stopped, 1.4 MB released |
+| **Incremental after a warm load** | +10 messages, the first change after a start, **saves the whole cache**: 1.43 s, highest live 495 MB. +100: 71 ms, highest live 139 MB. +1,000: 193 ms, live +1 MB, footprint +15 MB |
+
+**What holds memory in the steady state** (large warm, `heap -s` at the steady phase: 136.8 MB live; cache: 120,000 operations, 237,600 single-id links, 2,785 slots, 301 files):
+
+| Structure | Bytes | Share | Per operation |
+|---|---|---|---|
+| Each operation's `Seen.parts` (`[String: Agg]`, one model per operation here) | 49.6 MB (122,785 dictionaries, 404 B each) | 36 % | ~410 B: a one-entry dictionary keeps 2 buckets of a 112-byte `Agg` and a 16-byte key |
+| Strings (`StringStorage`, 80 B each): 32-character opaque ids and model names | 52.4 MB (666,783) | 38 % | ~440 B: its key, 2 link keys, 2 link targets, and half the model names (the two longer than 15 bytes) |
+| `links` table (237,600 entries) | 21.1 MB | 15 % | ~175 B |
+| `seen` table (120,000 entries) | 10.5 MB | 8 % | ~88 B |
+| Slots, identity, files, Grok, test and runtime | ~3 MB | 2 % | |
+
+- The counts match the cache within about 1 %. The string split is inferred from `count`/`ingestClaudeLine` and the counts, not from allocation backtraces.
+- **Medium is the same shape:** 38.0 MB live; 15.1 MB dictionaries, 13.3 MB strings, 5.3 + 2.6 MB tables.
+- **Live scales with operations in the 32-day window:** 1.1–1.3 KB each on medium and large. Small (2.2 KB/msg) is dominated by fixed costs.
+- **Not significant:** transcripts are mapped (`.alwaysMapped`), so their pages are clean and not in the footprint. During a cold scan the footprint stays within 24–29 MB of live until the save. Parsing temporaries are released line by line (`autoreleasepool` in `ingestLines`). Unread records, marks and Grok are under 2 MB on large. Scans don't overlap: one serial queue, and the app drops refreshes while one runs (§4.4).
+
+**The warm/cold gap:**
+- **In live memory it is small:** +8 MB on large (+6 %), +2 MB on medium, all strings.
+  - A cold scan shares string storage that a decode can't: both of an operation's link targets are the second streamed snapshot's key, one string. The model names are bridged `CFString`s (48 B).
+  - The decoder makes every link target and every long model name its own allocation: 666,783 strings against 482,413 + 120,437 `CFString`.
+- **In the footprint it is the transients, and when their freed pages are returned:**
+  - **Warm load:** the 48 MB cache file is read into memory and decoded. Live peaks at 336–410 MB.
+  - The cache bytes stay live after the load (heap: `NSConcreteData` 47.9 MB) until the ledger queue's next work item: live 186 → 137 MB. That is consistent with an autorelease pool on the queue; which pool isn't confirmed.
+  - **Cold scan:** it ends with the first save, which encodes the whole state with `JSONEncoder`. Live rises from about 130 MB to 522–564 MB at the end, about 390–430 MB of temporaries for a 48 MB file.
+- **Variance:** the footprint after either transient is set by how many freed pages the allocator still holds.
+  - Large warm steady: 381–471 MB across 5 rounds.
+  - #85 measured 377–545 MB.
+  - The same load gave 23 MB after release in one process and 278–543 MB in the next (repeat).
+  - Under lldb at `0046b36`, large warm kept 381–384 MB in all five profiled runs, while large cold, medium cold and medium warm gave part back within the run (medium warm 109 → 46 MB).
+
+**Leak or retention:** **no leak found.**
+- In every mode and round, releasing the ledger returns live memory to 1.1–1.6 MB.
+- After release, `heap` finds no `Ledger` type, only the test's own price tables. Over 5 loads the residue grows 1.3 → 1.6 MB; a heap diff attributes it to the harness's own phase records (`[String: Any]`), not to the ledger.
+- Idle ticks don't grow live memory.
+- The excess of footprint over live is freed memory not yet given back to the system. It was given back in both app-cadence idle runs, after about 30 s and 60 s.
+
+**Unexplained:**
+- **What triggers the return of freed pages.** It began with a pressure-level-2 reading in both idle runs, though one run's last step came at level 1, and happened at unpredictable points under lldb. Asking the allocator directly (`malloc_zone_pressure_relief`) returned **0 bytes every time**.
+- **Why releasing the first warm-loaded ledger drops the footprint to 23 MB** while a released cold-scan ledger, or a later warm load in the same process, keeps 278–543 MB. Live memory is 1.3–1.6 MB in all of these cases.
+- **The idle machine.** No run was at pressure level 1 throughout.
+
+**Every save pays the encode transient**, not only the first: the first change after a launch, at most every 10 minutes while there are changes, on quit, and after a stop (`Ledger.refresh`, `requestStop`). On large that is about +360–430 MB live for about a second, and afterwards a footprint 150–250 MB above live until the pages are returned.
+
+**Options**, ranked by expected saving for risk. None is implemented. Each must keep the cache format, totals, F01–F49, cold/warm parity, the #86 stop and resume semantics and its "never report an incomplete save as saved" rule.
+
+| # | Change | Expected saving (large) | CPU and throughput | Cache consistency, cancellation | Complexity, risk | Cache format |
+|---|---|---|---|---|---|---|
+| O1 | Release the cache bytes right after the decode: an `autoreleasepool` around the read and decode in `loadCache`, or a queue with `autoreleaseFrequency: .workItem` | −48 MB live from the load until the next queue item (about 10 s in the app). **Measured retention, inferred mechanism, estimated saving** | none | none: only when a buffer is freed | a few lines; low | unchanged |
+| O2 | Encode the cache without `JSONEncoder`'s intermediate tree: write the same JSON directly into one buffer | the save transient, about −300 MB of the 360–430 MB. **Estimate until built** | likely faster saves, so quit and wake shorten (each save is ≤ 1.4 s of the ≤ 5 s quit budget today) | the stop path saves with it (#86): it must fail the same way, keep the previous cache on failure, and stay atomic | a hand-written encoder of `State`; medium. Needs a byte-for-byte or decode-equivalence test against `JSONEncoder` on every fixture | unchanged (same JSON) |
+| O3 | Decode the same way (a streaming reader instead of `JSONDecoder`) | −150–200 MB of the warm-load transient. Estimate | likely faster warm starts | load-only; a bad cache must still be discarded as today | a hand-written parser; medium–high | unchanged |
+| O4 | A compact in-memory `parts`: one model inline, a dictionary only when an operation has several | −45 MB steady live (about −33 %). Estimate | neutral or better | touches counting and dedupe (#55, #58, #66): every path that reads or merges `parts` | medium | unchanged (same coding) |
+| O5 | Share strings on decode: each link target as its operation's key, model names interned | −8 MB steady live on warm, parity with cold | negligible | none | low | unchanged |
+| O6 | Opaque ids as 16-byte values instead of 32-character strings in memory | about −35 MB steady live. Estimate | faster hashing | every id site | high | unchanged (written as the same hex) |
+| — | Ask the allocator to give pages back after a save or load (`malloc_zone_pressure_relief`) | **0 bytes, measured.** Rejected | | | | |
+| — | An incremental or database-backed cache | | | | | **changes the format**; out of scope without approval (ADR 0001 D6) |
+
+**Recommendation: defer.**
+- The steady state is expected retention, about 1.1 KB of live memory per operation, linear in the window, with no leak.
+- Every accepted budget is met on medium and large: footprint 2.3–3.9 KB/message against B9's 5 KB.
+- The demonstrated cost is the save's encode transient. If the owner adopts the stricter peak budget proposed for B9 (§5.2), that becomes a failure, and **O2 (with O1)** is the candidate: a separate, approved PR, not an M0 exit criterion.
+- O3–O6 aren't worth their risk on this evidence.
+
 ## 5. Budgets
 
 ### 5.1 Owner decisions (2026-10-18)
 
 - **B1–B11 are provisionally accepted.**
 - **B3 is an accepted priority failure.** Tracked in #86 (P1).
-- **B9 needs an allocation profile before a final memory budget.** Tracked in #87 (P1, investigation only).
+- **B9 needs an allocation profile before a final memory budget.** Tracked in #87 (P1, investigation only). Profile done (§4.6); the final B9 below is a proposal, not yet decided.
 - **B2 and B11 need better UI measurement.** Tracked in #88.
 - **Reference machine:** this Apple M2 Pro (`Mac14,10`, 12 cores, 16 GB, macOS 26.5).
 - **A regression above 25 % in a median requires investigation, not automatic rejection.**
@@ -304,24 +402,38 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 |---|---|---|---|---|
 | B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.17 % | met | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
 | B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only) | met for scans; **post-refresh publish not measured** (#88) | one 60 Hz frame. The first popover render is a UI action under B11 |
-| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.074 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, pending merge) | a quit that takes seconds looks hung |
+| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.074 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, merged) | a quit that takes seconds looks hung |
 | B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
 | B5 | Tick with new data, **excluding cache saves**: p95 ≤ **100 ms** | 59.6 ms; no timed sample saved (checked) | met | runs every 10 s during active use. Saves are B6; the first change after a start (1.67 s, it saves) is reported apart |
 | B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.30 / 1.4 s | met | it blocks the ledger queue: ticks wait behind it |
 | B7 | **Ledger** warm start ≤ **1 s** (medium) / ≤ **3 s** (large) | 0.41 / 1.8 s | met (app launch not measured) | totals should appear shortly after login |
 | B8 | First scan or rebuild ≥ **20 MB/s** of transcript, excluding the first save | 34–38 MB/s on CPU time; about 20 MB/s wall time on large under a load average of 7 | met on CPU time; **marginal** on wall time under load | 30 days of heavy use indexed in under a minute |
-| B9 | Resident memory ≤ **5 KB per logged message** (medium and large), and peak ≤ **2×** steady | 2.3–5.0 KB; cold peak **2.10×** on large; warm varies by run | **provisional**: at the limit (warm medium) and fails on peak. Final budget after #87 | in-memory state is per operation; this keeps 120,000 messages under about 600 MB |
+| B9 | Resident memory ≤ **5 KB per logged message** (medium and large), and peak ≤ **2×** steady | footprint 2.3–3.9 KB/message (§4.6); live 1.1–1.3 KB. Peak ÷ steady footprint 1.0–2.1×, which says little: the steady footprint holds the peak's freed pages | **5 KB met. Final budget proposed after #87 (below), for the owner** | in-memory state is per operation; this keeps 120,000 messages under about 600 MB |
 | B10 | Cache file ≤ **500 B per logged message** | 400–440 B | met | the #55 growth (about 2.4×) left little room |
 | B11 | Popover full render: median ≤ **50 ms**; first render ≤ **250 ms** | 26–31 ms; first 103–359 ms (one sample per process) | median met; **first render fails** on large; needs repeated measurement (#88) | redrawn while open; the first open should feel immediate |
 
+### 5.3 Proposed final B9 (#87, for the owner's decision)
+
+Measured untraced with `scripts/bench-memory.sh` on the reference machine: medium and large only (small is mostly fixed cost), median of 5 rounds, pressure level recorded. Each figure is a column of `scripts/bench-memory-report.py`.
+
+| | Budget | Today (§4.6) | Status |
+|---|---|---|---|
+| **B9a** | Steady footprint ≤ **5 KB per logged message** (unchanged) | 2.34–3.64 KB median; 3.93 KB worst round | met |
+| **B9b** | Steady live memory ≤ **1.5 KB per logged message** | 1.08–1.28 KB | met; guards the per-operation structures |
+| **B9c** | Highest live memory during a load, scan or save ≤ **3×** steady live | warm load 2.5–2.6×; **saves 3.6–4.0×** (cold scan with its save 3.9–4.0×, first save after a warm load 3.6–3.8×, resume after a stop 3.2–3.7×) | **fails on every save** |
+
+- B9c replaces "peak ≤ 2× steady": the steady footprint contains the freed pages the peak left, so that ratio can pass for the wrong reason (warm large: peak = steady = 383 MB).
+- **If B9c is adopted,** the save transient is a failure, and §4.6 names the candidate: O2, with O1.
+- **If it isn't,** B9 is met as it stands, and the save transient stays a watch item.
+
 ## 6. Bottlenecks, ranked
 
-1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, pending merge).**
+1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, merged).**
    - The main thread was held for the rest of the scan: up to 19.7 s on large.
    - Now the scan stops at a checkpoint and saves on the ledger queue while AppKit waits. The main thread is held ≤ 0.074 ms, and quitting takes at most 1.39 s on large (§4.5).
-2. **Memory per message, and its warm-start variance (B9, #87).**
-   - 279 MB resident after a cold scan on large, and 377–545 MB after a warm start.
-   - The cause isn't located yet.
+2. **The cache save's encode transient (B9, #87, §4.6).**
+   - Every save encodes the whole state with `JSONEncoder`: about +360–430 MB of live memory for about a second on large, for a 48 MB file. Afterwards the footprint stays 150–250 MB above live until the freed pages are returned.
+   - The steady state isn't a problem: about 1.1 KB of live memory per operation, linear in the 32-day window, no leak. The 377–545 MB #85 saw after a warm start is mostly freed pages, not objects (137 MB live).
 3. **JSON cache encode and decode:** 1.4–1.8 s per save, warm start, simulated wake or first change after a start, on large. It runs on the ledger queue, so ticks wait.
    - This is ADR 0001 D6's revisit trigger 1: "#8 measures encode or decode cost above a budget the owner sets".
    - B6 and B7 are met today, so this is a watch item, not a format change.
@@ -335,7 +447,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 
 **Created 2026-10-18 with owner approval.** Each is a sub-issue of #8 in M0, workstream Performance. **None is an M0 exit criterion.**
 - **#86** *Non-blocking shutdown during an active ledger scan* (P1). Investigate safe cancellation, durable cache state, resumability and no double counting before any fix. "Stop and flush partial state" is not assumed safe.
-- **#87** *Profile ledger memory across cold and warm loads* (P1). Investigation only, with an allocation profile on synthetic data.
+- **#87** *Profile ledger memory across cold and warm loads* (P1). Investigation only, with an allocation profile on synthetic data. Done: §4.6, with the B9 proposal in §5.3 and options O1–O6 awaiting the owner.
 - **#88** *Complete UI performance measurement*: post-refresh publishing on the main thread, and repeated first popover renders, in safe harnesses.
 
 **Proposed, not created:**
