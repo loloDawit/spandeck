@@ -636,13 +636,16 @@ struct ShutdownCoordinatorTests {
         let t0 = DispatchTime.now().uptimeNanoseconds
         c.begin { replies.append($0) }
         let beginMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+        // Structural, not a timing bound: `begin` returned before the ledger had even stopped, let alone saved.
+        #expect(replies.isEmpty, "begin returned before the stop completed")
         while replies.isEmpty { try? await Task.sleep(nanoseconds: 5_000_000) }
         beat.cancel()
         await beat.value
         if !lateness.isEmpty { lateness.removeLast() } // the last, cancelled sleep
         _ = await refreshed.value
         #expect(replies == [.saved])
-        #expect(beginMs < 16, "begin returned in \(beginMs) ms")
+        // A loose guard only (a blocking begin would take the whole scan and save here); the benchmark measures it.
+        #expect(beginMs < 1000, "begin returned in \(beginMs) ms")
         // A guard against real blocking (a save or scan on the main thread would be seconds here). This test runs in
         // parallel with other scanning tests, so scheduling jitter is in it; the #8 benchmark measures it alone (B2, B3).
         #expect((lateness.max() ?? 0) < 200, "main actor late by up to \(lateness.max() ?? 0) ms")

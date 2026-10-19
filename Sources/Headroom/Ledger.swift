@@ -919,11 +919,14 @@ final class Ledger {
         }
     }
 
-    /// Saves now, waiting on the caller's thread for any refresh in flight. Tests and the #8 benchmark only: the app
-    /// quits with `requestStop`, which never waits (#86).
+    #if DEBUG
+    /// Saves now, waiting on the caller's thread for any refresh in flight. Tests and the #8 benchmark only, so it isn't
+    /// in release builds: the app quits with `requestStop`, which never waits (#86), and a main-thread caller of this
+    /// would bring back the quit that held the main thread for a whole scan.
     func flush() {
         queue.sync { if dirty { saveCache() } }
     }
+    #endif
 
     /// #86: stops the ledger for quitting, without waiting. The stop flag is set at once, so a scan in flight stops at
     /// its next checkpoint (`Checkpoint`), and later refreshes don't scan or save. Then, on the ledger queue after
@@ -1022,7 +1025,8 @@ final class Ledger {
         hotFiles = hot
         // Progress for a first index, and for one resumed after a quit (#86), when some marks exist already: files
         // without a mark are what's left to index, and the count shows those only. A rescan of files that grew isn't
-        // an index; 25 or more new transcripts at once (a restore, a bulk import) are, and show progress too.
+        // an index; 25 or more new transcripts at once (a restore, a bulk import) are, and show progress too. A file a
+        // stop left part-read has a mark, like one that grew, so it isn't counted (no saved state tells them apart).
         let unmarked = Set(candidates.filter { state.files[$0.id] == nil }.map(\.id))
         let initial = unmarked.count >= 25 || (state.files.isEmpty && !unmarked.isEmpty)
         var indexed = 0
