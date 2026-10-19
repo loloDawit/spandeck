@@ -32,6 +32,8 @@ An offscreen SwiftUI render proves that the view tree builds and lays out for a 
 | No sensitive data at rest | `PrivacyCanaryTests`, `LedgerCacheTests.cacheHoldsNoPathsIdsOrContent`, `DiagnosticsTests.exportCarriesNoContentPathOrIdentity` [test]; Run 4 R4-C2 [runtime] | — |
 
 ## 2. Owner validation checklist (one pass, in order)
+Steps A–C are automated as far as possible, without admin rights, by the validation package. How to run it: [`VALIDATION_RUN.md`](VALIDATION_RUN.md).
+
 The candidate is built by `scripts/package-candidate.sh` from the final `main` of #94 ([`INSTALL.md`](INSTALL.md)). Steps A–C use the `spandecktest` account with synthetic fixtures, as in Run 4. Step D is the personal-account decision.
 
 **A. Default launch on the candidate** (`spandecktest`; `scripts/runtime-verify.sh`, runs 1–2 as in audit 0003 §8):
