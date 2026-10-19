@@ -64,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// running; the quit goes ahead once that's done, or after the timeout. Quitting is never cancelled: a save that
     /// failed or didn't finish leaves the previous cache, and the next launch reads the rest from the transcripts.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Asked again after the reply (AppKit may): the ledger is already stopped and saved, so quit at once.
+        if shutdown?.outcome != nil { return .terminateNow }
         let ledger = ledger
         let shutdown = self.shutdown ?? ShutdownCoordinator(stop: { done in ledger.requestStop(completion: done) })
         self.shutdown = shutdown

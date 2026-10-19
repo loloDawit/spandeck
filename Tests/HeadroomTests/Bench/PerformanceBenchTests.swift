@@ -210,12 +210,13 @@ struct PerformanceBenchTests {
         let beginMs = Double(ns() - tBegin) / 1e6
         while outcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         quitBeat.cancel()
-        func since(_ k: String, _ from: UInt64) -> Double { Double((marks.get(k) ?? from) - from) / 1e9 }
-        let stoppedAt = marks.get("stopped") ?? tBegin
+        // A mark that never came is reported as missing (null), never as 0 s (review of #90).
+        func span(_ from: UInt64?, _ to: UInt64?) -> Any { if let from, let to { Double(to - from) / 1e9 } else { NSNull() } }
         report["quit_coordinator_during_cold_scan"] = [
             "outcome": "\(outcome!)", "begin_ms": beginMs, "heartbeat_late_ms": Bench.stats(quitLate),
-            "cancel_latency_s": since("stopped", tBegin), "save_s": Double((marks.get("saved") ?? stoppedAt) - stoppedAt) / 1e9,
-            "total_to_reply_s": since("reply", tBegin), "cache_bytes": Self.fileSize(stoppingSupport.appendingPathComponent(Ledger.cacheName)),
+            "cancel_latency_s": span(tBegin, marks.get("stopped")), "save_s": span(marks.get("stopped"), marks.get("saved")),
+            "total_to_reply_s": span(tBegin, marks.get("reply")),
+            "cache_bytes": Self.fileSize(stoppingSupport.appendingPathComponent(Ledger.cacheName)),
             "bytes_scanned_before_stop": await Self.readBytes(stopping),
         ]
 

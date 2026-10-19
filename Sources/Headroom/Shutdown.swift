@@ -6,9 +6,10 @@ import Foundation
 /// after `timeout`, whichever comes first. A result that arrives after the reply changes nothing.
 ///
 /// After a timeout the process may exit while the ledger is still scanning or saving. That is safe: the cache is only
-/// replaced by rename(2) once a new one is fully written and synced, so the previous cache stays valid, and leftover
+/// replaced by rename(2) after a new one is written and fsync'd, so the previous cache stays valid, and leftover
 /// temporary files are removed at the next launch. What was counted since the last save is read again from the
-/// transcripts.
+/// transcripts. (fsync(2) doesn't flush the drive's own cache: after a power loss right after a save, the cache can be
+/// damaged; it is then discarded at launch and rebuilt from the transcripts, never misread.)
 @MainActor
 final class ShutdownCoordinator {
     enum Outcome: Equatable, Sendable { case saved, nothingToSave, failed, timedOut }
@@ -18,7 +19,7 @@ final class ShutdownCoordinator {
 
     /// The reply given, once given.
     private(set) var outcome: Outcome?
-    private var reply: ((Outcome) -> Void)?
+    private var replies: [(Outcome) -> Void] = []
     private var begun = false
     private let timeout: TimeInterval
     private let stop: (@escaping @Sendable (LedgerStopResult) -> Void) -> Void
@@ -38,13 +39,17 @@ final class ShutdownCoordinator {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(body) }
     }
 
-    /// Starts quitting. Returns at once; `reply` is called later, once, on the main actor. False (and nothing started)
-    /// if a quit is already under way: its reply still comes.
+    /// Starts quitting. Returns at once; `reply` is called later, once, on the main actor. A request while a quit is
+    /// under way starts nothing new (false) and gets the same outcome; a request after the outcome gets it at once.
     @discardableResult
     func begin(reply: @escaping (Outcome) -> Void) -> Bool {
+        if let outcome {
+            reply(outcome)
+            return false
+        }
+        replies.append(reply)
         guard !begun else { return false }
         begun = true
-        self.reply = reply
         after(timeout) { [weak self] in self?.finish(.timedOut) }
         stop { [weak self] result in
             let outcome: Outcome
@@ -58,11 +63,13 @@ final class ShutdownCoordinator {
         return true
     }
 
-    /// The first call replies; later ones (a late ledger result, the timer after a result) do nothing.
+    /// The first call replies to every request so far; later ones (a late ledger result, the timer after a result) do
+    /// nothing.
     private func finish(_ o: Outcome) {
-        guard outcome == nil, let reply else { return }
+        guard outcome == nil else { return }
         outcome = o
-        self.reply = nil
-        reply(o)
+        let waiting = replies
+        replies = []
+        waiting.forEach { $0(o) }
     }
 }

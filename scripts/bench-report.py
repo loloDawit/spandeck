@@ -80,7 +80,8 @@ if all("quit_coordinator_during_cold_scan" in res[s_] for s_ in sets):
     row("Quit since #86, 50 ms into a cold scan: `begin` on main / heartbeat late, worst",
         lambda r: f"{q(r)['begin_ms']:.2f} ms / {q(r)['heartbeat_late_ms'].get('max', 0):.1f} ms")
     row("  cancellation latency / save / total to the reply",
-        lambda r: f"{ms(q(r)['cancel_latency_s'])} / {ms(q(r)['save_s'])} / {ms(q(r)['total_to_reply_s'])} ms")
+        lambda r: " / ".join("missing" if q(r)[k] is None else ms(q(r)[k])
+                             for k in ("cancel_latency_s", "save_s", "total_to_reply_s")) + " ms")
     row("  outcome", lambda r: q(r)['outcome'])
 row("Hover top consumers, cpu / memory (median)",
     lambda r: " / ".join(f"{r['hover_top_consumers_median_ms'][k]:.2f}" for k in ("cpu", "memory")) + " ms")
