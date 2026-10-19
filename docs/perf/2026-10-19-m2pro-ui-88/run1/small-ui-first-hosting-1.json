@@ -1,0 +1,57 @@
+{
+  "close_ms": {
+    "max": 3.593875,
+    "median": 1.4934375,
+    "min": 0.912708,
+    "n": 20,
+    "p95": 3.548084
+  },
+  "dataset": "small",
+  "first": {
+    "attach_ms": 284.581583,
+    "construct_ms": 2.793125,
+    "deferred_max_span_ms": 0.04,
+    "display_ms": 90.362,
+    "height": 725,
+    "layout_ms": 37.549375,
+    "total_ms": 415.286083,
+    "width": 700
+  },
+  "load_average": {
+    "after": "{ 8.21 7.37 9.75 }",
+    "before": "{ 8.98 7.49 9.82 }"
+  },
+  "mode": "first",
+  "reopen_deferred_max_span_ms": {
+    "max": 0.410459,
+    "median": 0.0325,
+    "min": 0.022625,
+    "n": 20,
+    "p95": 0.046208
+  },
+  "reopen_layout_ms": {
+    "max": 19.892209,
+    "median": 17.3650835,
+    "min": 15.244416,
+    "n": 20,
+    "p95": 18.906791
+  },
+  "reopen_total_ms": {
+    "max": 91.33325,
+    "median": 68.178687,
+    "min": 56.594458,
+    "n": 20,
+    "p95": 88.769958
+  },
+  "variant": "hosting",
+  "warm_start": {
+    "busy_ms": 0.117458,
+    "max_span_ms": 0.05725,
+    "other_update_span_ms": 0,
+    "publish_ms": 0.025084,
+    "publish_span_ms": 0.0525,
+    "publishes": 5,
+    "refresh_wall_ms": 53.419209,
+    "update_spans": 0
+  }
+}

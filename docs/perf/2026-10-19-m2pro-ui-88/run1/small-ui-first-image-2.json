@@ -1,0 +1,29 @@
+{
+  "dataset": "small",
+  "first": {
+    "total_ms": 105.147708
+  },
+  "load_average": {
+    "after": "{ 7.35 7.23 9.65 }",
+    "before": "{ 7.64 7.29 9.68 }"
+  },
+  "mode": "first",
+  "reopen_total_ms": {
+    "max": 45.168125,
+    "median": 43.359229,
+    "min": 39.78225,
+    "n": 20,
+    "p95": 45.027291
+  },
+  "variant": "image",
+  "warm_start": {
+    "busy_ms": 0.12154200000000001,
+    "max_span_ms": 0.059541,
+    "other_update_span_ms": 0,
+    "publish_ms": 0.023458,
+    "publish_span_ms": 0.055084,
+    "publishes": 5,
+    "refresh_wall_ms": 54.132875,
+    "update_spans": 0
+  }
+}

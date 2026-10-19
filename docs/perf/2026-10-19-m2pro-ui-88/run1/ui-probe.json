@@ -1,0 +1,10 @@
+{
+  "bodies_100ms_after_3_publishes_in_one_turn" : 1,
+  "bodies_100ms_after_a_publish" : 1,
+  "bodies_counted_inside_a_span" : 2,
+  "bodies_right_after_a_publish" : 0,
+  "main_run_loop_mode" : "kCFRunLoopDefaultMode",
+  "main_thread" : true,
+  "view_needs_layout_right_after_a_publish" : true,
+  "window_visible" : false
+}
