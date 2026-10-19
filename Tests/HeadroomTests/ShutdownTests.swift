@@ -294,7 +294,9 @@ struct ShutdownTests {
         let t0 = DispatchTime.now().uptimeNanoseconds
         l.requestStop(completion: { stopped.set($0) })
         let requestNs = DispatchTime.now().uptimeNanoseconds - t0
-        #expect(requestNs < 16_000_000, "the request returns at once, without waiting for the save")
+        // Structural: it returned while the save was still held (below). The bound is a loose guard only, so a loaded
+        // runner can't fail it (review of #90).
+        #expect(requestNs < 1_000_000_000, "the request returns without waiting for the save")
         try await Task.sleep(nanoseconds: 300_000_000)
         #expect(stopped.peek == nil, "it completes only after the save")
         gate.signal()
@@ -679,7 +681,7 @@ struct ShutdownCoordinatorTests {
         #expect(beginMs < 1000, "begin returned in \(beginMs) ms")
         // A guard against real blocking (a save or scan on the main thread would be seconds here). This test runs in
         // parallel with other scanning tests, so scheduling jitter is in it; the #8 benchmark measures it alone (B2, B3).
-        #expect((lateness.max() ?? 0) < 200, "main actor late by up to \(lateness.max() ?? 0) ms")
+        #expect((lateness.max() ?? 0) < 1000, "main actor late by up to \(lateness.max() ?? 0) ms")
         await ShutdownTests.expectSame((await ShutdownTests.relaunched(rig, s), s), try await ShutdownTests.baseline(rig),
                                        "coordinator stop")
     }
