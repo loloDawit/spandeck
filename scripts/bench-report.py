@@ -83,6 +83,13 @@ if all("quit_coordinator_during_cold_scan" in res[s_] for s_ in sets):
         lambda r: " / ".join("missing" if q(r)[k] is None else ms(q(r)[k])
                              for k in ("cancel_latency_s", "save_s", "total_to_reply_s")) + " ms")
     row("  outcome", lambda r: q(r)['outcome'])
+if all("quit_coordinator_full_cache" in res[s_] for s_ in sets):
+    f = lambda r: r['quit_coordinator_full_cache']
+    row("Quit since #86 with the whole cache to save: `begin` / heartbeat late, worst",
+        lambda r: f"{f(r)['begin_ms']:.2f} ms / {f(r)['heartbeat_late_ms'].get('max', 0):.1f} ms")
+    row("  save / total to the reply / outcome",
+        lambda r: " / ".join("missing" if f(r)[k] is None else ms(f(r)[k]) for k in ("save_s", "total_to_reply_s"))
+                  + f" ms / {f(r)['outcome']}")
 row("Hover top consumers, cpu / memory (median)",
     lambda r: " / ".join(f"{r['hover_top_consumers_median_ms'][k]:.2f}" for k in ("cpu", "memory")) + " ms")
 row("App refreshes dropped while one runs", lambda r: f"{r['main_thread_during_cold_scan']['overlapping_refreshes_dropped_of_10']} of 10")

@@ -317,6 +317,33 @@ struct PerformanceBenchTests {
                                       "control_cpu_s": control.cpu, "disk_written_bytes": run.written]
         }
 
+        // 9d. Quit with the whole cache to save: the worst case for the quit's duration (the main thread is still
+        //     free). `main` holds every operation and has unsaved changes. Last, since a stopped ledger never scans
+        //     again.
+        try BenchDataset.append(home: box.home, count: 10, now: clock.now, seq: &seq)
+        _ = await Self.refresh(main)
+        let fullMarks = Once()
+        var fullLate: [Double] = []
+        let fullBeat = Task { @MainActor in
+            while !Task.isCancelled {
+                let t0 = ns()
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                fullLate.append(Double(ns() - t0) / 1e6 - 5)
+            }
+        }
+        let fullCoordinator = ShutdownCoordinator(stop: { done in main.requestStop { r in fullMarks.set("saved", ns()); done(r) } })
+        var fullOutcome: ShutdownCoordinator.Outcome?
+        let fullBegin = ns()
+        fullCoordinator.begin { fullOutcome = $0; fullMarks.set("reply", ns()) }
+        let fullBeginMs = Double(ns() - fullBegin) / 1e6
+        while fullOutcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
+        fullBeat.cancel()
+        report["quit_coordinator_full_cache"] = [
+            "outcome": "\(fullOutcome!)", "begin_ms": fullBeginMs, "heartbeat_late_ms": Bench.stats(fullLate),
+            "save_s": span(fullBegin, fullMarks.get("saved")), "total_to_reply_s": span(fullBegin, fullMarks.get("reply")),
+            "cache_bytes": Self.fileSize(cacheURL),
+        ]
+
         let fp = Bench.footprint()
         var ru = rusage()
         getrusage(RUSAGE_SELF, &ru)
