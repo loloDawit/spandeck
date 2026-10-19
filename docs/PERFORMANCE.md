@@ -225,7 +225,9 @@ One ledger per process (memory runs):
 | … save = total to the reply (cache size) | 42 ms (1.4 MB) | 0.34 s (13 MB) | **1.39 s** (48 MB) |
 | Outcome, every quit | saved | saved | saved |
 
-Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit, with the last (cancelled) sleep dropped.
+Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit.
+- At `832a160` the last sample, the sleep that the end of the quit cancels, was still included; later commits drop it.
+- A cancelled sleep is always shorter than a full one, so it can lower the minimum but never raise the worst.
 - 9c's quits last only 23–48 ms, so they hold 4–8 beats.
 - 9d's large quit holds 233, and is the stronger evidence for the main actor staying responsive.
 - `begin` is the synchronous call from `applicationShouldTerminate`. The hop that delivers the reply, AppKit's own run loop while it waits, and the termination itself aren't in these figures.
@@ -238,13 +240,20 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
 - **Before #86** the main thread was blocked for the rest of the scan: 18.0 s on large.
 
 **Scan throughput and accounting cost.**
-- **Interleaved A/B** (`ab-vs-main/`, reproduce with `scripts/bench-ab.py <dir> main new`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Each side's CPU median is averaged over its two rounds.
+- **Interleaved A/B** (`ab-vs-main/`, reproduce with `scripts/bench-ab.py <dir> main new`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Commits, order and each run's load are in its `provenance.json`, written from the run log afterwards. Each side's CPU median is averaged over its two rounds. **Two rounds per side** can show no change to within a few per cent; they can't resolve smaller differences.
   - **Within ±4.4 %:** every scenario on small and medium (cold start, rebuild, warm start, save, both ticks, summary and simulated wake), except one.
   - **The exception:** medium's 5-minute full scan with nothing new, −40.5 %. It is a 2–5 ms figure whose `main` side alone varied from 2.2 to 4.9 ms between rounds: noise.
   - **First-scan throughput:** 36.8 → 37.2 MB/s (small) and 36.6 → 37.3 MB/s (medium). The script computes it as the bytes scanned divided by the cold-start CPU minus the first save's CPU, in 10⁶ bytes, the mean over rounds.
 - **The review fixes alone** (`ab-vs-121aebd/`, small, `scripts/bench-ab.py <dir> old new`): every scenario −7.2 % to +1.7 %, and the negative end is faster (the no-change tick and simulated wake). Throughput 36.7 → 37.2 MB/s.
+- **The final head against the benchmarked commit** (`ab-final-vs-832a160/`, `scripts/bench-ab.py <dir> base final`).
+  - `e8d6ec4` and `832a160` alternated, two rounds each, at a load average of 3.0–3.5. Each file carries an `ab` block: commit, whether `Sources`/`Tests` had local changes (none), load, status.
+  - The later commits changed the scan loop's progress counting (one set and one lookup per file) and moved `flush` behind `DEBUG`.
+  - Every scenario was within −4.6 % to +8.0 %. The +8.0 % is the 0.44 ms no-change tick on small; medium's simulated wake was +6.2 %.
+  - Throughput 37.0 → 37.8 MB/s (small) and 38.8 → 38.3 MB/s (medium).
 - **Against run 4** (a different time and load), run86e's large set is 4.9–12.8 % *faster* in CPU, 37.2 against 33.7 MB/s, and medium within ±10 %.
-  - Small's +13.4 % cold-start CPU in run86e, and +12.8 % in a recheck at load 5.6, came at higher load than run 4. The interleaved A/B, which holds the load equal, shows none of it.
+  - **Small was slower in run86e:** cold start +13.4 %, warm start +10.7 %, rebuild +5.1 %, 5-minute full scan +17.9 %, no-change tick +30.7 % (a 0.5 ms figure), and throughput 38.8 → 33.7 MB/s.
+  - A recheck at a load of 5.6 gave cold start +12.8 %. Both ran under more load than run 4: 8.4–10.6 and 5.6.
+  - The interleaved A/Bs, which hold the load equal, found no such slowdown: small within ±4.2 % of `main`, and within ±8 % between the final head and `832a160`. With two rounds each, they rule out a change of this size, not a few per cent.
   - Large has no A/B. Its comparison is across runs only.
 
 **Timeout and failure behaviour** are verified by tests, not by this benchmark:

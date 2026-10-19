@@ -5,6 +5,17 @@
   - Built with the same flags (`-c release -Xswiftc -enable-testing -Xswiftc -DDEBUG`), each from its own worktree; one `PerformanceBenchTests` process per file.
   - The `main` side has no scenarios 9c/9d, which don't exist before #86.
 - **`ab-vs-121aebd/`:** the same method on small, `old` (`121aebd`, before the review fixes) against `new` (`832a160`). Load average 4.7–5.0.
-- **Compare:** `scripts/bench-ab.py ab-vs-main main new` and `scripts/bench-ab.py ab-vs-121aebd old new`.
-- **Later commits:** they changed only comments, the indexing-progress count (once per file, not per line) and how the benchmark drops a heartbeat's last sample. They didn't touch the scan, checkpoint or save paths these figures measure, so the run wasn't repeated.
+- **`ab-final-vs-832a160/`:** the final head `e8d6ec4` (`final`) against `832a160` (`base`), small and medium, two rounds each, at a load average of 3.0–3.5. Every file carries an `ab` block: commit, local changes in `Sources`/`Tests` (none), load before and after, status, build.
+- **Provenance:**
+  - `ab-vs-main/` and `ab-vs-121aebd/` have a `provenance.json`, written from the run log afterwards, since their JSON has no `ab` block.
+  - Their `new` side is `832a160`; the other sides are `587f1c3` and `121aebd`.
+- **Compare:** `scripts/bench-ab.py ab-vs-main main new`, `scripts/bench-ab.py ab-vs-121aebd old new` and `scripts/bench-ab.py ab-final-vs-832a160 base final`.
+- **Later commits** (after `832a160`):
+  - they changed the scan loop's indexing-progress count (one set and one lookup per file);
+  - they moved `Ledger.flush` behind `DEBUG`;
+  - they changed how the benchmark drops a heartbeat's last sample;
+  - they changed comments.
+
+  `ab-final-vs-832a160/` measures their cost. The full run wasn't repeated, so the top-level figures are `832a160`'s.
+- **Heartbeat at `832a160`:** the top-level 9c/9d heartbeat statistics still include the last, cancelled sleep. It is never longer than a full sleep, so it can't raise the worst.
 - **Not committed:** run `run86e-small-recheck` (small at `832a160`, load 5.6), and the full runs on `121aebd`, `83fa19b` and `86236c3`. They're summarized on PR #90.
