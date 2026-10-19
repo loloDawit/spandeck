@@ -135,10 +135,11 @@ def main(root):
     print(table(["Dataset, messages", "Refresh ms", "Written MB", "Live, highest (20 ms samples)", "Live, after",
                  "Footprint, after"], rows))
 
-    loads = sorted({r["load_average"]["before"] for v in runs.values() for r in v})
+    # One-minute load average, the first of the three `vm.loadavg` figures.
+    loads = [float(r["load_average"]["before"].strip("{} ").split()[0]) for v in runs.values() for r in v]
     levels = sorted({x["pressure_level"] for v in runs.values() for r in v for x in r["phases"]})
-    print(f"\nLoad average before each process: {loads[0]} … {loads[-1]}. Memory pressure levels seen at phases: {levels} "
-          "(1 normal, 2 warning, 4 critical).")
+    print(f"\nOne-minute load average before each process: {min(loads):.2f}–{max(loads):.2f}. Memory pressure levels "
+          f"seen at phases: {levels} (1 normal, 2 warning, 4 critical).")
 
 
 if __name__ == "__main__":

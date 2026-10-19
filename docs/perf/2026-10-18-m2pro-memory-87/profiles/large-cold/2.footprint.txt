@@ -1,0 +1,36 @@
+======================================================================
+swiftpm-testing-helper [35609]: 64-bit    Footprint: 187 MB (16384 bytes per page)
+======================================================================
+
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+ 106 MB        0 B          0 B        103    MALLOC_SMALL
+  76 MB        0 B          0 B          3    MALLOC_LARGE
+2128 KB        0 B          0 B         11    MALLOC metadata
+ 737 KB        0 B          0 B          1    page table
+ 661 KB        0 B          0 B        576    __DATA_DIRTY
+ 566 KB        0 B          0 B        630    __DATA
+ 256 KB        0 B          0 B         12    stack
+ 208 KB        0 B          0 B          1    MALLOC_TINY
+ 144 KB      16 KB          0 B        682    __DATA_CONST
+ 144 KB        0 B          0 B         11    untagged (VM_ALLOCATE)
+ 144 KB        0 B          0 B          1    tag 22
+ 123 KB        0 B          0 B       1737    unused dyld shared cache area
+  80 KB        0 B          0 B          2    __TPRO_CONST
+  32 KB        0 B          0 B          1    Activity Tracing
+  32 KB        0 B          0 B          1    MALLOC_NANO
+  16 KB    2192 KB          0 B        715    __TEXT
+  16 KB        0 B          0 B          1    os_alloc_once
+  10 KB        0 B          0 B        367    __AUTH
+    0 B    1136 KB          0 B          5    mapped file
+    0 B      80 KB          0 B          6    __LINKEDIT
+    0 B        0 B          0 B          1    __CTF
+    0 B        0 B          0 B        675    __AUTH_CONST
+    0 B        0 B          0 B          1    __FONT_DATA
+    ---        ---          ---        ---    ---
+ 187 MB    3424 KB          0 B       5545    TOTAL
+
+Auxiliary data:
+    phys_footprint: 187 MB
+    phys_footprint_peak: 573 MB
+

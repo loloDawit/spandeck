@@ -1,0 +1,224 @@
+Process:         swiftpm-testing-helper [81082]
+Path:            /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper
+Load Address:    0x100000000
+Identifier:      swiftpm-testing-helper
+Version:         24907
+Build Info:      IDEApplication-24959000000000000~2 (17F113)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  debugserver [81083]
+Target Type:     live task
+
+Date/Time:       2026-10-18 23:56:15.757 -0700
+Launch Time:     2026-10-18 23:56:05.787 -0700
+OS Version:      macOS 26.5 (25F71)
+Report Version:  7
+Analysis Tool:   /usr/bin/heap
+
+Physical footprint:         31.9M
+Physical footprint (peak):  143.5M
+Idle exit:                  untracked
+----
+
+Process 81082: 1 zone
+
+All zones: 3001 nodes malloced - Sizes: 48KB[1] 28KB[1] 20KB[4] 16KB[7] 14KB[1] 12KB[2] 10KB[8] 7KB[1] 6KB[1] 5KB[11] 4KB[8] 3.5KB[6] 3KB[16] 2.5KB[12] 2KB[9] 1.75KB[1] 1.5KB[1] 1.25KB[18] 1KB[53] 896[56] 768[21] 640[43] 512[13] 448[16] 384[14] 320[60] 256[35] 224[62] 192[18] 160[56] 128[117] 112[33] 96[48] 80[101] 64[382] 48[276] 32[1220] 16[269] 
+
+Found:  223 ObjC classes  188 Swift classes  26 C++ classes  76 CFTypes
+Type names for non-objects could be derived from allocation backtraces if the process used MallocStackLogging
+
+-----------------------------------------------------------------------
+All zones: 3001 nodes (978000 bytes)
+
+   COUNT      BYTES       AVG   CLASS_NAME                                        TYPE    BINARY
+   =====      =====       ===   ==========                                        ====    ======
+    1202     470800     391.7   non-object                                                
+      74     183296    2477.0   Task stack                                        Swift   libswift_Concurrency.dylib
+       5      81920   16384.0   Swift Metadata                                    C       libswiftCore.dylib
+       2      40960   20480.0   Swift._ContiguousArrayStorage<_TestDiscovery.SectionBounds>  Swift   libswiftCore.dylib
+     688      22016      32.0   Class.data (class_rw_t)                           C       libobjc.A.dylib
+       5      20480    4096.0   @autoreleasepool content                          C       libobjc.A.dylib
+      24      12208     508.7   NSMutableDictionary (Storage)                     C       CoreFoundation
+     148      11840      80.0   Class.methodCache._buckets (bucket_t)             C       libobjc.A.dylib
+       3       7680    2560.0   icu::DecimalFormatSymbols                         C++     libicucore.A.dylib
+      34       7616     224.0   icu::UnicodeSet                                   C++     libicucore.A.dylib
+       8       7376     922.0   CFDictionary (Value Storage)                      C       CoreFoundation
+      18       5376     298.7   Class.data.methods (method_array_t)               C       libobjc.A.dylib
+       1       5120    5120.0   Swift._DictionaryStorage<Swift.String, Swift.String>  Swift   libswiftCore.dylib
+      60       4912      81.9   Swift.StringStorage                               Swift   libswiftCore.dylib
+       6       4272     712.0   CFDictionary (Key Storage)                        C       CoreFoundation
+      67       4112      61.4   CFString                                          ObjC    CoreFoundation
+      81       3888      48.0   Class.data.extended (class_rw_ext_t)              C       libobjc.A.dylib
+       2       3104    1552.0   CFDictionary (Weak Key Storage)                   C       CoreFoundation
+      44       3072      69.8   Swift._ContiguousArrayStorage<Swift.String>       Swift   libswiftCore.dylib
+       1       3072    3072.0   CFRunLoop                                         CFType  CoreFoundation
+       5       2880     576.0   Swift._DictionaryStorage<Swift.String, Testing.Graph<Swift.String, Swift.Optional<Testing.Runner.Plan.Step>>>  Swift   libswiftCore.dylib
+      35       2800      80.0   Class.data.readonly (class_ro_t)                  C       libobjc.A.dylib
+       2       2560    1280.0   Class.data.methods.lists (method_list_t)          C       libobjc.A.dylib
+       2       2560    1280.0   icu::SharedDateFormatSymbols                      C++     libicucore.A.dylib
+      31       2432      78.5   CFData                                            ObjC    CoreFoundation
+       7       2240     320.0   Task stack                                        Swift   libswift_Concurrency.dylib
+       5       2240     448.0   Swift._DictionaryStorage<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestDataKey, Testing.Graph<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestDataKey, Swift.Optional<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestData>>>  Swift   libswiftCore.dylib
+       3       2112     704.0   Swift._DictionaryStorage<Swift.String, Any>       Swift   libswiftCore.dylib
+       1       2048    2048.0   Swift._DictionaryStorage<Swift.String, Headroom.Price>  Swift   libswiftCore.dylib
+       3       1920     640.0   Foundation.LockedState<Foundation._LocaleICU.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+      15       1808     120.5   Swift HeapGenericLocalVariable                    C       libswiftCore.dylib
+       7       1568     224.0   icu::OlsonTimeZone                                C++     libicucore.A.dylib
+       4       1536     384.0   icu::TimeArrayTimeZoneRule                        C++     libicucore.A.dylib
+       1       1536    1536.0   llvm::DenseMap<TypeNameCacheKey, std::pair<const char *, size_t>>  C++     libswiftCore.dylib
+      25       1520      60.8   Closure context                                   Swift   <unknown>
+       2       1360     680.0   Swift._ContiguousArrayStorage<Testing.Trait>      Swift   libswiftCore.dylib
+       6       1344     224.0   URLParseInfo                                      Swift   Foundation
+       4       1280     320.0   Swift._ContiguousArrayStorage<(key: Swift.String, value: Testing.Graph<Swift.String, Swift.Optional<Testing.Runner.Plan.Step>>)>  Swift   libswiftCore.dylib
+       4       1280     320.0   icu::GregorianCalendar                            C++     libicucore.A.dylib
+       4       1280     320.0   icu::number::impl::ConstantMultiFieldModifier     C++     libicucore.A.dylib
+       1       1280    1280.0   Swift._DictionaryStorage<Swift.ObjectIdentifier, Swift.Array<Swift.String>>  Swift   libswiftCore.dylib
+       1       1280    1280.0   Swift._DictionaryStorage<Swift.UInt64, Testing.Configuration>  Swift   libswiftCore.dylib
+       9       1152     128.0   CFPrefsPlistSource                                ObjC    CoreFoundation
+       3       1152     384.0   ColorSyncProfile                                  CFType  ColorSync
+      16       1024      64.0   OS_os_log                                         ObjC    libsystem_trace.dylib
+       1       1024    1024.0   icu::DateFormatSymbols                            C++     libicucore.A.dylib
+      30        960      32.0   NSMutableDictionary                               ObjC    CoreFoundation
+       6        960     160.0   icu::SimpleTimeZone                               C++     libicucore.A.dylib
+       3        960     320.0   xpc_connection_t                                  ObjC    libxpc.dylib
+       7        784     112.0   NSMutableArray (Storage)                          C       CoreFoundation
+       1        768     768.0   Swift._DictionaryStorage<Testing.Tag, Testing.Tag.Color>  Swift   libswiftCore.dylib
+       2        704     352.0   Swift._DictionaryStorage<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestDataKey, Testing.Graph<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestDataKey, Swift.Optional<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc).TestData>>>._seed (malloc)          libswiftCore.dylib
+       3        672     224.0   _LocaleICU                                        Swift   Foundation
+       5        640     128.0   CFPrefsManagedSource                              ObjC    CoreFoundation
+       5        640     128.0   dispatch_queue_t (serial)                         ObjC    libdispatch.dylib
+       5        640     128.0   dispatch_source_t                                 ObjC    libdispatch.dylib
+       4        640     160.0   dispatch_mach_t                                   ObjC    libdispatch.dylib
+       2        640     320.0   SCClientSession                                   C++     CarbonCore
+       1        640     640.0   CFDateFormatter                                   CFType  CoreFoundation
+       1        640     640.0   Swift.TaskLocal<Swift.Optional<Testing.Runner.(RuntimeState in $104b60438)>>  Swift   libswift_Concurrency.dylib
+       1        640     640.0   Swift._DictionaryStorage<Swift.String, Swift.Optional<Headroom.Price>>  Swift   libswiftCore.dylib
+       9        576      64.0   CFDictionary                                      ObjC    CoreFoundation
+       4        512     128.0   CFPrefsSuiteSearchListSource                      ObjC    CoreFoundation
+       6        480      80.0   _SwiftURL                                         Swift   Foundation
+       3        480     160.0   _CalendarGregorian                                Swift   Foundation
+       3        480     160.0   icu::DecimalFormat                                C++     libicucore.A.dylib
+       7        464      66.3   CFArray                                           ObjC    CoreFoundation
+       5        464      92.8   NSURL                                             ObjC    CoreFoundation
+       9        448      49.8   __NSMallocBlock__                                 ObjC    libsystem_blocks.dylib
+       1        448     448.0   Swift._ContiguousArrayStorage<Testing.Test>       Swift   libswiftCore.dylib
+       1        448     448.0   icu::SimpleDateFormat                             C++     libicucore.A.dylib
+       4        416     104.0   CGColor                                           CFType  CoreGraphics
+       4        384      96.0   CGColorSpace                                      CFType  CoreGraphics
+       4        384      96.0   icu::AnnualTimeZoneRule                           C++     libicucore.A.dylib
+       3        384     128.0   Swift._DictionaryStorage<Swift.ObjectIdentifier, Testing.(_TaskCanceller in $104b60fc4)>  Swift   libswiftCore.dylib
+       2        384     192.0   CFXNotificationRegistrar                          CFType  CoreFoundation
+       1        384     384.0   Swift._ContiguousArrayStorage<Swift.UInt64>       Swift   libswiftCore.dylib
+       1        384     384.0   Swift._DictionaryStorage<Swift.String, HeadroomTests.BenchDataset>  Swift   libswiftCore.dylib
+       7        336      48.0   NSMutableArray                                    ObjC    CoreFoundation
+       4        320      80.0   icu::InitialTimeZoneRule                          C++     libicucore.A.dylib
+       1        320     320.0   Pricing                                           Swift   HeadroomPackageTests
+       3        288      96.0   NSLock                                            ObjC    Foundation
+       5        256      51.2   Swift._ContiguousArrayStorage<Swift.UInt8>        Swift   libswiftCore.dylib
+       2        256     128.0   CFPrefsSearchListSource                           ObjC    CoreFoundation
+       2        256     128.0   NSMapTable                                        ObjC    Foundation
+       1        256     256.0   Swift.ManagedBuffer<Testing.Event.HumanReadableOutputRecorder.(Context in $104b5f2bc), __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       3        240      80.0   NSHashTable                                       ObjC    Foundation
+       1        224     224.0   CFBundle                                          CFType  CoreFoundation
+       1        224     224.0   CFRunLoopMode                                     CFType  CoreFoundation
+       1        224     224.0   NSPathStore2                                      ObjC    Foundation
+       1        224     224.0   Swift._DictionaryStorage<Swift.String, Foundation._TimeZoneProtocol & Swift.AnyObject>  Swift   libswiftCore.dylib
+       6        192      32.0   Foundation.LockedState<Swift.Optional<Swift.AnyObject>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       6        192      32.0   Foundation.LockedState<Swift.Optional<__C.NSURL>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       6        192      32.0   _SwiftURL.ResourceInfo                            Swift   Foundation
+       4        192      48.0   _NSStateMarker                                    ObjC    AppKit
+       4        192      48.0   icu::DateTimeRule                                 C++     libicucore.A.dylib
+       2        192      96.0   icu::NumberingSystem                              C++     libicucore.A.dylib
+       1        192     192.0   _NSThreadData                                     ObjC    Foundation
+       3        176      58.7   CFSet (Value Storage)                             C       CoreFoundation
+       2        160      80.0   xpc_pipe_t                                        ObjC    libxpc.dylib
+       1        160     160.0   Swift._DictionaryStorage<Foundation.RegexPatternCache.(Key in $186746e2c), _StringProcessing.Regex<_StringProcessing.AnyRegexOutput>>  Swift   libswiftCore.dylib
+       1        160     160.0   Swift._DictionaryStorage<Swift.String, Foundation._LocaleProtocol & Swift.AnyObject>  Swift   libswiftCore.dylib
+       1        160     160.0   Swift._DictionaryStorage<Testing.Test.Case.ID, Swift.Int>  Swift   libswiftCore.dylib
+       1        160     160.0   _StringProcessing.Regex<_StringProcessing.AnyRegexOutput>.(ProgramBox in $288ad8060)<>  Swift   libswift_StringProcessing.dylib
+       3        144      48.0   CFSet                                             ObjC    CoreFoundation
+       3        144      48.0   icu::UVector                                      C++     libicucore.A.dylib
+       2        128      64.0   CFPrefsSource                                     ObjC    CoreFoundation
+       2        128      64.0   icu::UnicodeString                                C++     libicucore.A.dylib
+       1        128     128.0   Foundation.LockedState<Foundation.TimeZoneCache.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1        128     128.0   OS_dispatch_queue_runloop                         ObjC    libdispatch.dylib
+       1        128     128.0   Swift._DictionaryStorage<Swift.String, Foundation._NSSwiftLocale>  Swift   libswiftCore.dylib
+       1        128     128.0   Swift._DictionaryStorage<Swift.String, Foundation._NSSwiftTimeZone>  Swift   libswiftCore.dylib
+       1        128     128.0   Swift._DictionaryStorage<Testing.Backtrace.(_ErrorMappingCacheKey in $104b604dc), Testing.Backtrace.(_ErrorMappingCacheEntry in $104b60500)>  Swift   libswiftCore.dylib
+       7        112      16.0   NSMutableDictionary.cow (struct __cow_state_t)    C       CoreFoundation
+       1        112     112.0   Swift._DictionaryStorage<Foundation.Calendar.Identifier, Foundation._CalendarProtocol & Swift.AnyObject>  Swift   libswiftCore.dylib
+       1        112     112.0   _CFXPreferences                                   ObjC    CoreFoundation
+       3         96      32.0   NSHashTable (Weak Object Storage)                 C       Foundation
+       3         96      32.0   NSNumber                                          ObjC    CoreFoundation
+       3         96      32.0   Swift.ManagedBuffer<Swift.Optional<Swift.UnsafeCurrentTask>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       3         96      32.0   icu::SharedCalendar                               C++     libicucore.A.dylib
+       3         96      32.0   icu::TimeZoneTransition                           C++     libicucore.A.dylib
+       2         96      48.0   Foundation.LockedState<Foundation._NSSwiftTimeZone.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       2         96      48.0   _TimeZoneICU                                      Swift   Foundation
+       1         96      96.0   Swift.ManagedBuffer<Swift.ContiguousArray<Swift.ContiguousArray<_TestDiscovery.SectionBounds>>, __C._opaque_pthread_mutex_t>  Swift   libswiftCore.dylib
+       1         96      96.0   Swift._ContiguousArrayStorage<_RegexParser.CaptureList.Capture>  Swift   libswiftCore.dylib
+       1         80      80.0   Foundation.LockedState<Foundation._NSSwiftProcessInfo.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         80      80.0   NSBundle                                          ObjC    Foundation
+       1         80      80.0   NSPointerArray                                    ObjC    Foundation
+       2         64      32.0   CFNotificationCenter                              CFType  CoreFoundation
+       2         64      32.0   Foundation.LockedState<Foundation._TimeZoneICU.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       2         64      32.0   Foundation.LockedState<Swift.UnsafePointer<Swift.Optional<Swift.UnsafeMutableRawPointer>>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       2         64      32.0   NSMapTable (Key Storage)                          C       Foundation
+       2         64      32.0   NSMapTable (Weak Value Storage)                   C       Foundation
+       2         64      32.0   _NSSwiftLocale                                    Swift   Foundation
+       2         64      32.0   _NSSwiftTimeZone                                  Swift   Foundation
+       2         64      32.0   icu::SharedNumberFormat                           C++     libicucore.A.dylib
+       1         64      64.0   FakeTransport                                     Swift   HeadroomPackageTests
+       1         64      64.0   Foundation.LockedState<Foundation.LocaleCache.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         64      64.0   SCService                                         C++     CarbonCore
+       1         64      64.0   Swift._ContiguousArrayStorage<Swift.Array<Swift.UInt8>>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._ContiguousArrayStorage<_RegexParser.AST.MatchingOption>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._ContiguousArrayStorage<_RegexParser.AST.Node>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._ContiguousArrayStorage<_StringProcessing.DSLTree.Node>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._ContiguousArrayStorage<_StringProcessing.Instruction>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._IteratorBox<Swift.UnfoldSequence<Testing.Test.Case, (iterator: Swift.CollectionOfOne<()>.Iterator<>, testCaseIDs: Swift.Dictionary<Testing.Test.Case.ID, Swift.Int>)>>  Swift   libswiftCore.dylib
+       1         64      64.0   _CFXPreferencesHandle                             ObjC    CoreFoundation
+       1         64      64.0   _NSMainThread                                     ObjC    Foundation
+       1         64      64.0   _NSSwiftProcessInfo                               Swift   Foundation
+       1         64      64.0   __NSBundleTables                                  ObjC    Foundation
+       1         64      64.0   icu::UnifiedCache                                 C++     libicucore.A.dylib
+       1         48      48.0   CSBackupSession                                   CFType  CarbonCore
+       1         48      48.0   Closure context (unknown layout)                  Swift   <unknown>
+       1         48      48.0   Foundation.LockedState<Foundation._ProcessInfo.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   Foundation.LockedState<Swift.Optional<Foundation._CalendarProtocol & Swift.AnyObject>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   Foundation.LockedState<Swift.Optional<Foundation._LocaleProtocol & Swift.AnyObject>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   Foundation.LockedState<Swift.Optional<Swift.String>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   Swift.ManagedBuffer<Foundation.Calendar, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         48      48.0   Swift.ManagedBuffer<Testing.Configuration.(_All in $104b6045c), __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         48      48.0   Swift._ContiguousArrayStorage<Swift.ContiguousArray<_TestDiscovery.SectionBounds>>  Swift   libswiftCore.dylib
+       1         48      48.0   Swift._ContiguousArrayStorage<Swift.Dictionary<Swift.String, Any>>  Swift   libswiftCore.dylib
+       1         48      48.0   Swift._ContiguousArrayStorage<_StringProcessing.MatchingOptions.(Representation in $288ad8c18)>  Swift   libswiftCore.dylib
+       1         48      48.0   _StringProcessing.Regex<_StringProcessing.AnyRegexOutput>.Program<>  Swift   libswift_StringProcessing.dylib
+       1         48      48.0   _TimeZoneGMTICU                                   Swift   Foundation
+       1         48      48.0   icu::Locale                                       C++     libicucore.A.dylib
+       1         48      48.0   icu::number::impl::AdoptingSignumModifierStore    C++     libicucore.A.dylib
+       2         32      16.0   NSArray                                           ObjC    CoreFoundation
+       1         32      32.0   CFMainExecutor                                    Swift   libswift_Concurrency.dylib
+       1         32      32.0   Foundation.LockedState<Swift.Dictionary<Foundation.Calendar.Identifier, Foundation._CalendarProtocol & Swift.AnyObject>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         32      32.0   Foundation.LockedState<Swift.Dictionary<Foundation.RegexPatternCache.(Key in $186746e2c), _StringProcessing.Regex<_StringProcessing.AnyRegexOutput>>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         32      32.0   Foundation.LockedState<Swift.Optional<Foundation._NSSwiftLocale>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         32      32.0   NSDictionary                                      ObjC    CoreFoundation
+       1         32      32.0   NSFileManager                                     ObjC    Foundation
+       1         32      32.0   NSISO8601DateFormatter                            ObjC    Foundation
+       1         32      32.0   NSPointerArray (Object Storage)                   C       Foundation
+       1         32      32.0   Swift.ManagedBuffer<Swift.Bool, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Dictionary<Swift.ObjectIdentifier, Swift.Array<Swift.String>>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Dictionary<Testing.Backtrace.(_ErrorMappingCacheKey in $104b604dc), Testing.Backtrace.(_ErrorMappingCacheEntry in $104b60500)>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Int, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Int32, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Optional<@convention(c) @Sendable (Swift.UnsafeMutableRawPointer) -> ()>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Optional<@convention(c) @Sendable (Swift.UnsafeMutableRawPointer, Swift.UnsafeRawPointer, Swift.UnsafeRawPointer) -> ()>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.TaskLocal<Swift.Dictionary<Swift.ObjectIdentifier, Testing.(_TaskCanceller in $104b60fc4)>>  Swift   libswift_Concurrency.dylib
+       1         32      32.0   Swift._SequenceBox<Testing.Test.Case.Generator<Swift.CollectionOfOne<()>>>  Swift   libswiftCore.dylib
+       1         32      32.0   _ProcessInfo                                      Swift   Foundation
+       1         32      32.0   __NSExactBlockVariable__                          ObjC    libsystem_blocks.dylib
+       1         32      32.0   icu::SharedObject                                 C++     libicucore.A.dylib
+       1         16      16.0   CFTaskExecutor                                    Swift   libswift_Concurrency.dylib
+       1         16      16.0   _NSFileManagerBridge                              Swift   Foundation
+       1         16      16.0   _NSSwiftCalendar                                  Swift   Foundation
+

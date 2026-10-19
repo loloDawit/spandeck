@@ -1,0 +1,98 @@
+{
+  "dataset": "small",
+  "footprint_before": 6455872,
+  "load_average": {
+    "after": "{ 5.46 7.08 7.55 }",
+    "before": "{ 5.46 7.08 7.55 }"
+  },
+  "mode": "cancel",
+  "phases": [
+    {
+      "footprint": 6931032,
+      "footprint_peak": 6931032,
+      "malloc_allocated": 33554432,
+      "malloc_blocks": 2301,
+      "malloc_in_use": 622864,
+      "phase": "start",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 17334920,
+      "footprint_peak": 17400456,
+      "malloc_allocated": 46137344,
+      "malloc_blocks": 17109,
+      "malloc_in_use": 3026000,
+      "phase": "stopped",
+      "pressure_level": 2,
+      "result": "saved",
+      "stop_ms": 150
+    },
+    {
+      "footprint": 17334920,
+      "footprint_peak": 17400456,
+      "malloc_allocated": 46137344,
+      "malloc_blocks": 8715,
+      "malloc_in_use": 1234736,
+      "phase": "released",
+      "pressure_level": 2
+    },
+    {
+      "footprint": 27706040,
+      "footprint_peak": 27706040,
+      "malloc_allocated": 58720256,
+      "malloc_blocks": 28240,
+      "malloc_in_use": 5388096,
+      "phase": "resumed",
+      "pressure_level": 2,
+      "series_max_footprint": 22217376,
+      "series_max_in_use": 11033424,
+      "series_ms_footprint_in_use": [
+        [
+          0,
+          17400456,
+          1238656
+        ],
+        [
+          20,
+          19776136,
+          3921552
+        ],
+        [
+          45,
+          19989128,
+          4135872
+        ],
+        [
+          69,
+          20218504,
+          4759600
+        ],
+        [
+          93,
+          20447880,
+          5014544
+        ],
+        [
+          118,
+          20693640,
+          5276704
+        ],
+        [
+          143,
+          22217376,
+          11033424
+        ]
+      ]
+    },
+    {
+      "footprint": 27706040,
+      "footprint_peak": 27706040,
+      "malloc_allocated": 58720256,
+      "malloc_blocks": 28201,
+      "malloc_in_use": 4657936,
+      "phase": "after pressure relief (diagnostic)",
+      "pressure_level": 2,
+      "relief_bytes": 0
+    }
+  ]
+}

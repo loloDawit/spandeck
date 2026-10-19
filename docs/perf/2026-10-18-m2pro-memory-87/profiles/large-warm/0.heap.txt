@@ -1,0 +1,140 @@
+Process:         swiftpm-testing-helper [37237]
+Path:            /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper
+Load Address:    0x100000000
+Identifier:      swiftpm-testing-helper
+Version:         24907
+Build Info:      IDEApplication-24959000000000000~2 (17F113)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  debugserver [37238]
+Target Type:     live task
+
+Date/Time:       2026-10-18 23:49:48.012 -0700
+Launch Time:     2026-10-18 23:49:43.351 -0700
+OS Version:      macOS 26.5 (25F71)
+Report Version:  7
+Analysis Tool:   /usr/bin/heap
+
+Physical footprint:         7121K
+Physical footprint (peak):  7121K
+Idle exit:                  untracked
+----
+
+Process 37237: 1 zone
+
+All zones: 1799 nodes malloced - Sizes: 20KB[3] 16KB[3] 12KB[1] 10KB[8] 7KB[1] 6KB[1] 5KB[8] 4KB[15] 3.5KB[6] 3KB[6] 2.5KB[7] 2KB[6] 1.75KB[1] 1.5KB[1] 1.25KB[13] 1KB[52] 896[2] 768[3] 640[12] 512[7] 448[14] 384[9] 320[30] 256[20] 224[8] 192[16] 160[17] 128[36] 112[17] 96[38] 80[75] 64[279] 48[156] 32[826] 16[102] 
+
+Found:  184 ObjC classes  133 Swift classes  2 C++ classes  69 CFTypes
+Type names for non-objects could be derived from allocation backtraces if the process used MallocStackLogging
+
+-----------------------------------------------------------------------
+All zones: 1799 nodes (580832 bytes)
+
+   COUNT      BYTES       AVG   CLASS_NAME                                        TYPE    BINARY
+   =====      =====       ===   ==========                                        ====    ======
+      74     183296    2477.0   Task stack                                        Swift   libswift_Concurrency.dylib
+     541     141776     262.1   non-object                                                
+      13      53248    4096.0   @autoreleasepool content                          C       libobjc.A.dylib
+       3      49152   16384.0   Swift Metadata                                    C       libswiftCore.dylib
+       2      40960   20480.0   Swift._ContiguousArrayStorage<_TestDiscovery.SectionBounds>  Swift   libswiftCore.dylib
+     556      17792      32.0   Class.data (class_rw_t)                           C       libobjc.A.dylib
+     122      11152      91.4   Swift.StringStorage                               Swift   libswiftCore.dylib
+       6       7232    1205.3   CFDictionary (Value Storage)                      C       CoreFoundation
+      18       5376     298.7   Class.data.methods (method_array_t)               C       libobjc.A.dylib
+       1       5120    5120.0   Swift._DictionaryStorage<Swift.String, Swift.String>  Swift   libswiftCore.dylib
+      69       4352      63.1   Class.methodCache._buckets (bucket_t)             C       libobjc.A.dylib
+       4       4128    1032.0   CFDictionary (Key Storage)                        C       CoreFoundation
+       2       4096    2048.0   _NSCallStackArray._frames (malloc[])              C       Foundation
+      69       3312      48.0   Class.data.extended (class_rw_ext_t)              C       libobjc.A.dylib
+       2       3104    1552.0   CFDictionary (Weak Key Storage)                   C       CoreFoundation
+       1       3072    3072.0   CFRunLoop                                         CFType  CoreFoundation
+      43       3024      70.3   Swift._ContiguousArrayStorage<Swift.String>       Swift   libswiftCore.dylib
+       5       2880     576.0   Swift._DictionaryStorage<Swift.String, Testing.Graph<Swift.String, Swift.Optional<Testing.Runner.Plan.Step>>>  Swift   libswiftCore.dylib
+      35       2800      80.0   Class.data.readonly (class_ro_t)                  C       libobjc.A.dylib
+       2       2560    1280.0   Class.data.methods.lists (method_list_t)          C       libobjc.A.dylib
+       7       2240     320.0   Task stack                                        Swift   libswift_Concurrency.dylib
+       5       2240     448.0   Swift._DictionaryStorage<Testing.Event.HumanReadableOutputRecorder.(Context in $104b3b2bc).TestDataKey, Testing.Graph<Testing.Event.HumanReadableOutputRecorder.(Context in $104b3b2bc).TestDataKey, Swift.Optional<Testing.Event.HumanReadableOutputRecorder.(Context in $104b3b2bc).TestData>>>  Swift   libswiftCore.dylib
+       1       2048    2048.0   Swift._DictionaryStorage<Swift.String, Headroom.Price>  Swift   libswiftCore.dylib
+      27       1584      58.7   CFData                                            ObjC    CoreFoundation
+       1       1536    1536.0   llvm::DenseMap<TypeNameCacheKey, std::pair<const char *, size_t>>  C++     libswiftCore.dylib
+       2       1360     680.0   Swift._ContiguousArrayStorage<Testing.Trait>      Swift   libswiftCore.dylib
+       6       1344     224.0   URLParseInfo                                      Swift   Foundation
+      22       1280      58.2   Closure context                                   Swift   <unknown>
+       4       1280     320.0   Swift._ContiguousArrayStorage<(key: Swift.String, value: Testing.Graph<Swift.String, Swift.Optional<Testing.Runner.Plan.Step>>)>  Swift   libswiftCore.dylib
+       1       1280    1280.0   Swift._DictionaryStorage<Swift.ObjectIdentifier, Swift.Array<Swift.String>>  Swift   libswiftCore.dylib
+       1       1280    1280.0   Swift._DictionaryStorage<Swift.UInt64, Testing.Configuration>  Swift   libswiftCore.dylib
+       3       1152     384.0   ColorSyncProfile                                  CFType  ColorSync
+       1        768     768.0   Swift._DictionaryStorage<Testing.Tag, Testing.Tag.Color>  Swift   libswiftCore.dylib
+      11        704      64.0   OS_os_log                                         ObjC    libsystem_trace.dylib
+       5        640     128.0   dispatch_source_t                                 ObjC    libdispatch.dylib
+       2        640     320.0   SCClientSession                                   C++     CarbonCore
+       1        640     640.0   Swift.TaskLocal<Swift.Optional<Testing.Runner.(RuntimeState in $104b3c438)>>  Swift   libswift_Concurrency.dylib
+       3        608     202.7   NSMutableDictionary (Storage)                     C       CoreFoundation
+       6        480      80.0   _SwiftURL                                         Swift   Foundation
+       1        448     448.0   Swift._ContiguousArrayStorage<Testing.Test>       Swift   libswiftCore.dylib
+       4        416     104.0   CGColor                                           CFType  CoreGraphics
+       6        384      64.0   CFDictionary                                      ObjC    CoreFoundation
+       4        384      96.0   CGColorSpace                                      CFType  CoreGraphics
+       3        384     128.0   Swift._DictionaryStorage<Swift.ObjectIdentifier, Testing.(_TaskCanceller in $104b3cfc4)>  Swift   libswiftCore.dylib
+       1        384     384.0   NSMutableArray (Storage)                          C       CoreFoundation
+       1        384     384.0   Swift._ContiguousArrayStorage<Swift.UInt64>       Swift   libswiftCore.dylib
+       1        384     384.0   Swift._DictionaryStorage<Swift.String, HeadroomTests.BenchDataset>  Swift   libswiftCore.dylib
+       4        368      92.0   NSURL                                             ObjC    CoreFoundation
+       1        320     320.0   Pricing                                           Swift   HeadroomPackageTests
+       5        256      51.2   Swift._ContiguousArrayStorage<Swift.UInt8>        Swift   libswiftCore.dylib
+       2        256     128.0   dispatch_queue_t (serial)                         ObjC    libdispatch.dylib
+       1        256     256.0   Swift.ManagedBuffer<Testing.Event.HumanReadableOutputRecorder.(Context in $104b3b2bc), __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1        224     224.0   CFRunLoopMode                                     CFType  CoreFoundation
+       6        192      32.0   Foundation.LockedState<Swift.Optional<Swift.AnyObject>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       6        192      32.0   Foundation.LockedState<Swift.Optional<__C.NSURL>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       6        192      32.0   _SwiftURL.ResourceInfo                            Swift   Foundation
+       4        192      48.0   _NSStateMarker                                    ObjC    AppKit
+       4        192      48.0   __NSMallocBlock__                                 ObjC    libsystem_blocks.dylib
+       2        192      96.0   NSLock                                            ObjC    Foundation
+       2        192      96.0   Swift HeapGenericLocalVariable                    C       libswiftCore.dylib
+       1        192     192.0   _NSThreadData                                     ObjC    Foundation
+       2        176      88.0   CFString                                          ObjC    CoreFoundation
+       5        160      32.0   NSMutableDictionary                               ObjC    CoreFoundation
+       2        160      80.0   xpc_pipe_t                                        ObjC    libxpc.dylib
+       1        160     160.0   Swift._DictionaryStorage<Testing.Test.Case.ID, Swift.Int>  Swift   libswiftCore.dylib
+       1        160     160.0   dispatch_mach_t                                   ObjC    libdispatch.dylib
+       1        128     128.0   OS_dispatch_queue_runloop                         ObjC    libdispatch.dylib
+       1        128     128.0   Swift._DictionaryStorage<Testing.Backtrace.(_ErrorMappingCacheKey in $104b3c4dc), Testing.Backtrace.(_ErrorMappingCacheEntry in $104b3c500)>  Swift   libswiftCore.dylib
+       3         96      32.0   Swift.ManagedBuffer<Swift.Optional<Swift.UnsafeCurrentTask>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       2         96      48.0   CFSet                                             ObjC    CoreFoundation
+       2         96      48.0   NSError                                           ObjC    Foundation
+       2         96      48.0   _NSCallStackArray                                 ObjC    Foundation
+       1         96      96.0   Swift.ManagedBuffer<Swift.ContiguousArray<Swift.ContiguousArray<_TestDiscovery.SectionBounds>>, __C._opaque_pthread_mutex_t>  Swift   libswiftCore.dylib
+       1         80      80.0   Foundation.LockedState<Foundation._NSSwiftProcessInfo.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       2         64      32.0   CFSet (Value Storage)                             C       CoreFoundation
+       1         64      64.0   FakeTransport                                     Swift   HeadroomPackageTests
+       1         64      64.0   SCService                                         C++     CarbonCore
+       1         64      64.0   Swift._ContiguousArrayStorage<Swift.Array<Swift.UInt8>>  Swift   libswiftCore.dylib
+       1         64      64.0   Swift._IteratorBox<Swift.UnfoldSequence<Testing.Test.Case, (iterator: Swift.CollectionOfOne<()>.Iterator<>, testCaseIDs: Swift.Dictionary<Testing.Test.Case.ID, Swift.Int>)>>  Swift   libswiftCore.dylib
+       1         64      64.0   _NSMainThread                                     ObjC    Foundation
+       1         64      64.0   _NSSwiftProcessInfo                               Swift   Foundation
+       1         48      48.0   Closure context (unknown layout)                  Swift   <unknown>
+       1         48      48.0   Foundation.LockedState<Foundation._ProcessInfo.State>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   Foundation.LockedState<Swift.Optional<Swift.String>>.(_Buffer in $186747d44)<>  Swift   Foundation
+       1         48      48.0   NSDictionary (Storage)                            C       CoreFoundation
+       1         48      48.0   NSMutableArray                                    ObjC    CoreFoundation
+       1         48      48.0   Swift.ManagedBuffer<Testing.Configuration.(_All in $104b3c45c), __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         48      48.0   Swift._ContiguousArrayStorage<Swift.ContiguousArray<_TestDiscovery.SectionBounds>>  Swift   libswiftCore.dylib
+       1         32      32.0   CFMainExecutor                                    Swift   libswift_Concurrency.dylib
+       1         32      32.0   NSDictionary                                      ObjC    CoreFoundation
+       1         32      32.0   NSFileManager                                     ObjC    Foundation
+       1         32      32.0   Swift.ManagedBuffer<Swift.Bool, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Dictionary<Swift.ObjectIdentifier, Swift.Array<Swift.String>>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Dictionary<Testing.Backtrace.(_ErrorMappingCacheKey in $104b3c4dc), Testing.Backtrace.(_ErrorMappingCacheEntry in $104b3c500)>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Int, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Int32, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Optional<@convention(c) @Sendable (Swift.UnsafeMutableRawPointer) -> ()>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.ManagedBuffer<Swift.Optional<@convention(c) @Sendable (Swift.UnsafeMutableRawPointer, Swift.UnsafeRawPointer, Swift.UnsafeRawPointer) -> ()>, __C.os_unfair_lock_s>  Swift   libswiftCore.dylib
+       1         32      32.0   Swift.TaskLocal<Swift.Dictionary<Swift.ObjectIdentifier, Testing.(_TaskCanceller in $104b3cfc4)>>  Swift   libswift_Concurrency.dylib
+       1         32      32.0   Swift._SequenceBox<Testing.Test.Case.Generator<Swift.CollectionOfOne<()>>>  Swift   libswiftCore.dylib
+       1         32      32.0   _ProcessInfo                                      Swift   Foundation
+       1         32      32.0   __NSExactBlockVariable__                          ObjC    libsystem_blocks.dylib
+       1         16      16.0   CFTaskExecutor                                    Swift   libswift_Concurrency.dylib
+       1         16      16.0   NSDictionary.cow (struct __cow_state_t)           C       CoreFoundation
+       1         16      16.0   _NSFileManagerBridge                              Swift   Foundation
+

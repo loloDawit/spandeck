@@ -1,0 +1,75 @@
+{
+  "dataset" : "large",
+  "footprint_before" : 6718040,
+  "mode" : "idle",
+  "phases" : [
+    {
+      "footprint" : 7258736,
+      "footprint_peak" : 7258736,
+      "malloc_allocated" : 41943040,
+      "malloc_blocks" : 2315,
+      "malloc_in_use" : 651728,
+      "phase" : "start",
+      "pressure_level" : 1
+    },
+    {
+      "footprint" : 383697880,
+      "footprint_peak" : 383697880,
+      "malloc_allocated" : 255655936,
+      "malloc_blocks" : 814537,
+      "malloc_in_use" : 186408544,
+      "phase" : "loaded",
+      "pressure_level" : 1
+    },
+    {
+      "footprint" : 146178864,
+      "footprint_each_tick" : [
+        383583192,
+        208208712,
+        146113328,
+        146113328,
+        146113328,
+        146113328,
+        146146096,
+        146146096,
+        146162480,
+        146162480,
+        146162480,
+        146162480,
+        146162480
+      ],
+      "footprint_peak" : 383714264,
+      "malloc_allocated" : 207749120,
+      "malloc_blocks" : 798162,
+      "malloc_in_use" : 136797328,
+      "phase" : "ticks 13",
+      "pressure_each_tick" : [
+        1,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "pressure_level" : 1,
+      "tick_ms" : 10000
+    },
+    {
+      "footprint" : 146178864,
+      "footprint_peak" : 383714264,
+      "malloc_allocated" : 207749120,
+      "malloc_blocks" : 798163,
+      "malloc_in_use" : 136798112,
+      "phase" : "after pressure relief (diagnostic)",
+      "pressure_level" : 1,
+      "relief_bytes" : 0
+    }
+  ]
+}
