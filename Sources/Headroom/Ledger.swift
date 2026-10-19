@@ -830,8 +830,9 @@ final class Ledger {
     /// The Claude transcript folders' state at the last refresh; nil before the first one (#94).
     var claudeSource: TranscriptSource? { issueLock.withLock { source } }
 
-    /// Two `access(2)` calls per folder, on every refresh, so a folder that appears, disappears or changes permissions
-    /// is reported at the next tick. Only whether the folder exists and can be listed; nothing in it is read here.
+    /// A `stat(2)` and an `access(2)` per folder, on every refresh, so a folder that appears, disappears or changes
+    /// permissions is reported at the next tick. Only whether the folder itself exists and can be listed; nothing in it
+    /// is read here. Limit: an unreadable subfolder, or a denial that only shows while listing, isn't detected.
     private func checkClaudeSource() {
         var exists = false, unreadable = false
         for root in claudeRoots {

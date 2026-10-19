@@ -41,6 +41,8 @@ extension LimitEntry {
         var e = self
         e.percent = nil
         e.note = LimitText.windowReset
+        // A passed reset time isn't shown ("resets in now"); the note says what happened.
+        e.resetsAt = nil
         return e
     }
 }

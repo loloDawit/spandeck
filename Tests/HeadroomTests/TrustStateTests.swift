@@ -18,6 +18,8 @@ struct TrustStateTests {
         // No data and no folder: no zero tiles, a reason instead.
         #expect(services.store.displayedClaudeUsage == nil)
         #expect(SourceText.note(.notFound, hasData: false) == SourceText.notFound)
+        // The usage card's notes don't describe a Claude total that isn't shown.
+        #expect(UsageCard.notes(services.store).isEmpty)
     }
 
     @Test func emptyTranscriptFolderIsFoundAndZeroIsObserved() async throws {
@@ -76,6 +78,7 @@ struct TrustStateTests {
         #expect(past.current(at: now, stale: false).note == LimitText.windowReset)
         #expect(LimitText.note(past.current(at: now, stale: false)) == LimitText.windowReset)
         #expect(future.current(at: now, stale: false).percent == 40)
+        #expect(past.current(at: now, stale: false).resetsAt == nil) // never "resets in now"
         #expect(future.current(at: now, stale: true).percent == 40) // stale, but still within its window
         // Without a reset time a fresh value stands; a stale one has no proven window, so it's unavailable.
         let noReset = entry("model", 10, resets: nil)
@@ -94,6 +97,11 @@ struct TrustStateTests {
         #expect(current?.session?.percent == nil && current?.all.first?.percent == nil)
         #expect(current?.weekly?.percent == 40 && current?.all.last?.percent == 40)
         #expect(StatusRenderer.claudeGauge(store, now: now) == [nil, 40, nil])
+        // After a failed refresh the orange line claims shown data only while some value is still shown.
+        #expect(LimitText.staleNote("Offline", limits: current, fetchedAt: now).contains("showing data"))
+        let allPast = ClaudeLimits(session: session, weekly: nil, model: nil, all: [session], plan: nil, fetchedAt: now)
+        #expect(!LimitText.staleNote("Offline", limits: allPast.current(at: now, stale: true), fetchedAt: now)
+            .contains("showing data"))
         // A 5-hour window that has already reset gives no window start.
         #expect(ProviderServices.windowStart(store.claudeLimits, now: now) == nil)
         let later = entry("session", 10, resets: now.addingTimeInterval(3600))

@@ -173,6 +173,13 @@ enum LimitText {
     /// F-3: the limit's window reset after it was fetched, so its old percent says nothing about the new window.
     static let windowReset = "Window has reset since the last update; current usage not known yet"
 
+    /// The orange line under Claude's limits after a failed refresh: "showing data" only while some kept value is still
+    /// shown (F-3); once every one is unavailable, only when the last answer came.
+    static func staleNote(_ error: String, limits: ClaudeLimits?, fetchedAt: Date) -> String {
+        let showing = limits?.all.contains { $0.percent != nil } ?? false
+        return showing ? "\(error), showing data from \(Fmt.ago(fetchedAt))" : "\(error). Last answer \(Fmt.ago(fetchedAt))"
+    }
+
     /// The row's note: the reason first when the percent is unavailable, then any note the limit has. A window that
     /// has reset is its own reason.
     static func note(_ e: LimitEntry) -> String? {
@@ -490,8 +497,9 @@ struct LimitsCard: View {
                 } else {
                     Text(store.claudeError ?? "Loading limits...").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                if let err = store.claudeError, store.claudeLimits != nil {
-                    Text("\(err), showing data from \(Fmt.ago(store.claudeLimits?.fetchedAt))").font(.system(size: 10)).foregroundStyle(.orange)
+                if let err = store.claudeError, let l = store.claudeLimits {
+                    Text(LimitText.staleNote(err, limits: store.currentClaudeLimits(), fetchedAt: l.fetchedAt))
+                        .font(.system(size: 10)).foregroundStyle(.orange)
                 }
             }
             if showsClaude && showsGrok {
@@ -654,7 +662,7 @@ struct UsageCard: View {
     /// The card's notes. Grok's summary is passed as it is: `localGrokUsage` hides one without tokens, which is what
     /// a period of only unusable turns has, and its note must still show (F-1).
     static func notes(_ store: Store) -> [(text: String, detail: String)] {
-        UsageNotes.notes(store.claudeUsage, grok: store.grokUsage)
+        UsageNotes.notes(store.displayedClaudeUsage, grok: store.grokUsage)
     }
     var updatePricing: () -> Void
     @AppStorage("usage.metric") private var metric: DailyMetric = .cost
@@ -664,7 +672,7 @@ struct UsageCard: View {
         let claude = store.displayedClaudeUsage
         let combined = UsageSummary.combine(claude, grok)
         VStack(alignment: .leading, spacing: 10) {
-            CardHeader(title: "Token usage", icon: "chart.bar.xaxis", tint: .claude, trailing: grok == nil ? "Claude Code" : "Claude + Grok")
+            CardHeader(title: "Token usage", icon: "chart.bar.xaxis", tint: .claude, trailing: grok == nil ? "Claude Code" : claude == nil ? "Grok" : "Claude + Grok")
             HStack(spacing: 6) {
                 StatTile(title: "Today", totals: combined?.today)
                 StatTile(title: "7 days", totals: combined?.week)
@@ -701,7 +709,7 @@ struct UsageCard: View {
                 }
                 DailyChart(summary: u, metric: metric, height: 190)
                 ModelList(models: Array(u.models.prefix(8)), families: Array(Set(u.bars.map(\.family))).sorted())
-                if let note = PricingText.coverageNote(claude: store.claudeUsage, grok: grok) {
+                if let note = PricingText.coverageNote(claude: claude, grok: grok) {
                     Text(note).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } else if store.claudeSource == nil || store.claudeSource == .found {
