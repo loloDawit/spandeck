@@ -247,7 +247,7 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
   - **First-scan throughput:** 37.6 → 37.3 MB/s (small) and 38.6 → 38.3 MB/s (medium).
   - **Load:** round 1 of both datasets, and round 2 of small, ran at a load average of 2.5–4.9.
     - Round 2 of medium ran under a load from other work that peaked at 14.9: `main` ended there, and `final` started at 14.9 and ended at 7.9. The figures are in each file's `ab` block.
-    - **Round 1 alone** (2.6–4.9) gives the same conclusion. Medium is within −3.8 % to +1.6 % apart from its 1–2 ms ticks, which swing ±10–12 %. Small is within −3.2 % to +4.0 % apart from the 0.5 ms full-scan tick. Throughput is 37.5 → 37.0 MB/s (small) and 38.5 → 38.9 MB/s (medium).
+    - **Round 1 alone** (2.6–4.9), a weaker check since `final` runs first in every round 1, points the same way. Medium is within −3.8 % to +1.6 % apart from its 1–2 ms ticks, which swing ±10–12 %. Small is within −3.2 % to +4.0 % apart from the 0.5 ms full-scan tick. Throughput is 37.5 → 37.0 MB/s (small) and 38.5 → 38.9 MB/s (medium).
 - **Earlier A/Bs (supporting).** They ran the candidate side first in every round, so any order effect fell on one side.
 - **Interleaved A/B** (`ab-vs-main/`, reproduce with `scripts/bench-ab.py <dir> main new`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Commits, order and each run's load are in its `provenance.json`, written from the run log afterwards. Each side's CPU median is averaged over its two rounds. **Two rounds per side** can show no change to within a few per cent; they can't resolve smaller differences.
   - **Within ±4.4 %:** every scenario on small and medium (cold start, rebuild, warm start, save, both ticks, summary and simulated wake), except one.
@@ -262,7 +262,7 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
 - **Against run 4** (a different time and load), run86e's large set is 4.9–12.8 % *faster* in CPU, 37.2 against 33.7 MB/s, and medium within ±10 %.
   - **Small was slower in run86e:** cold start +13.4 %, warm start +10.7 %, rebuild +5.1 %, 5-minute full scan +17.9 %, no-change tick +30.7 % (a 0.5 ms figure), and throughput 38.8 → 33.7 MB/s.
   - A recheck at a load of 5.6 (`recheck-small/`) gave cold start +12.8 %. Both ran under more load than run 4: 8.4–10.6 and 5.6.
-  - The A/Bs, which hold the load equal, found no such slowdown: the order-balanced one within ±4 % on small; the earlier ones within ±4.4 % of `main`, except one noisy 2–5 ms tick, and within ±8 % between the final head and `832a160`. With two rounds each, they rule out a change of this size, not a few per cent.
+  - The A/Bs, which pair each side with the other under nearly the same load (except medium's loaded round 2 above), found no such slowdown: the order-balanced one within ±4 % on small; the earlier ones within ±4.4 % of `main`, except one noisy 2–5 ms tick, and within ±8 % between the final head and `832a160`. With two rounds each, they rule out a change of this size, not a few per cent.
   - Large has no A/B. Its comparison is across runs only.
 
 **Timeout and failure behaviour** are verified by tests, not by this benchmark:
