@@ -167,6 +167,13 @@ final class ProviderServices {
 
     // MARK: Local usage (R8)
 
+    /// Start of the Claude 5-hour window for the usage card: 5 hours before the session limit resets. None once that
+    /// reset has passed (F-3): the old reset time no longer marks the current window.
+    static func windowStart(_ limits: ClaudeLimits?, now: Date) -> Date? {
+        guard let r = limits?.session?.resetsAt, r > now else { return nil }
+        return r.addingTimeInterval(-5 * 3600)
+    }
+
     /// Bumped by every cache clear, so a refresh that started before it can't publish totals from before it.
     private var usageGeneration = 0
     private var usageRefreshing = false
@@ -180,11 +187,11 @@ final class ProviderServices {
         defer { usageRefreshing = false }
         let generation = usageGeneration
         let store = store, ledger = ledger
-        let (claude, grok, activity, issue) = await withCheckedContinuation { c in
+        let (claude, grok, activity, issue, source) = await withCheckedContinuation { c in
             ledger.refresh(windowStart: windowStart, progress: { msg in
                 DispatchQueue.main.async { store.indexing = msg }
             }, completion: { claude, grok, activity in
-                c.resume(returning: (claude, grok, activity, ledger.cacheIssue))
+                c.resume(returning: (claude, grok, activity, ledger.cacheIssue, ledger.claudeSource))
             })
         }
         // A refresh ended by a stop (#86) is dropped: its summary isn't a measurement.
@@ -193,6 +200,7 @@ final class ProviderServices {
         store.grokUsage = grok
         store.usageUpdated = Date()
         store.usageCacheIssue = issue?.text
+        if store.claudeSource != source { store.claudeSource = source }
         return activity
     }
 

@@ -96,6 +96,8 @@ final class Store: ObservableObject {
     /// good plan, shown as stale.
     @Published var grokFailure: GrokError?
     @Published var grokUsage: UsageSummary?
+    /// Whether Claude Code's transcript folders could be looked at, as of the last usage refresh (#94).
+    @Published var claudeSource: TranscriptSource?
     @Published var indexing: String?
     @Published var usageUpdated: Date?
     /// R8: Settings ▸ Clear cached usage data was chosen; the popover shows the confirmation card.
@@ -120,6 +122,21 @@ final class Store: ObservableObject {
     var localGrokUsage: UsageSummary? {
         guard let u = grokUsage, u.month.tokens > 0 else { return nil }
         return u
+    }
+
+    /// Claude usage as the popover shows it (#94). Missing is not zero: with no transcript folder, or none that can be
+    /// read, and nothing counted before, there is no Claude total to show, only the reason (`SourceText`). Usage
+    /// counted before the folder went away is kept and shown with a note.
+    var displayedClaudeUsage: UsageSummary? {
+        guard let u = claudeUsage else { return nil }
+        if let s = claudeSource, s != .found, u.month.tokens == 0 { return nil }
+        return u
+    }
+
+    /// Claude limits as they may be shown or drawn at `now` (F-3): a limit whose window has reset since it was fetched
+    /// is unavailable, and while the last refresh failed one without a reset time is too.
+    func currentClaudeLimits(at now: Date = Date()) -> ClaudeLimits? {
+        claudeLimits?.current(at: now, stale: claudeError != nil)
     }
 
     private var seq = 0

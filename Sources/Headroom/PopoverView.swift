@@ -170,10 +170,14 @@ struct UsageBar: View {
 /// settles the qualifier text.
 enum LimitText {
     static let unavailable = "Usage not reported"
+    /// F-3: the limit's window reset after it was fetched, so its old percent says nothing about the new window.
+    static let windowReset = "Window has reset since the last update; current usage not known yet"
 
-    /// The row's note: the reason first when the percent is unavailable, then any note the limit has.
+    /// The row's note: the reason first when the percent is unavailable, then any note the limit has. A window that
+    /// has reset is its own reason.
     static func note(_ e: LimitEntry) -> String? {
-        e.percent == nil ? ([unavailable] + [e.note].compactMap { $0 }).joined(separator: " · ") : e.note
+        if e.percent == nil, e.note == windowReset { return windowReset }
+        return e.percent == nil ? ([unavailable] + [e.note].compactMap { $0 }).joined(separator: " · ") : e.note
     }
 
     /// Each product's percent when Grok reports more than one; an unavailable one shows "--", never 0%.
@@ -449,11 +453,14 @@ enum GrokSection: Equatable {
         var staleBecause: GrokError?
     }
 
-    /// nil: no Grok section (consent not given and not requested).
-    static func select(_ store: Store) -> GrokSection? {
+    /// nil: no Grok section (consent not given and not requested). A plan whose billing period has ended isn't shown
+    /// (F-3): its failure if the refresh failed, otherwise loading until the new period's answer arrives.
+    static func select(_ store: Store, now: Date = Date()) -> GrokSection? {
         guard store.grokEnabled else { return store.grokConsentRequested ? .consent : nil }
         guard store.grokQuotaShown else { return .paused }
-        if store.grokPlan != nil { return .plan(GrokPlanView(staleBecause: store.grokFailure)) }
+        if let plan = store.grokPlan, plan.isCurrent(at: now, stale: store.grokFailure != nil) {
+            return .plan(GrokPlanView(staleBecause: store.grokFailure))
+        }
         if let failure = store.grokFailure { return .failure(failure) }
         return .loading
     }
@@ -478,7 +485,7 @@ struct LimitsCard: View {
                 QuotaPaused(title: "Claude Code", icon: "sparkle", tint: .claude, what: "Claude plan limits", toggle: "Claude limits")
             } else if store.claudeAvailable {
                 CardHeader(title: "Claude Code", icon: "sparkle", tint: .claude, trailing: store.claudeLimits?.plan)
-                if let l = store.claudeLimits {
+                if let l = store.currentClaudeLimits() {
                     ForEach(l.all) { LimitRow(entry: $0, tint: .claude) }
                 } else {
                     Text(store.claudeError ?? "Loading limits...").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -654,7 +661,8 @@ struct UsageCard: View {
 
     var body: some View {
         let grok = store.localGrokUsage
-        let combined = UsageSummary.combine(store.claudeUsage, grok)
+        let claude = store.displayedClaudeUsage
+        let combined = UsageSummary.combine(claude, grok)
         VStack(alignment: .leading, spacing: 10) {
             CardHeader(title: "Token usage", icon: "chart.bar.xaxis", tint: .claude, trailing: grok == nil ? "Claude Code" : "Claude + Grok")
             HStack(spacing: 6) {
@@ -662,13 +670,16 @@ struct UsageCard: View {
                 StatTile(title: "7 days", totals: combined?.week)
                 StatTile(title: "30 days", totals: combined?.month)
             }
+            if let source = SourceText.note(store.claudeSource, hasData: claude != nil) {
+                Text(source).font(.system(size: 10)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
             let notes = Self.notes(store)
             if !notes.isEmpty { UsageNotes(notes: notes) }
             VStack(spacing: 4) {
-                ProviderRow(name: "Claude", color: .claude, summary: store.claudeUsage)
+                ProviderRow(name: "Claude", color: .claude, summary: claude)
                 if grok != nil { ProviderRow(name: "Grok", color: .grok, summary: grok) }
             }
-            if let w = store.claudeUsage?.window {
+            if let w = claude?.window {
                 HStack {
                     Text("Claude 5h window").foregroundStyle(.secondary)
                     Spacer()
@@ -693,7 +704,7 @@ struct UsageCard: View {
                 if let note = PricingText.coverageNote(claude: store.claudeUsage, grok: grok) {
                     Text(note).font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-            } else {
+            } else if store.claudeSource == nil || store.claudeSource == .found {
                 Text(store.indexing ?? "Reading usage...").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             PricingNote(store: store, update: updatePricing)
@@ -837,6 +848,25 @@ enum PricingText {
         case .checksumMismatch: return "The download didn't match the reviewed file (SHA-256). Prices unchanged."
         case .invalidData: return "The downloaded file had no valid Claude prices. Prices unchanged."
         case .writeFailed: return "Couldn't save the downloaded prices. Prices unchanged."
+        }
+    }
+}
+
+/// Copy for the transcript folders' state (#94), kept apart from the views so tests can check it. Missing is not zero:
+/// these replace Claude's totals when nothing was counted, and label them when something was.
+enum SourceText {
+    static let notFound = "No Claude Code transcripts found in ~/.claude/projects or ~/.config/claude/projects. Token "
+        + "usage appears here once Claude Code has run on this Mac."
+    static let gone = "Claude Code's transcript folder is no longer there. These totals are from earlier reads and "
+        + "won't update."
+    static let unreadable = "SpanDeck can't open Claude Code's transcript folder (permission denied), so what it holds "
+        + "isn't counted. Totals may be missing or low."
+
+    static func note(_ source: TranscriptSource?, hasData: Bool) -> String? {
+        switch source {
+        case .notFound?: return hasData ? gone : notFound
+        case .unreadable?: return unreadable
+        case .found?, nil: return nil
         }
     }
 }

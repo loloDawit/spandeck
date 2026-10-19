@@ -30,6 +30,40 @@ struct ClaudeLimits {
     var fetchedAt: Date
 }
 
+// F-3 (#4, #7; METRIC_CONTRACT.md §3): a last-known percent describes its window only until that window resets. After
+// the reset it says nothing about the new window, so it's unavailable until a refresh answers, never shown as current.
+extension LimitEntry {
+    /// This limit as it may be shown at `now`. `stale`: the last refresh failed, so this value is kept from an earlier
+    /// one; a limit with no reset time has no proven window then, so it's unavailable too (contract §3, *Stale rule*).
+    func current(at now: Date, stale: Bool) -> LimitEntry {
+        let over = resetsAt.map { $0 <= now } ?? stale
+        guard over, percent != nil else { return self }
+        var e = self
+        e.percent = nil
+        e.note = LimitText.windowReset
+        return e
+    }
+}
+
+extension ClaudeLimits {
+    func current(at now: Date, stale: Bool) -> ClaudeLimits {
+        var l = self
+        l.session = session?.current(at: now, stale: stale)
+        l.weekly = weekly?.current(at: now, stale: stale)
+        l.model = model?.current(at: now, stale: stale)
+        l.all = all.map { $0.current(at: now, stale: stale) }
+        return l
+    }
+}
+
+extension GrokPlan {
+    /// Whether this plan may still describe the billing period current at `now` (F-3). `stale`: kept through a failed
+    /// refresh; without an end date its period is unproven then, so it isn't current (contract §3, *Stale rule*).
+    func isCurrent(at now: Date, stale: Bool) -> Bool {
+        periodEnd.map { now < $0 } ?? !stale
+    }
+}
+
 enum ClientError: LocalizedError {
     case notLoggedIn(String)
     /// The tool is not installed or has no account; the UI hides that provider.

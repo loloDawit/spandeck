@@ -149,7 +149,10 @@ struct GrokErrorStateTests {
                       (.json("{}", status: 500), .serverError(500)), (.json("{}", status: 503), .serverError(503)),
                       (.timeout, .network)])
     func temporaryFailuresKeepStalePlan(_ response: FakeTransport.Response, _ expected: GrokError) async throws {
-        let transport = FakeTransport([Hosts.grok: [.grokBilling, response]])
+        // A plan with a period that hasn't ended: a stale plan is shown only within its period (F-3).
+        let billing = FakeTransport.Response.json(#"{"config":{"creditUsagePercent":10,"#
+                                                  + #""currentPeriod":{"end":"2099-01-01T00:00:00Z"}}}"#)
+        let transport = FakeTransport([Hosts.grok: [billing, response]])
         let rig = try Rig(transport: transport)
         await rig.services.refreshGrok()
         let fetchedAt = try #require(rig.store.grokPlan?.fetchedAt)
@@ -391,7 +394,8 @@ struct GrokErrorStateTests {
             store.grokFailure = failure
             #expect(GrokSection.select(store) == .failure(failure))
         }
-        store.grokPlan = GrokPlan(percent: 5, periodName: "month", products: [], fetchedAt: Date())
+        store.grokPlan = GrokPlan(percent: 5, periodEnd: Date().addingTimeInterval(86400), periodName: "month",
+                                  products: [], fetchedAt: Date())
         store.grokFailure = .network
         #expect(GrokSection.select(store) == .plan(.init(staleBecause: .network)))
 
