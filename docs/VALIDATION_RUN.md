@@ -18,8 +18,18 @@ Every check gets one status:
 - **INFO:** context only.
 
 The report's first line is the **VERDICT**:
-- **GO for main-account testing** only when the gate passed, the run completed, and there is no FAIL, no INCONCLUSIVE and no skipped required check. The only optional checks are the VoiceOver check (B6) and the supplementary `log stream` check.
-- **NO-GO** otherwise, naming every reason. That includes a failed gate, an interrupted run, a monitor that couldn't observe the app, a Keychain lookup that errored, and an unclear answer to a gate question.
+- **GO for main-account testing** only when all of the following hold:
+  - the gate passed and the run completed;
+  - **every required check is recorded as PASS** (the list is `REQUIRED_IDS` in the script); a required check that never ran counts as missing;
+  - there is no FAIL and no INCONCLUSIVE anywhere.
+
+  The only optional checks are the VoiceOver check (B6) and the supplementary `log stream` check.
+- **NO-GO** otherwise, naming every reason. That includes:
+  - a failed gate;
+  - a run that stopped for any reason, which still writes its report;
+  - a monitor that couldn't observe the whole launch, including an app that exited during the watch window;
+  - a Keychain lookup that errored;
+  - an unclear answer to a gate question.
 
 ## What it checks
 **P. Isolation and package gate.** If any check fails, nothing is installed or launched.
@@ -27,7 +37,7 @@ The report's first line is the **VERDICT**:
   - you are `spandecktest`, which is not an admin;
   - `HOME` is the account's real home;
   - the main account is a different user.
-- **The main account is unreachable:** its home can't be listed or traversed, and none of its Claude, Codex, Grok, Keychain, preferences or SpanDeck paths is readable.
+- **The main account is unreachable:** its home must exist, and can't be listed or traversed. None of its Claude, Codex, Grok, Keychain, preferences or SpanDeck paths is readable.
 - **No redirects:**
   - no shell or launchd environment variable points outside this home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_*`, `CFFIXED_USER_HOME`, `HOME`, `GROK_HOME`);
   - no symlink anywhere in this home points into the main account;
@@ -133,6 +143,7 @@ If the run stops part-way, or you press Ctrl-C, run `./validate.sh cleanup` too.
 - **Parked folders:** moved back only into an empty place, and checked against their hash.
   - If the original location holds new data, the parked copy stays where it is, and both are reported. Nothing is merged or overwritten.
   - A folder recorded for parking but never moved is left in place.
+- **Cleanup runs once per run.** A second `cleanup` does nothing, so SpanDeck data created after the first one is never touched.
 
 **Leftover state.** This is only needed if the gate reports `P5.clean-slate`. It's state from an earlier run that this tool didn't create. Remove it in `spandecktest` with SpanDeck quit:
 ```bash
@@ -153,9 +164,14 @@ It covers:
 - new data appearing before cleanup;
 - a changed or replaced app copy;
 - an interrupted run;
-- a half-done park;
-- missing monitors (INCONCLUSIVE, never PASS);
-- the verdict rules;
+- a half-done park, a parked folder whose contents changed, and a second cleanup;
+- a failed DMG attach;
+- a fixture folder marked by another run, and an unmarked look-alike;
+- a missing main home;
+- missing monitors, and an app that exits during the watch window (INCONCLUSIVE, never PASS);
+- a stopped run writing its own NO-GO report;
+- the egress aggregation: FAIL, INCONCLUSIVE and PASS;
+- the verdict rules, including a required check that never ran;
 - refusal of self-test mode outside a temporary home.
 
 Self-test mode is labelled SELF-TEST everywhere, can never give a GO, and never writes to `/Users/Shared`.

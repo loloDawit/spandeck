@@ -24,7 +24,7 @@ trap finish EXIT
 
 # The fake app: waits until it is signalled. Compiled here (linker-signed), so macOS runs it like any built tool.
 mkdir -p "$ROOT/build"
-printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' > "$ROOT/build/fake.c"
+printf '#include <stdlib.h>\n#include <unistd.h>\nint main(int c, char **v) { if (c > 1) { sleep(atoi(v[1])); return 0; } for (;;) pause(); }\n' > "$ROOT/build/fake.c"
 clang -O2 -o "$ROOT/build/SpanDeck" "$ROOT/build/fake.c"
 FAKE_EXE="$ROOT/build/SpanDeck"
 
@@ -100,13 +100,14 @@ X
 #!/bin/bash
 [ -n "${SELFTEST_OPEN_FAIL:-}" ] && exit 1
 case "$1" in *.selftest-bundle) ;; *) echo "selftest open stub: refusing $1" >&2; exit 1 ;; esac
-nohup "$1/Contents/MacOS/SpanDeck" >/dev/null 2>&1 &
+nohup "$1/Contents/MacOS/SpanDeck" ${SELFTEST_APP_LIFETIME:-} >/dev/null 2>&1 &
 exit 0
 X
     stub hdiutil <<'X'
 #!/bin/bash
 case "${1:-}" in
-    attach) for a; do [ "$prev" = -mountpoint ] && m=$a; prev=$a; done; cp -R "$SELFTEST_FAKEAPP" "$m/" ;;
+    attach) [ -n "${SELFTEST_ATTACH_FAIL:-}" ] && { echo "hdiutil: attach failed" >&2; exit 1; }
+            for a; do [ "$prev" = -mountpoint ] && m=$a; prev=$a; done; cp -R "$SELFTEST_FAKEAPP" "$m/" ;;
     detach) rm -rf "$2/SpanDeck.selftest-bundle" ;;
 esac
 X
@@ -221,6 +222,8 @@ echo "== insufficient monitoring: never a PASS"
 setup m-blind; setenv SELFTEST_LSOF_BLIND=1; setenv SELFTEST_LOG_UNAVAILABLE=1
     printf '#!/bin/bash\nwhile :; do sleep 1; done\n' > "$P/procwatch"; chmod +x "$P/procwatch"; repackage
     answers "$DMG_SHA" n; run_validate run      # stops at the first observation prompt (no more answers)
+    check "m-blind: a stopped run writes its report by itself" [ -f "$(report)" ]
+    check "m-blind: and says NO-GO (stopped)" contains "$S/out.txt" "VERDICT: NO-GO (the run stopped before completing"
     run_validate report
     r=$(report)
     check "m-blind: processes INCONCLUSIVE without a fork monitor" grep -q "| A2.processes | INCONCLUSIVE |" "$r"
@@ -264,6 +267,56 @@ setup i-park-half; mkdir -p "$H/.claude"; echo x > "$H/.claude/keep"
     check "i-park-half: original left in place" [ "$(cat "$H/.claude/keep")" = x ]
     check "i-park-half: reported as never moved" contains "$S/out.txt" "was never moved"
 
+echo "== more failure and cleanup paths"
+setup e-app-dies; setenv SELFTEST_APP_LIFETIME=1; answers "$DMG_SHA" n; run_validate run
+    check "e-app-dies: an app that exits mid-window is not a PASS for processes" grep -q "| A2.processes | INCONCLUSIVE |" "$(report)"
+    check "e-app-dies: nor for Keychain" sh -c "! grep -q '| A2.keychain | PASS |' '$(report)'"
+    answers y; run_validate cleanup
+setup e-attach-fails; setenv SELFTEST_ATTACH_FAIL=1; mkdir -p "$H/Applications"; echo mine > "$H/Applications/note"; a0=$(tree "$H/Applications")
+    answers "$DMG_SHA" n; run_validate run
+    check "e-attach-fails: stops with a NO-GO report" contains "$(report)" "**VERDICT: NO-GO"
+    check "e-attach-fails: nothing installed" [ ! -e "$H/Applications/SpanDeck.selftest-bundle" ]
+    answers y; run_validate cleanup
+    check "e-attach-fails: pre-existing ~/Applications untouched" [ "$(tree "$H/Applications")" = "$a0" ]
+setup e-parked-changed; setenv SELFTEST_OPEN_FAIL=1; mkdir -p "$H/.claude/projects/p"; echo one > "$H/.claude/projects/p/a.jsonl"
+    answers "$DMG_SHA" n; run_validate run --park-existing; id=$(basename "$(lastrun)")
+    echo two > "$H/.claude.parked-$id/projects/p/a.jsonl"
+    answers y; run_validate cleanup
+    check "e-parked-changed: restored into the empty place" [ "$(cat "$H/.claude/projects/p/a.jsonl")" = two ]
+    check "e-parked-changed: reported as changed while parked" contains "$S/out.txt" "contents changed while parked"
+    mkdir -p "$H/Library/Application Support/SpanDeck"; echo later > "$H/Library/Application Support/SpanDeck/later-use"
+    answers y; run_validate cleanup
+    check "e-parked-changed: a second cleanup does nothing" contains "$S/out.txt" "already cleaned up; nothing was done"
+    check "e-parked-changed: data created after the first cleanup is kept" [ -f "$H/Library/Application Support/SpanDeck/later-use" ]
+setup e-foreign-fixture; setenv SELFTEST_OPEN_FAIL=1; answers "$DMG_SHA" n; run_validate run
+    mkdir -p "$H/.claude/projects/-Users-spandecktest-spandeck-validation-other"; echo "run=someone-else" > "$H/.claude/projects/-Users-spandecktest-spandeck-validation-other/.spandeck-validation"
+    mkdir -p "$H/.claude/projects/-Users-spandecktest-spandeck-validation-unmarked"
+    answers y; run_validate cleanup
+    check "e-foreign-fixture: a folder marked by another run is kept" [ -d "$H/.claude/projects/-Users-spandecktest-spandeck-validation-other" ]
+    check "e-foreign-fixture: an unmarked look-alike folder is kept" [ -d "$H/.claude/projects/-Users-spandecktest-spandeck-validation-unmarked" ]
+setup e-no-main-home; chmod 700 "$M"; rm -rf "$M"; answers "$DMG_SHA" n; gate_fail e-no-main-home P2.main-home-exists
+
+echo "== egress aggregation (C2)"
+setup c2-rules
+    r="$H/spandeck-validation/c"; mkdir -p "$r"; : > "$r/log.txt"; printf 'ID\tRESULT\tDETAIL\n' > "$r/results.tsv"
+    c2() { # dir-setup... -> C2 status
+        rm -rf "$r"/watch-*; printf 'ID\tRESULT\tDETAIL\n' > "$r/results.tsv"; "$@"
+        (cd "$P" && VALIDATE_SOURCE_ONLY=1 HOME="$H" bash -c '. ./validate.sh; RUN='"$r"'; egress_result >/dev/null; awk -F"\t" "NR==2{print \$2}" "$RUN/results.tsv"')
+    }
+    good() { mkdir -p "$r/watch-$1"; touch "$r/watch-$1/.procwatch-ok"; printf 'ok\nok\nok\n' > "$r/watch-$1/lsof-samples.txt"; : > "$r/watch-$1/forks.txt"; }
+    none() { :; }
+    forked() { good A; echo "t fork child 9 /usr/bin/security" > "$r/watch-A/forks.txt"; }
+    socket() { good A; echo "IPv4 TCP 1.2.3.4:443" > "$r/watch-A/sockets.txt"; }
+    blind() { good A; good B; rm "$r/watch-B/.procwatch-ok"; }
+    nolsof() { good A; printf 'fail\nfail\n' > "$r/watch-A/lsof-samples.txt"; }
+    allgood() { good A; good B3; }
+    check "c2-rules: no launch monitored -> INCONCLUSIVE" [ "$(c2 none)" = INCONCLUSIVE ]
+    check "c2-rules: a security child process -> FAIL" [ "$(c2 forked)" = FAIL ]
+    check "c2-rules: a socket -> FAIL" [ "$(c2 socket)" = FAIL ]
+    check "c2-rules: a launch without the fork monitor -> INCONCLUSIVE" [ "$(c2 blind)" = INCONCLUSIVE ]
+    check "c2-rules: a launch lsof never saw -> INCONCLUSIVE" [ "$(c2 nolsof)" = INCONCLUSIVE ]
+    check "c2-rules: every launch observed, nothing seen -> PASS" [ "$(c2 allgood)" = PASS ]
+
 echo "== verdict rules (report only)"
 setup v-rules
     r="$H/spandeck-validation/v"; mkdir -p "$r"; : > "$r/log.txt"
@@ -272,7 +325,11 @@ setup v-rules
         shift 3; printf 'ID\tRESULT\tDETAIL\n' > "$r/results.tsv"; for row; do printf '%s\n' "$row" | tr '|' '\t' >> "$r/results.tsv"; done
         (cd "$P" && VALIDATE_SOURCE_ONLY=1 HOME="$H" bash -c '. ./validate.sh; RUN='"$r"'; verdict')
     }
-    v=$(vt VALIDATION 1 1 "A|PASS|x" "B6.voiceover|SKIP|x"); [[ "$v" == GO* ]] && ok "v-rules: complete and verified -> GO (optional skip allowed)" || no "v-rules: expected GO, got: $v"
+    mapfile_req=$(cd "$P" && VALIDATE_SOURCE_ONLY=1 HOME="$H" bash -c '. ./validate.sh; echo $REQUIRED_IDS')
+    allpass=(); for id in $mapfile_req; do allpass+=("$id|PASS|x"); done
+    v=$(vt VALIDATION 1 1 "${allpass[@]}" "B6.voiceover|SKIP|x" "A2.log-stream|INFO|x"); [[ "$v" == GO* ]] && ok "v-rules: every required check PASS -> GO (optional skip allowed)" || no "v-rules: expected GO, got: $v"
+    v=$(vt VALIDATION 1 1 "${allpass[@]:1}"); [[ "$v" == NO-GO*missing* ]] && ok "v-rules: a required check that never ran -> NO-GO" || no "v-rules: missing required gave: $v"
+    v=$(vt VALIDATION 1 1 "A|PASS|x"); [[ "$v" == NO-GO* ]] && ok "v-rules: a few PASS rows alone are never GO" || no "v-rules: partial rows gave: $v"
     v=$(vt VALIDATION 1 1 "A|PASS|x" "B|INCONCLUSIVE|x"); [[ "$v" == NO-GO*INCONCLUSIVE* ]] && ok "v-rules: any INCONCLUSIVE -> NO-GO" || no "v-rules: INCONCLUSIVE gave: $v"
     v=$(vt VALIDATION 1 1 "A|PASS|x" "B3.quit-during-index|SKIP|x"); [[ "$v" == NO-GO*skipped* ]] && ok "v-rules: required SKIP -> NO-GO" || no "v-rules: required SKIP gave: $v"
     v=$(vt VALIDATION 1 1 "A|FAIL|x"); [[ "$v" == NO-GO*FAIL* ]] && ok "v-rules: any FAIL -> NO-GO" || no "v-rules: FAIL gave: $v"

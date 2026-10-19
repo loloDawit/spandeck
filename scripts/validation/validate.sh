@@ -40,6 +40,7 @@ if [ "${VALIDATE_SELFTEST:-0}" = 1 ]; then
     USERS_ROOT=${VALIDATE_USERS_ROOT:?}
     TTY_IN=${VALIDATE_TTY_IN:?}; TTY_OUT=/dev/null
     WATCH_SECS=${VALIDATE_WATCH_SECS:-3}; REFRESH_WAIT=1; DIAG_WAIT=1; QUIT_WAIT=5
+    BIG_FILES=${VALIDATE_BIG_FILES:-3}; BIG_MESSAGES=${VALIDATE_BIG_MESSAGES:-2}
     RESULTS="$HOME/results"
     # Never a real-looking app in a self-test: macOS registers *.app folders and may try to open them.
     APP_DIR="$APP_NAME.selftest-bundle"
@@ -48,6 +49,7 @@ else
     USERS_ROOT=/Users
     TTY_IN=/dev/tty; TTY_OUT=/dev/tty
     WATCH_SECS=60; REFRESH_WAIT=15; DIAG_WAIT=60; QUIT_WAIT=60
+    BIG_FILES=5000; BIG_MESSAGES=40
     RESULTS=/Users/Shared/spandeck-validation-results
     APP_DIR="$APP_NAME.app"
 fi
@@ -59,6 +61,14 @@ GROK="$HOME/.grok"
 MARK=".spandeck-validation"   # marker file naming the run that created a fixture folder
 # Checks that may be skipped or unavailable without blocking a GO (still reported).
 OPTIONAL_IDS=" B6.voiceover A2.log-stream "
+# Every check a GO needs, each recorded as exactly PASS. One that is missing (never ran) is a NO-GO.
+REQUIRED_IDS="P1.user P1.distinct P1.admin P1.home P2.main-home P3.environment P3.links P4.keychain P4.claude-item
+ P4.credentials P5.clean-slate P5.disk P6.dmg-sha256 P6.sha256sums P6.package P6.quarantine P6.package-owner
+ P7.login-items A1.install A1.keychain-api A2.processes A2.network A2.keychain A2.consent A2.keychain-prompt
+ A3.not-found A3.limits-off B5.start B5.mode B5.disclosure B2.totals B2.unpriced B2.incremental B1.popover B3.quit
+ B3.quit-during-index B3.relaunch-totals B3.quit-after-index B3.exact B3.cache-privacy B4.rebuilt B5.export-privacy
+ B5.export-keys B3.shutdown-time B5.export-kinds B5.delete C1.login-on C1.login-off C.final-quit B4.exact
+ C2.no-egress C2.integrations-off"
 
 die() { echo; echo "STOP: $*" >&2; [ -n "${RUN:-}" ] && [ -d "${RUN:-}" ] && echo "$(stamp) STOP $*" >> "$RUN/log.txt"; exit 1; }
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -138,7 +148,8 @@ gate() {
 
     # The main account must be unreachable: not listable, not traversable, and none of its sensitive paths readable.
     local mh="$USERS_ROOT/$MAIN_USER" reach="" p
-    [ -d "$mh" ] || [ "$MODE" = VALIDATION ] || bad P2.main-home "self-test main home missing"
+    # It must exist (stat needs no access to its contents), or "unreachable" would be shown about nothing.
+    [ -e "$mh" ] || bad P2.main-home-exists "the main account's home ($USERS_ROOT/<main-user>) doesn't exist: wrong package.env? Unreachability not shown"
     ls "$mh" >/dev/null 2>&1 && reach="$reach listable"
     [ -x "$mh" ] && reach="$reach traversable"
     for p in .claude .claude.json .claude/projects .claude/settings.json .config .config/claude .codex .codex/auth.json \
@@ -309,8 +320,15 @@ stop_watchers() {
     : > "$RUN/.watchers"
 }
 on_exit() {
+    local rc=$?
     stop_watchers
     if [ -n "${MOUNTED:-}" ] && [ -d "$MOUNTED" ]; then hdiutil detach "$MOUNTED" >/dev/null 2>&1 || true; fi
+    # A run that stopped for any reason still gets its report, and its verdict says why (never silently).
+    if [ "${IN_RUN:-0}" = 1 ] && [ "$rc" != 0 ] && [ -n "${RUN:-}" ] && [ -d "$RUN" ]; then
+        echo "$(stamp) run stopped (exit $rc) before completing" >> "$RUN/log.txt"
+        cmd_report >/dev/null 2>&1 || true
+        echo "VERDICT: NO-GO (the run stopped before completing; report: $RUN/report.md). Run ./validate.sh cleanup next."
+    fi
 }
 trap on_exit EXIT
 trap 'echo; echo "Interrupted. Run ./validate.sh cleanup when ready."; exit 130' INT TERM
@@ -333,8 +351,8 @@ launch() {
     say "launch $label: pid after $(( $(ms) - t0 )) ms"
     "$PKG/procwatch" "$pid" > "$w/forks.txt" 2>&1 &
     register_watcher $!
-    local _i; for _i in $(seq 1 30); do grep -q " watching $pid" "$w/forks.txt" 2>/dev/null && break; sleep 0.1; done
-    grep -q " watching $pid" "$w/forks.txt" 2>/dev/null && touch "$w/.procwatch-ok" || say "launch $label: fork monitor did not attach"
+    local _i; for _i in $(seq 1 30); do grep -q " watching $pid\$" "$w/forks.txt" 2>/dev/null && break; sleep 0.1; done
+    grep -q " watching $pid\$" "$w/forks.txt" 2>/dev/null && touch "$w/.procwatch-ok" || say "launch $label: fork monitor did not attach"
     ( while kill -0 "$pid" 2>/dev/null; do
           out=$(lsof -nP -p "$pid" 2>/dev/null || true)
           if [ -n "$out" ]; then
@@ -356,6 +374,23 @@ launch_evidence() {
     lo=$(grep -c '^ok$' "$w/lsof-samples.txt" 2>/dev/null || true); lf=$(grep -c '^fail$' "$w/lsof-samples.txt" 2>/dev/null || true)
     lg=0; head -1 "$w/tool-log.txt" 2>/dev/null | grep -q '^Filtering the log data' && lg=1
     echo "${f:-0} ${s:-0} ${t:-0} $pw ${lo:-0} ${lf:-0} $lg"
+}
+# C2: across every launch, absence counts only where the monitors observed the launch. Per-launch sample counts are
+# in the detail; limits: the fork monitor attaches just after the app starts, and lsof sees sockets open at a sample.
+egress_result() {
+    local w label f s t pw lo lf lg tf=0 ts=0 blind="" counts=""
+    for w in "$RUN"/watch-*; do
+        [ -d "$w" ] || continue
+        label=${w##*/watch-}
+        read -r f s t pw lo lf lg <<< "$(launch_evidence "$label")"
+        tf=$(( tf + f )); ts=$(( ts + s )); counts="$counts $label:${lo}/$(( lo + lf ))"
+        [ "$pw" = 1 ] || blind="$blind $label:fork-monitor"
+        lsof_enough "$lo" "$lf" 1 || blind="$blind $label:lsof"
+    done
+    if [ -z "$counts" ]; then result C2.no-egress INCONCLUSIVE "no launch was monitored"
+    elif [ $tf != 0 ] || [ $ts != 0 ]; then result C2.no-egress FAIL "child processes $tf, socket observations $ts"
+    elif [ -n "$blind" ]; then result C2.no-egress INCONCLUSIVE "no child process or socket seen, but monitoring was missing for:$blind"
+    else result C2.no-egress PASS "no child process in any launch (fork monitor attached each time); no socket seen in lsof samples per launch (seen/taken):$counts"; fi
 }
 # lsof coverage is enough when it saw the process in at least `min` samples and in 90 % of them.
 lsof_enough() { [ "$1" -ge "$3" ] && [ $(( $1 * 10 )) -ge $(( ($1 + $2) * 9 )) ]; }
@@ -461,7 +496,7 @@ cmd_run() {
         esac; shift
     done
     [ "$(id -un)" = "$TEST_USER" ] || { echo "Running as $(id -un), not $TEST_USER. Nothing was done."; exit 1; }
-    [ -z "$(current_run)" ] || [ ! -f "$(current_run)/.active" ] || { echo "A run is still active: $(current_run). Run ./validate.sh cleanup first."; exit 1; }
+    [ -z "$(current_run)" ] || [ ! -f "$(current_run)/.active" ] || [ -f "$(current_run)/.cleaned" ] || { echo "A run is still active: $(current_run). Run ./validate.sh cleanup first."; exit 1; }
     open_tty
     echo "Type the candidate DMG SHA-256 from the #94 readiness report (64 hex characters):"
     EXPECTED=$(tty_read | tr -d ' ' | tr 'A-F' 'a-f')
@@ -471,7 +506,7 @@ cmd_run() {
     RUN="$EVID_ROOT/$RUN_ID"
     [ ! -e "$RUN" ] || { echo "$RUN exists. Nothing was done."; exit 1; }
     mkdir -p "$RUN/screenshots"; chmod 700 "$EVID_ROOT"
-    echo "$RUN" > "$EVID_ROOT/current"; touch "$RUN/.active"
+    echo "$RUN" > "$EVID_ROOT/current"; touch "$RUN/.active"; IN_RUN=1
     echo "$MODE" > "$RUN/.mode"
     printf 'ID\tRESULT\tDETAIL\n' > "$RUN/results.tsv"
     say "run $RUN_ID ($MODE): candidate $CANDIDATE, package $(pkgval package_commit), macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(uname -m), $(sysctl -n hw.ncpu) cores"
@@ -525,14 +560,16 @@ cmd_run() {
     sleep "$WATCH_SECS"
     local ev f s t pw lo lf lg
     ev=$(launch_evidence A); read -r f s t pw lo lf lg <<< "$ev"
+    local alive=1; { kill -0 "$(cat "$RUN/watch-A/.pid")" 2>/dev/null && ! grep -q ' exit$' "$RUN/watch-A/forks.txt"; } || alive=0
     if [ "$pw" != 1 ]; then result A2.processes INCONCLUSIVE "the fork monitor didn't attach: child processes not observed"
+    elif [ "$alive" != 1 ] && [ "$f" = 0 ]; then result A2.processes INCONCLUSIVE "the app exited during the watch window: the whole window wasn't observed"
     elif [ "$f" = 0 ]; then result A2.processes PASS "no child process (kernel fork monitor attached for the whole window)"
     else result A2.processes FAIL "$f child process(es): $(grep ' fork ' "$RUN/watch-A/forks.txt" | awk '{print $NF}' | sort -u | tr '\n' ' ')"; fi
     local min=$(( WATCH_SECS / 4 )); [ $min -ge 1 ] || min=1
     if [ "$s" != 0 ]; then result A2.network FAIL "$s socket observation(s)"
     elif lsof_enough "$lo" "$lf" "$min"; then result A2.network PASS "no network socket ($lo lsof samples saw the process, $lf missed)"
     else result A2.network INCONCLUSIVE "lsof saw the process in only $lo sample(s) ($lf missed): network absence not shown"; fi
-    if [ "$pw" = 1 ] && [ "$f" = 0 ] && grep -q '^A1.keychain-api	PASS' "$RUN/results.tsv"; then
+    if [ "$pw" = 1 ] && [ "$f" = 0 ] && [ "$alive" = 1 ] && grep -q '^A1.keychain-api	PASS' "$RUN/results.tsv"; then
         result A2.keychain PASS "no Keychain access: no Keychain API in the binary, and no security (or any) child process"
     elif [ "$f" != 0 ] && grep ' fork ' "$RUN/watch-A/forks.txt" | grep -q security; then result A2.keychain FAIL "a security process was started"
     else result A2.keychain INCONCLUSIVE "the static check or the fork monitor is missing: Keychain absence not shown"; fi
@@ -576,7 +613,7 @@ cmd_run() {
     # B3: a normal quit, then quit during the first index of a large batch, then relaunch.
     local q0; q0=$(quit_app A "Open the popover and click Quit (a normal quit).")
     [ "$q0" != timeout ] && result B3.quit PASS "normal quit exited ${q0} ms after Return" || die "SpanDeck didn't quit within $QUIT_WAIT s of Return"
-    local big_files=${VALIDATE_BIG_FILES:-5000} big_msgs=${VALIDATE_BIG_MESSAGES:-40} attempt=0 quit_ms="" got=n
+    local big_files=$BIG_FILES big_msgs=$BIG_MESSAGES attempt=0 quit_ms="" got=n
     while [ $attempt -lt 3 ]; do
         attempt=$((attempt + 1))
         echo "    Writing synthetic batch $attempt ($big_files files x $big_msgs messages; about a minute) while SpanDeck is quit..."
@@ -650,18 +687,7 @@ cmd_run() {
     cs=$(cache_summary); echo "$cs" > "$RUN/cache-final.txt"
     [[ "$cs" == *"version=7 tokens=$expected_total "* ]] && result B4.exact PASS "rebuilt cache is version 7 with exactly $expected_total tokens" \
         || result B4.exact FAIL "final cache: $cs (expected version=7 tokens=$expected_total)"
-    # Across every launch: absence counts only where the monitors observed the whole launch.
-    local w label tf=0 ts=0 blind=""
-    for w in "$RUN"/watch-*; do
-        label=${w##*/watch-}
-        read -r f s t pw lo lf lg <<< "$(launch_evidence "$label")"
-        tf=$(( tf + f )); ts=$(( ts + s ))
-        [ "$pw" = 1 ] || blind="$blind $label:fork-monitor"
-        lsof_enough "$lo" "$lf" 1 || blind="$blind $label:lsof"
-    done
-    if [ $tf != 0 ] || [ $ts != 0 ]; then result C2.no-egress FAIL "child processes $tf, socket observations $ts"
-    elif [ -n "$blind" ]; then result C2.no-egress INCONCLUSIVE "no child process or socket seen, but monitoring was missing for:$blind"
-    else result C2.no-egress PASS "every launch fully monitored: 0 child processes, 0 sockets"; fi
+    egress_result
     consent=$(consent_now)
     local rc=0; security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1 || rc=$?
     if ! consent_off "$consent" || [ -e "$GROK/auth.json" ] || [ $rc = 0 ]; then result C2.integrations-off FAIL "$consent; grok key $([ -e "$GROK/auth.json" ] && echo present || echo absent); Claude item $([ $rc = 0 ] && echo present || echo absent)"
@@ -681,7 +707,12 @@ verdict() {
     local r=""
     [ -f "$RUN/.gate-passed" ] || r="$r; isolation or package gate failed or didn't finish"
     [ -f "$RUN/.complete" ] || r="$r; run incomplete"
-    local fails inconc skips
+    local fails inconc skips missing="" id
+    for id in $REQUIRED_IDS; do
+        [ "$(awk -F'\t' -v i="$id" 'NR>1 && $1==i {s=$2} END{print s}' "$RUN/results.tsv")" = PASS ] \
+            || [ -n "$(awk -F'\t' -v i="$id" 'NR>1 && $1==i' "$RUN/results.tsv")" ] || missing="$missing $id"
+    done
+    [ -z "$missing" ] || r="$r; required checks missing (never ran):$missing"
     fails=$(awk -F'\t' 'NR>1 && $2=="FAIL"{printf " %s", $1}' "$RUN/results.tsv")
     inconc=$(awk -F'\t' 'NR>1 && $2=="INCONCLUSIVE"{printf " %s", $1}' "$RUN/results.tsv")
     skips=$(awk -F'\t' -v opt="$OPTIONAL_IDS" 'NR>1 && $2=="SKIP" && index(opt, " " $1 " ")==0 {printf " %s", $1}' "$RUN/results.tsv")
@@ -740,6 +771,8 @@ cmd_cleanup() {
     [ "$(id -un)" = "$TEST_USER" ] || { echo "Running as $(id -un), not $TEST_USER. Nothing was done."; exit 1; }
     RUN=$(current_run); [ -n "$RUN" ] && [ -d "$RUN" ] || { echo "No run recorded; nothing to clean."; exit 0; }
     local id; id=$(basename "$RUN")
+    # Once only: after a cleanup, anything SpanDeck-related in this account is no longer this run's.
+    [ ! -f "$RUN/.cleaned" ] || { echo "Run $id was already cleaned up; nothing was done (see $RUN/cleanup.txt)."; exit 0; }
     if [ -n "$(app_pid)" ]; then echo "Quit SpanDeck from its popover first (Settings > turn off Launch at login if on). Nothing was done."; exit 1; fi
     open_tty
     echo "Cleanup removes only what run $id created and can verify: its app copy (exact bundle hash), SpanDeck's state"
@@ -748,7 +781,7 @@ cmd_cleanup() {
     [ "$(tty_read)" = y ] || { echo "Cancelled. Nothing was done."; exit 1; }
     stop_watchers
     local log="$RUN/cleanup.txt" kept=0
-    : > "$log"
+    echo "cleanup $(stamp)" >> "$log"
     note() { echo "$*" | tee -a "$log"; }
     keep() { note "KEPT: $*"; kept=$((kept + 1)); }
 
@@ -763,11 +796,12 @@ cmd_cleanup() {
 
     # SpanDeck's state: created by this run only if it launched the app after the gate found none.
     if [ -f "$RUN/.launched" ] && [ -f "$RUN/.gate-passed" ]; then
-        if [ -L "$APP_SUPPORT" ]; then keep "SpanDeck's Application Support folder is a link"; else rm -rf "$APP_SUPPORT"; fi
+        if [ -L "$APP_SUPPORT" ]; then keep "SpanDeck's Application Support folder is a link"
+        else rm -rf "$APP_SUPPORT"; note "removed SpanDeck's Application Support folder (created by this run)"; fi
         defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
         defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
         rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
-        note "removed SpanDeck's state in this account (created by this run)"
+        note "removed SpanDeck's preferences and caches in this account (created by this run)"
     else note "this run never launched SpanDeck: SpanDeck's state, if any, is left alone"; fi
 
     # Fixture folders: only those carrying this run's marker, and not links.
@@ -796,15 +830,16 @@ cmd_cleanup() {
                 else
                     mv "$p.parked-$id" "$p"
                     local was; was=$(awk -v p="$p" '$2==p{print $1}' "$RUN/.parked-hashes" 2>/dev/null | tail -1)
-                    if [ -n "$was" ] && [ "$(tree_hash "$p")" != "$was" ]; then keep "restored $(echo "$p" | sanitize), but its contents changed while parked"
+                    if [ -z "$was" ]; then keep "restored $(echo "$p" | sanitize); contents not verified (no hash was recorded)"
+                    elif [ "$(tree_hash "$p")" != "$was" ]; then keep "restored $(echo "$p" | sanitize), but its contents changed while parked"
                     else note "restored $(echo "$p" | sanitize) (contents unchanged)"; fi
                 fi
             elif [ -e "$p" ]; then note "$(echo "$p" | sanitize) is in place (it was never moved)"
             else keep "$(echo "$p" | sanitize) was recorded for parking but neither it nor its parked copy exists"; fi
         done < "$RUN/.parked"
     fi
-    rm -f "$RUN/.active"
-    [ -z "${MODE:-}" ] || cmd_report >/dev/null 2>&1 || true
+    rm -f "$RUN/.active"; touch "$RUN/.cleaned"
+    cmd_report >/dev/null 2>&1 || true
     if [ "$kept" = 0 ]; then echo "Cleanup done. Evidence kept: $RUN"
     else echo "Cleanup done with $kept item(s) KEPT for you to review (see above and $log). Evidence kept: $RUN"; fi
 }
