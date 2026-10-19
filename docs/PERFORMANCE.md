@@ -198,6 +198,27 @@ One ledger per process (memory runs):
   - An open popover redraws on each store change (every 1 s sample). A full render is an upper bound for one update.
 - **Hover:** the top-consumer list takes about 0.9 ms per refresh (1.6 ms under the large set's load).
 
+### 4.5 After #86: non-blocking quit
+
+These are from run `86236c3` (the #86 branch, no local changes). Raw results are in [`perf/2026-10-18-m2pro-after-86/`](perf/2026-10-18-m2pro-after-86/). The load average was 2.5–13.7, given per dataset in the JSON. The quit runs through `ShutdownCoordinator` and `Ledger.requestStop`, as the app now quits.
+
+| Quit | small | medium | large |
+|---|---|---|---|
+| **Old path** (`flush`, `queue.sync`) 50 ms into a cold scan: main thread blocked | 0.33 s | 4.4 s | **18.1 s** |
+| **9c, since #86**, 50 ms into a cold scan: `begin` on main / heartbeat late, worst | 0.07 / 1.1 ms | 0.04 / 1.1 ms | 0.21 / 1.1 ms |
+| … cancellation latency / save / total to the reply | 18 / 6 / 25 ms | 24 / 6 / 30 ms | 46 / 7 / 53 ms |
+| **9d, since #86**, with the whole cache to save (the worst case): `begin` / heartbeat late, worst | 0.05 / 1.1 ms | 0.02 / 1.1 ms | 0.02 / 1.1 ms (259 beats) |
+| … save = total to the reply | 40 ms (1.4 MB) | 0.34 s (13 MB) | **1.5 s** (48 MB) |
+| Outcome | saved | saved | saved |
+
+- **B3 is met:** the main thread is held at most 0.21 ms. The total quit time, while AppKit keeps the event loop running, is at most 1.5 s on large, well under the 5 s timeout.
+- **Scan throughput is unchanged.** First-scan, rebuild, tick, warm-start and save CPU are within −12 % to +7.5 % of run 4 on every dataset. The +7.5 % is on small, under a load average of 5–13; a quieter rerun of small and medium was within ±3 %.
+- **Timeout and failure:**
+  - The 5 s timeout replies `timedOut` and ignores a late result.
+  - A failed save reports `failed`, keeps the previous cache byte for byte, and the relaunch rebuilds the rest.
+  - The benchmark measures only successful quits. Timeout and failure are covered by `ShutdownTests` and `ShutdownCoordinatorTests`.
+- **Not measured here:** AppKit's own termination after the reply, and logout or restart. Those need the owner's run in a test account.
+
 ## 5. Budgets
 
 ### 5.1 Owner decisions (2026-10-18)
@@ -219,7 +240,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 |---|---|---|---|---|
 | B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.17 % | met | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
 | B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only) | met for scans; **post-refresh publish not measured** (#88) | one 60 Hz frame. The first popover render is a UI action under B11 |
-| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s | **fails**: accepted priority failure (#86) | a quit that takes seconds looks hung |
+| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.21 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, pending merge) | a quit that takes seconds looks hung |
 | B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
 | B5 | Tick with new data, **excluding cache saves**: p95 ≤ **100 ms** | 59.6 ms; no timed sample saved (checked) | met | runs every 10 s during active use. Saves are B6; the first change after a start (1.67 s, it saves) is reported apart |
 | B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.30 / 1.4 s | met | it blocks the ledger queue: ticks wait behind it |
@@ -231,10 +252,9 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 
 ## 6. Bottlenecks, ranked
 
-1. **Quit waits for an in-flight scan (B3: accepted priority failure, #86).**
-   - The main thread is held for the rest of the scan: up to 19.7 s on large.
-   - It is worst on a first launch, after a clear, and after a version bump, which is exactly when a user is likely to quit an app that looks busy.
-   - [code] `main.swift` `applicationWillTerminate` → `Ledger.flush()` → `queue.sync`.
+1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, pending merge).**
+   - The main thread was held for the rest of the scan: up to 19.7 s on large.
+   - Now the scan stops at a checkpoint and saves on the ledger queue while AppKit waits. The main thread is held ≤ 0.21 ms, and quitting takes at most 1.5 s on large (§4.5).
 2. **Memory per message, and its warm-start variance (B9, #87).**
    - 279 MB resident after a cold scan on large, and 377–545 MB after a warm start.
    - The cause isn't located yet.
@@ -268,7 +288,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 - **Sleep and wake are simulated:** the clock moves 8 h and the three newest files grow. The machine doesn't sleep, and no `didWakeNotification` fires.
   - The work the wake handler starts is a full scan, a summary and, with new data after more than 10 minutes, a cache save: 0.35 s (medium) and 1.4 s (large), most of it the save.
   - The OS transition and network recovery aren't measured.
-- **Cancellation:**
-  - Ledger scans can't be cancelled.
-  - `ProviderServices` drops overlapping usage refreshes, and drops results that arrive after a consent change (existing tests).
-  - The quit path is the one place a long scan reaches the main thread (§6.1, #86).
+- **Cancellation (since #86):**
+  - A scan stops at checkpoints: before the scan, every 256 listed entries, between files, every 2048 lines or 4 MB inside a file, and between Grok files.
+  - Only quitting requests a stop. A stopped ledger never scans again, and its refreshes publish nothing.
+  - `ProviderServices` still drops overlapping usage refreshes, and results that arrive after a consent change.

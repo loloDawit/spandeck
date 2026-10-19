@@ -1,0 +1,11 @@
+{
+  "cpu_s" : 17.547186999999997,
+  "dataset" : "large",
+  "footprint_after_scan" : 289653864,
+  "footprint_before" : 6406720,
+  "footprint_peak" : 585794640,
+  "footprint_steady" : 289801320,
+  "max_rss" : 594968576,
+  "mode" : "cold",
+  "wall_s" : 20.33835075
+}
