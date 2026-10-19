@@ -243,7 +243,7 @@ Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns 
 - **Primary evidence: an order-balanced A/B of the final code against pre-#86 `main`** (`ab-abba-final-vs-main/`, `scripts/bench-ab.py <dir> main final`).
   - The PR's final code (`7bec306`) and `main` (`587f1c3`) ran in ABBA order per dataset (final, main, main, final), so neither side always runs first.
   - Each file carries an `ab` block: commit, local changes (none), load, status.
-  - **Every scenario on small and medium was within −6.3 % to +4.0 %**, and both ends are sub-millisecond ticks. Excluding those, the range is −3.9 % to +1.7 %.
+  - **Every scenario on small and medium was within −6.3 % to +4.0 %**. Both ends are ticks of about a millisecond or less: medium's no-change tick (1.1–1.2 ms) and small's full scan with nothing new (0.5 ms). Without those two, the range is −3.9 % to +1.7 %.
   - **First-scan throughput:** 37.6 → 37.3 MB/s (small) and 38.6 → 38.3 MB/s (medium).
   - Load average 2.5–4.9, except one medium `main` run at 14.9 (recorded in its file). CPU medians are less sensitive to load than wall time.
 - **Earlier A/Bs (supporting).** They ran the candidate side first in every round, so any order effect fell on one side.
