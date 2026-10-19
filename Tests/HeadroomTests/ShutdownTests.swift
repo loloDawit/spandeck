@@ -421,6 +421,50 @@ struct ShutdownTests {
         #expect(!(await messages.get()).isEmpty, "the resumed index reports progress")
     }
 
+    /// The relaunch after a stop is always a full scan, so a transcript deleted meanwhile has its mark pruned and
+    /// everything the stop skipped is done (review of #90). Usage already counted from the deleted file stays (P12),
+    /// so the baseline counts it too before the deletion.
+    @Test func relaunchAfterAStopPrunesLikeAFullScan() async throws {
+        let rig = try Rig()
+        try rig.writeDataset()
+        let s = try rig.support()
+        let l = rig.ledger(s)
+        let box = Self.stopAt(l, 3, where: { $0 == .betweenFiles }) // s0 and s1 counted
+        _ = await Self.refresh(l)
+        #expect(await box.result() == .saved)
+        let base = try await Self.baseline(rig) // everything counted
+        try FileManager.default.removeItem(at: rig.box.home.appendingPathComponent(BenchDataset.projectDir + "/s0.jsonl"))
+        let resumed = await Self.relaunched(rig, s), rebased = await Self.relaunched(rig, base.1)
+        let marks = (Self.cache(s)?["files"] as? [String: Any])?.count
+        #expect(marks == 4, "the deleted transcript's mark is pruned: \(String(describing: marks))")
+        await Self.expectSame((resumed, s), (rebased, base.1), "after a deleted file")
+    }
+
+    /// A resumed index shows progress, an ordinary rescan of many touched transcripts doesn't (review of #90).
+    @Test func rescanOfTouchedFilesShowsNoProgress() async throws {
+        let rig = try Rig()
+        try rig.writeDataset(files: 40, messages: 400, bigFile: 0, grokSessions: 0)
+        let s = try rig.support()
+        _ = await Self.relaunched(rig, s)
+        var seq = 0
+        for k in 0..<30 { try BenchDataset.append(home: rig.box.home, count: 1, now: rig.clock.now, seq: &seq, newest: k) }
+        let l = rig.ledger(s)
+        var seen: [String] = []
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            l.refresh(windowStart: nil, progress: { if let m = $0 { seen.append(m) } }, completion: { _, _, _ in c.resume() })
+        }
+        #expect(seen.isEmpty, "30 grown files with marks aren't a first index: \(seen.prefix(2))")
+    }
+
+    /// Budgets below 1 are clamped, so a checkpoint always comes after at least one counted line.
+    @Test func checkpointBudgetsAreClamped() {
+        let l = Ledger(home: URL(fileURLWithPath: "/nonexistent"), appSupport: URL(fileURLWithPath: "/nonexistent"),
+                       pricing: Pricing(directory: URL(fileURLWithPath: "/nonexistent"), transport: FakeTransport()))
+        l.stopCheckLines = 0
+        l.stopCheckBytes = -5
+        #expect(l.stopCheckLines == 1 && l.stopCheckBytes == 1)
+    }
+
     // MARK: 9. Every interruption point, on the accounting fixtures
 
     /// For every F-fixture, the files after its first step and after all its steps: stopping at **every** checkpoint
