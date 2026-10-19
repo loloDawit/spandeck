@@ -6,8 +6,8 @@ import Testing
 
 /// Private-use acceptance journeys (#94; matrix in `docs/VALIDATION.md`). Each test drives the app's own services,
 /// store and popover view over a synthetic home and a recording transport, the way the app delegate does, and checks
-/// what the user would see and which side effects happened. Nothing here touches the real home, Keychain, network,
-/// login items or preferences. Drawing, the real `NSPopover`, clicks and the app process are the owner's checks.
+/// what the user would see and which side effects happened. Nothing here touches the real home, Keychain, network
+/// or login items; the offscreen render only reads the test process's standard defaults (`@AppStorage`). Drawing, the real `NSPopover`, clicks and the app process are the owner's checks.
 @MainActor
 struct AcceptanceTests {
     /// A synthetic Claude Code line for a model, with a fixed id pair: 100 input + 50 output tokens.

@@ -10,7 +10,7 @@ An offscreen SwiftUI render proves that the view tree builds and lays out for a 
 ## 1. Scenario matrix
 | Scenario | Automated evidence | Still needs |
 |---|---|---|
-| Fresh install, first launch | `AcceptanceTests.freshInstallWithNothingConfigured`, `LaunchPathTests.defaultLaunchSideEffects` [test]; default launch at `6e777c0` [runtime] (Run 4, #5) | Run on the candidate [owner] |
+| Fresh install, first launch | `AcceptanceTests.freshInstallWithNothingConfigured`, `LaunchPathTests.defaultLaunchSideEffects` [test]; default launch at `6e777c0` [runtime] ([Run 4](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6243694333), audit 0009) | Run on the candidate [owner] |
 | No configured integrations | the same; `GrokConsentTests`, `LaunchPathTests.forcedRefreshWithoutConsentReadsNothing` [test] | — |
 | Existing cache | `AcceptanceTests.historyIsCountedOnceAcrossUpdatesRelaunchAndCorruptCache`, `LedgerCacheTests.relaunchKeepsIdsAndOffsets` [test] | — |
 | Corrupt cache recovery | the same journey; `LedgerCacheTests.unusableCacheRebuilt`, `cacheWithOtherKeyRebuilt` [test] | — |
@@ -25,11 +25,11 @@ An offscreen SwiftUI render proves that the view tree builds and lays out for a 
 | Quit and relaunch | the history journey, `ShutdownTests.relaunchAfterAStopPrunesLikeAFullScan` [test] | [owner] |
 | Permission denial | `TrustStateTests.unreadableTranscriptFolderIsReported`, `AcceptanceTests.deniedCredentialSendsNothing`, `LedgerCacheTests.unlistableFolder*` [test] | — |
 | Integration enable / disable / rollback | `AcceptanceTests.quotaIntegrationEnableOfflineAndRollBack`, `LaunchPathTests.disablingClaudeLimitsClearsAndStops`, `GrokConsentTests`, `QuotaVisibilityTests` [test] | Consent-enabled paths against real endpoints are V16: unverified by owner rule |
-| Diagnostics enabled / disabled | `DiagnosticsTests` (9) [test] | Start, stop and export in the app [owner] |
-| No unexpected network or credential access | every journey asserts the transport's requests and credential reads; `LaunchPathTests.sideEffectsOnlyInLiveEnvironment`, `testsNeverUseLiveDependencies` [test]; Run 4 C1 [runtime] | Run on the candidate [owner] |
+| Diagnostics enabled / disabled | `DiagnosticsTests` (10) [test] | Start, stop and export in the app [owner] |
+| No unexpected network or credential access | every journey asserts the transport's requests and credential reads; `LaunchPathTests.sideEffectsOnlyInLiveEnvironment`, `testsNeverUseLiveDependencies` [test]; Run 4 R4-C1 [runtime] ([report](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6243694333)) | Run on the candidate [owner] |
 | Stale or reset quota | `TrustStateTests` (F-3), `GrokErrorStateTests` [test] | — |
-| Cache and file permissions | `LedgerCacheTests.ownerOnlyModes`, `BackupExclusionTests`, `DiagnosticsTests` (0600) [test]; Run 4 P4 [runtime] | — |
-| No sensitive data at rest | `PrivacyCanaryTests`, `LedgerCacheTests.cacheHoldsNoPathsIdsOrContent`, `DiagnosticsTests.exportCarriesNoContentPathOrIdentity` [test]; Run 4 C2 [runtime] | — |
+| Cache and file permissions | `LedgerCacheTests.ownerOnlyModes`, `BackupExclusionTests`, `DiagnosticsTests` (0600) [test]; Run 4 R4-P4a–f [runtime] | — |
+| No sensitive data at rest | `PrivacyCanaryTests`, `LedgerCacheTests.cacheHoldsNoPathsIdsOrContent`, `DiagnosticsTests.exportCarriesNoContentPathOrIdentity` [test]; Run 4 R4-C2 [runtime] | — |
 
 ## 2. Owner validation checklist (one pass, in order)
 The candidate is built by `scripts/package-candidate.sh` from the final `main` of #94 ([`INSTALL.md`](INSTALL.md)). Steps A–C use the `spandecktest` account with synthetic fixtures, as in Run 4. Step D is the personal-account decision.

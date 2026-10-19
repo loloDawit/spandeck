@@ -16,7 +16,7 @@ Work must be traceable to issues and acceptance tests. Do not ship features befo
 | Order | Item | Milestone | Status | Notes |
 |---|---|---|---|---|
 | Now | **#94 Private daily-use readiness** | M0 | In progress | Delegated milestone: a validated private-use candidate and a GO / CONDITIONAL GO / NO-GO decision. Slices: trust states (#95) and diagnostics (#96, #97) merged; acceptance suite, candidate build and docs (#92) in review. |
-| Done | #3, #5, #6, #10, #12, #86, #87, #88 | M0 | Closed | Default launch [runtime] at `6e777c0` (Run 4); privacy (#5); F01–F49; Claude surfaces audit; quit during a scan; memory and UI baselines (optimizations deferred, #94). |
+| Done | #3, #5, #6, #10, #12, #86, #87, #88 | M0 | Closed | Default launch [runtime] at `6e777c0` ([Run 4](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6243694333)); privacy (#5); F01–F49; Claude surfaces audit; quit during a scan; memory and UI baselines (optimizations deferred, #94). |
 | Open | #7 provenance, #9 ADR | M0 | In progress | Contract 0.4 and ADR 0001 partly accepted. Open: stale threshold, P10, P15, Enterprise and Bedrock wording, the real-app VoiceOver check. |
 | Open | #4 consent and integration lifecycle | M0 | In progress | Every integration is opt-in and reversible ([`PRIVATE_USE.md`](PRIVATE_USE.md) §3). Open: credential-alternatives analysis, status-line/OTel change-preview spec (M2), V16. |
 | Open | #11 release security | M0 | In progress | Open: Developer ID signing and notarization (needs the owner's Apple account), tag ruleset, Intel and macOS 14 runs. |

@@ -47,11 +47,12 @@ cd build/candidate/<commit> && shasum -a 256 -c SHA256SUMS
 ## Uninstall
 1. In SpanDeck: turn off **Launch at login** (Settings) if you turned it on. Turn off **Claude plan limits** and **Grok credits** if they're on, then **Quit**.
 2. Delete `/Applications/SpanDeck.app`.
-3. Remove SpanDeck's data. Only these exist:
+3. Remove SpanDeck's data. SpanDeck keeps nothing else:
    ```bash
    rm -rf "$HOME/Library/Application Support/SpanDeck"   # usage index, its key, prices, diagnostics
    defaults delete io.github.lolodawit.SpanDeck           # SpanDeck's settings
    ```
+   - A diagnostics export is wherever you saved it; delete it there.
    - SpanDeck stores nothing in the Keychain.
    - It writes no log file in release builds. A few one-line messages (for example a login-item change that failed) go to the system log, with no path, id or usage data.
    - It never changes Claude Code's or Grok's files. When enabled, `grok models` may update the Grok CLI's own files.

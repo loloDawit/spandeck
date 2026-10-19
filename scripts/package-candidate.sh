@@ -1,7 +1,7 @@
 #!/bin/bash
 # Private-use build candidate (#94): a universal, ad-hoc-signed SpanDeck.app and DMG from a clean, committed tree, with
 # a provenance record and SHA-256 sums. NOT a release: not Developer ID signed or notarized, so scripts/verify-release.sh
-# refuses it by design. It never installs, launches or quits anything, and touches nothing outside build/.
+# refuses it by design. It never installs, launches or quits anything. It writes only build/ (and .build/, SwiftPM's cache).
 #   scripts/package-candidate.sh            test (serial, as in CI), build, package, record
 #   scripts/package-candidate.sh --no-test  skip the test run (the provenance says so)
 # Output: build/candidate/<commit>/ with SpanDeck-<version>.dmg, PROVENANCE.txt and SHA256SUMS.
@@ -17,9 +17,11 @@ case "${1:-}" in
     *) echo "usage: scripts/package-candidate.sh [--no-test]" >&2; exit 64 ;;
 esac
 
-# Only a committed tree: the provenance names a commit, so the bytes must come from it.
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    echo "package-candidate: the working tree has uncommitted changes to tracked files; commit or stash them" >&2
+# Only a committed tree: the provenance names a commit, so the bytes must come from it. Untracked files under the
+# folders that are built or packaged count too (SwiftPM compiles any .swift file under Sources).
+if [ -n "$(git status --porcelain --untracked-files=no)" ] \
+    || [ -n "$(git status --porcelain --untracked-files=all -- Sources Resources Package.swift build.sh scripts)" ]; then
+    echo "package-candidate: uncommitted changes, or untracked files in Sources, Resources or scripts; commit or remove them" >&2
     exit 1
 fi
 commit=$(git rev-parse HEAD)
@@ -37,7 +39,8 @@ if [ $run_tests = 1 ]; then
         tail -5 "$log" >&2
         exit 1
     fi
-    tests=$(grep -E "Test run with .* (passed|failed)" "$log" | tail -1 | sed 's/^[^A-Za-z]*//')
+    tests=$(grep -E "Test run with .* (passed|failed)" "$log" | tail -1 | sed 's/^[^A-Za-z]*//' || true)
+    tests=${tests:-"passed (summary line not found in $log)"}
 fi
 
 ./build.sh dmg >/dev/null
@@ -62,7 +65,7 @@ gate=$(SPANDECK_TEAM_ID= scripts/verify-release.sh "$out/$(basename "$dmg")" 2>&
 cat >"$out/PROVENANCE.txt" <<EOF
 SpanDeck private-use build candidate (#94) — NOT a release
 commit:            $commit
-tree:              clean (tracked files)
+tree:              clean (no uncommitted changes; no untracked files in Sources, Resources, scripts)
 version:           $version ($build_number)
 bundle id:         $BUNDLE_ID
 architectures:     $archs

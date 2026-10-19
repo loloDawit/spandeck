@@ -1,9 +1,9 @@
-# Run 4: runtime verification of P1–P4 (#5) — guide, **pending**
+# Run 4: runtime verification of P1–P4 (#5) — guide and results
 
 **Issue:** #5 (M0, privacy). **Follows:** [audit 0007](0007-privacy-verification.md) §7–§8 and [audit 0008](0008-identity-isolation.md).
 **Build under test:** `main` at `6e777c0` (P1 #66, P2 #68, P3 #11, P4 #70; hosted CI run 39076084193 green).
 **Pre-#70 build** (to create an "existing install"): `6ce1987` (main after #69; has P1, P2 and P3, not P4).
-**Status:** **pending, owner.** Nothing here has been run. Don't record a result until the run has happened.
+**Status:** **run by the owner, PASS within its documented bounds** (evidence run `20261017T235327Z`, `spandecktest`, macOS 26.5, Apple M2 Pro; builds `6ce1987` → `6e777c0`). Results: [owner report on #5](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6243694333), recorded in the *Report* table below on 2026-10-19 (#92). The owner accepted the residual limits and closed #5 on 2026-10-18; that acceptance doesn't authorize a personal-account trial.
 
 Run 3 (`c68b108`) and the audit 0008 run (`b57dea6`) predate P1, P2 and P4. This run checks them in the running app:
 
@@ -359,23 +359,23 @@ Quit SpanDeck from its menu, then run `rv4_abort`. It removes the one `debugHove
 ## Report (post on #5: sanitized, no paths, hashes or tokens)
 | ID | Check | Expected | Result |
 |---|---|---|---|
-| R4-0 | `preflight` (T0) all PASS; `rv4_use` OK for both builds | PASS | |
-| R4-P1a | `unknown` row: 75 tokens, cost n/a; listed as unpriced; no false pricing | as stated | |
-| R4-P1b | `badmodel` canary in cache, new files, screenshots | none | |
-| R4-P1c | `unknown#` keys in cache (main, after-clear) | 5, 5 | |
-| R4-P2a | Hover log with `debugHover` set, absent or existing case (T4) | unchanged (`absent` stays `absent`) | |
-| R4-P2b | Hover log, existing case (T6) | size, mtime, hash equal to `seeded` | |
-| R4-P2c | Hover panels appear and position as before | yes | |
-| R4-P3 | `compare` start→main, main→after-clear: legacy | unchanged (or **limited**: no legacy state) | |
-| R4-P4a | Pre-#70 files before 6e777c0 (T2) | attr=no, `[Included]` | |
-| R4-P4b | Existing key and cache after load (T4) | attr=yes, `[Excluded]`; key hash same; key inode same | |
-| R4-P4c | Cache replaced by a save (T4) | new inode, attr=yes, `[Excluded]` | |
-| R4-P4d | Quiet relaunch (T6) | key unchanged; both still excluded (cache inode noted) | |
-| R4-P4e | After Clear (T6) | new key hash; both attr=yes, `[Excluded]` | |
-| R4-P4f | Control and folder verdicts | `[Included]` (else P4 `tmutil` part inconclusive) | |
-| R4-C1 | Consent: SpanDeck keys absent/0 throughout; forks 0; socket lines 0 | as stated | |
-| R4-C2 | Canary hits other than `model` in app-written files and screenshots | none | |
-| R4-T | Totals main / after-clear | 952 / 952 | |
+| R4-0 | `preflight` (T0) all PASS; `rv4_use` OK for both builds | PASS | PASS |
+| R4-P1a | `unknown` row: 75 tokens, cost n/a; listed as unpriced; no false pricing | as stated | PASS |
+| R4-P1b | `badmodel` canary in cache, new files, screenshots | none | PASS |
+| R4-P1c | `unknown#` keys in cache (main, after-clear) | 5, 5 | PASS |
+| R4-P2a | Hover log with `debugHover` set, absent or existing case (T4) | unchanged (`absent` stays `absent`) | PASS |
+| R4-P2b | Hover log, existing case (T6) | size, mtime, hash equal to `seeded` | PASS |
+| R4-P2c | Hover panels appear and position as before | yes | PASS (owner manual observation) |
+| R4-P3 | `compare` start→main, main→after-clear: legacy | unchanged (or **limited**: no legacy state) | PASS |
+| R4-P4a | Pre-#70 files before 6e777c0 (T2) | attr=no, `[Included]` | PASS |
+| R4-P4b | Existing key and cache after load (T4) | attr=yes, `[Excluded]`; key hash same; key inode same | PASS |
+| R4-P4c | Cache replaced by a save (T4) | new inode, attr=yes, `[Excluded]` | PASS |
+| R4-P4d | Quiet relaunch (T6) | key unchanged; both still excluded (cache inode noted) | PASS |
+| R4-P4e | After Clear (T6) | new key hash; both attr=yes, `[Excluded]` | PASS |
+| R4-P4f | Control and folder verdicts | `[Included]` (else P4 `tmutil` part inconclusive) | PASS |
+| R4-C1 | Consent: SpanDeck keys absent/0 throughout; forks 0; socket lines 0 | as stated | PASS (monitor-window bounds) |
+| R4-C2 | Canary hits other than `model` in app-written files and screenshots | none | PASS |
+| R4-T | Totals main / after-clear | 952 / 952 | PASS (877 → 952 → 952) |
 
 Add one line each for: the build SHAs (`6ce1987`, `6e777c0`), the macOS version, and any step that was inconclusive, with the reason.
 

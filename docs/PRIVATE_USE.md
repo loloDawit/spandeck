@@ -6,7 +6,7 @@
 - [`VALIDATION.md`](VALIDATION.md) records how each promise is verified, including what still needs the owner's run.
 
 ## 1. What SpanDeck is today
-SpanDeck is a macOS 14+ menu-bar app (Apple Silicon and Intel) that shows four things:
+SpanDeck is a macOS menu-bar app that shows four things:
 - **Token usage and estimated API-equivalent cost** from Claude Code's local transcripts (`~/.claude/projects`, `~/.config/claude/projects`) and Grok CLI's local usage files.
   - Windows: today, 7 days, 30 days and Claude's 5-hour window.
   - It also shows a 30-day chart and a per-model list.
@@ -16,7 +16,7 @@ SpanDeck is a macOS 14+ menu-bar app (Apple Silicon and Intel) that shows four t
 - **System load** (CPU, GPU, memory, battery), with the top processes on hover. Inherited from Headroom.
 - **Keep awake**: manual, or while Claude Code or Grok is working. Inherited.
 
-It runs locally. At default launch it makes no network request and reads no credential.
+It runs locally. At default launch it makes no network request and reads no credential: [mocked] tests on every change, and [runtime] at `6e777c0` ([Run 4](https://github.com/loloDawit/spandeck/issues/5#issuecomment-6243694333)). It is built for macOS 14+ on Apple Silicon and Intel, but has only been run on macOS 26.5 on Apple Silicon.
 
 ## 2. Promises
 
@@ -52,8 +52,8 @@ It runs locally. At default launch it makes no network request and reads no cred
 
 ### Reliability
 - No silent loss of valid data: usage counted before a transcript or folder disappeared is kept and labelled.
-- No configuration change outside SpanDeck's own preferences domain and Application Support folder. The Grok CLI may update its own files when SpanDeck runs `grok models`; that is opt-in and disclosed.
-- No crash in supported workflows. This is covered by the automated suite, and by the owner's runtime checks in [`VALIDATION.md`](VALIDATION.md).
+- No configuration change outside SpanDeck's own preferences domain and Application Support folder, except what the user asks for: a login item (Launch at login, registered with macOS), a diagnostics export saved where the user chooses, and the Grok CLI's own files, which it may update when SpanDeck runs `grok models` (opt-in, disclosed).
+- No crash is known in supported workflows. That isn't proven: the automated journeys exercise them without crashing, and the owner's checks in [`VALIDATION.md`](VALIDATION.md) cover the real app.
 
 ## 3. Integrations and permissions (all off by default)
 | Integration | What it accesses | Consent | Turn off / roll back |

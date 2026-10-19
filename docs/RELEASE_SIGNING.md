@@ -2,7 +2,7 @@
 
 **Status: plan only.** Nothing here is set up. SpanDeck has no Apple Developer account, certificate, signing secret or notarized build. `build.sh` signs ad hoc. Since #11, `release.yml` publishes nothing that [`scripts/verify-release.sh`](../scripts/verify-release.sh) doesn't accept as a notarized Developer ID build, and with no Team ID configured every release run stops before building. **This document doesn't authorize a release.** A public or enterprise distribution also needs the open items in #3, #11 and the [roadmap](ROADMAP.md) release blockers.
 
-## Where things stand (re-recorded 2026-10-19 on `SpanDeck.app` from `main` = `999a1fd`, macOS 26.5, Xcode 26.6, Swift 6.3.3)
+## Where things stand (re-recorded 2026-10-19 on `SpanDeck.app` built from `main` = `999a1fd`, before #97; later commits change Swift sources only, not the bundle, signing or packaging, macOS 26.5, Xcode 26.6, Swift 6.3.3)
 
 | Check | Command | Result |
 |---|---|---|
