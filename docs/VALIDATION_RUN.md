@@ -22,7 +22,10 @@ This guide runs [`VALIDATION.md`](VALIDATION.md) §2, steps A–C, on the real a
   - none of the paths SpanDeck uses is a link.
 - **Keychain:** this account's keychains are its own, and there's no Claude Code item (attributes only, never a secret).
 - **No credentials:** no Claude, Grok or Codex credential or CLI is present.
-- **A clean slate:** no SpanDeck process, state, preferences or app copy. Leftover `~/.claude/projects` or `~/.grok` entries stop the run unless you pass `--park-existing`, which sets them aside and puts them back at cleanup.
+- **A clean slate:** no SpanDeck process, state, preferences or app copy in this account.
+  - Leftover SpanDeck state wasn't created by this tool, so it stops the run and is never deleted by it. Remove it by hand: see *Leftover state* below.
+  - Leftover `~/.claude/projects` or `~/.grok` entries stop the run unless you pass `--park-existing`, which sets them aside and puts them back at cleanup.
+- **Free disk space:** at least about 3 GB. Each large batch is about 300 MB, and there can be up to 3.
 - **The package:**
   - the DMG's SHA-256 equals the value **you type** from the #94 report;
   - `SHA256SUMS` and `PACKAGE.sha256` verify;
@@ -47,7 +50,7 @@ This guide runs [`VALIDATION.md`](VALIDATION.md) §2, steps A–C, on the real a
 - **B5, diagnostics:** you start a session in the app. The script checks that `diagnostics.json` appears with mode `0600`, and you confirm the disclosure.
 - **B2, refresh:** synthetic fixtures are added: Claude 610 tokens with one unpriced model, and Grok 300 tokens. You confirm the totals, the "Claude + Grok" header and the unpriced note. Then 10 messages are appended, and you confirm the total grows once, to 910.
 - **B1, popover:** you open and close the popover 10 times and confirm there's no visible hitch. The app's own diagnostics measure each open.
-- **B3, quit during indexing:** a large synthetic batch is written (5,000 files × 40 messages by default). You click Quit while the footer shows "Indexing Claude logs…", and the time to exit is measured; you get up to 3 tries. After the relaunch, you confirm the totals, and the script checks that the usage cache holds **exactly** the expected token count, with no path, transcript text or message id.
+- **B3, quit during indexing:** first a normal quit. Then, with SpanDeck quit, a large synthetic batch is written (5,000 files × 40 messages by default) and SpanDeck is relaunched. With the popover open, you press Return and click Quit while the footer shows "Indexing Claude logs n/N"; you get up to 3 tries. The app's own quit time (request to reply, from diagnostics) must be within its 5 s cap. After the relaunch, you confirm the totals, and the script checks that the usage cache holds **exactly** the expected token count, with no path, transcript text or message id.
 - **B4, corrupt cache:** the cache is overwritten with garbage while SpanDeck is quit. After the relaunch you confirm the totals are rebuilt, and the final cache is version 7 with the exact count.
 - **B5, export:** you export diagnostics into the run folder. The script checks:
   - there's no path, user name, canary or model name;
@@ -102,9 +105,15 @@ shasum -a 256 validate.sh                # same value as step 1
 ### 3. When it finishes
 Still in `spandecktest`:
 ```bash
-./validate.sh cleanup        # removes this run's app copy, SpanDeck state and fixtures; restores parked folders; keeps evidence
+./validate.sh cleanup        # removes this run's app copy, the SpanDeck state it created, and its fixtures; restores parked folders; keeps evidence
 ```
-If the run stops part-way, run `./validate.sh cleanup` too. `./validate.sh report` rebuilds the report of the last run.
+If the run stops part-way, or you press Ctrl-C, run `./validate.sh cleanup` too. Background monitors stop on their own. `./validate.sh report` rebuilds the report of the last run.
+
+**Leftover state.** This is only needed if the gate reports `P5.clean-slate`. It's state from an earlier run that this tool didn't create. Remove it in `spandecktest` with SpanDeck quit:
+```bash
+rm -rf ~/Applications/SpanDeck.app "$HOME/Library/Application Support/SpanDeck"
+defaults delete io.github.lolodawit.SpanDeck
+```
 
 ### 4. Back in your normal account
 The report is in `/Users/Shared/spandeck-validation-results/report-<run>.md`. Tell me its path, or paste it. Screenshots stay in the test account's `~/spandeck-validation/<run>/screenshots/`.

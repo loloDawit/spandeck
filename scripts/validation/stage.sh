@@ -30,6 +30,7 @@ dest=/Users/Shared/spandeck-validation/${commit:0:7}
 mkdir -p build/validation
 clang -Wall -Wextra -O2 -o build/validation/procwatch scripts/runtime/procwatch.c
 mkdir -p "$dest"
+chmod 755 /Users/Shared/spandeck-validation
 cp "$dmg" "$src/PROVENANCE.txt" "$src/SHA256SUMS" "$dest/"
 cp scripts/validation/validate.sh scripts/runtime/procwatch.c build/validation/procwatch Resources/identity.env \
     docs/VALIDATION_RUN.md "$dest/"

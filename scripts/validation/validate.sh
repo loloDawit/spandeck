@@ -17,6 +17,7 @@ umask 077
 PKG=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$PKG/identity.env"
+[ -n "${APP_NAME:-}" ] && [ -n "${BUNDLE_ID:-}" ] && [ -n "${APP_SUPPORT_DIR:-}" ] || { echo "identity.env is incomplete"; exit 1; }
 pkgval() { sed -n "s/^$1=//p" "$PKG/package.env" | head -1; }
 MAIN_USER=$(pkgval main_user)
 MAIN_UID=$(pkgval main_uid)
@@ -36,10 +37,12 @@ ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time*1000'; }
 say() { echo "$(stamp) $*" | tee -a "$RUN/log.txt"; }
 # result ID PASS|FAIL|SKIP|INFO "detail": one line per check, the report's table.
 result() {
-    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$RUN/results.tsv"
-    printf '  [%s] %s: %s\n' "$2" "$1" "$3" | tee -a "$RUN/log.txt"
+    local detail; detail=$(printf '%s' "$3" | tr '\t\n' '  ')
+    printf '%s\t%s\t%s\n' "$1" "$2" "$detail" >> "$RUN/results.tsv"
+    printf '  [%s] %s: %s\n' "$2" "$1" "$detail" | tee -a "$RUN/log.txt"
 }
-tty_read() { local v; read -r v < /dev/tty || true; printf '%s' "$v"; }
+# Reads one line from the terminal; stops the run if there is no terminal (it never guesses an answer).
+tty_read() { local v; IFS= read -r v < /dev/tty || { echo "STOP: no terminal input" >&2; exit 1; }; printf '%s' "$v"; }
 step() { echo; echo "================ $* ================" | tee -a "$RUN/log.txt"; }
 pause() { echo; echo ">>> $*"; echo "    Press Return when done."; tty_read >/dev/null; }
 # ask ID "question": a y/n observation of the real app, recorded as PASS (y) or FAIL (n). Optional note.
@@ -64,7 +67,8 @@ ask_optional() {
         *) result "$id" SKIP "not tried" ;;
     esac
 }
-app_pid() { pgrep -x "$APP_NAME" 2>/dev/null | head -1 || true; }
+# This account's SpanDeck only: a copy running in another (fast-switched) session is never picked up.
+app_pid() { pgrep -u "$(id -u)" -x "$APP_NAME" 2>/dev/null | head -1 || true; }
 sanitize() { sed -e "s|$HOME|~|g" -e "s|/Users/$TEST_USER|~|g" -e "s|$TEST_USER|<test-user>|g" -e "s|$MAIN_USER|<main-user>|g"; }
 human_tokens() { awk -v n="$1" 'BEGIN{ if (n>=1e9) printf "%.2fB", n/1e9; else if (n>=1e6) printf "%.1fM", n/1e6; else if (n>=1e3) printf "%.1fK", n/1e3; else printf "%d", n }'; }
 current_run() { [ -f "$EVID_ROOT/current" ] && cat "$EVID_ROOT/current" || true; }
@@ -149,7 +153,7 @@ gate() {
     ! defaults read "$BUNDLE_ID" >/dev/null 2>&1 || slate="$slate preferences"
     [ ! -e "$APP_DST" ] || slate="$slate ~/Applications/$APP_NAME.app"
     [ -z "$slate" ] && pass P5.clean-slate "no SpanDeck process, state, preferences or app copy in this account" \
-        || bad P5.clean-slate "leftover SpanDeck:$slate (run ./validate.sh cleanup, or remove by hand)"
+        || bad P5.clean-slate "leftover SpanDeck:$slate (not created by this tool: remove it by hand, see VALIDATION_RUN.md)"
     [ ! -e "/Applications/$APP_NAME.app" ] || result P5.system-app INFO "/Applications/$APP_NAME.app exists (not ours, left alone; this run launches ~/Applications/$APP_NAME.app by path)"
     if [ -e "$PROJECTS" ] && [ -n "$(find "$PROJECTS" -mindepth 1 -maxdepth 1 2>/dev/null)" ] && [ "${PARK:-0}" != 1 ]; then
         bad P5.transcripts "$HOME/.claude/projects already has entries; rerun with --park-existing to set them aside for this run (restored by cleanup)"
@@ -157,14 +161,15 @@ gate() {
     [ ! -e "$GROK" ] || [ "${PARK:-0}" = 1 ] || bad P5.grok "$HOME/.grok exists; rerun with --park-existing"
 
     # Package: the DMG must have the SHA-256 you typed (from #94), and the package files their recorded hashes.
-    local dmg; dmg=$(ls "$PKG"/*.dmg 2>/dev/null | head -1)
-    local got; got=$(shasum -a 256 "$dmg" 2>/dev/null | cut -d' ' -f1)
+    local dmg="" got=""
+    dmg=$(find "$PKG" -maxdepth 1 -name '*.dmg' -type f 2>/dev/null | head -1 || true)
+    [ -n "$dmg" ] && got=$(shasum -a 256 "$dmg" 2>/dev/null | cut -d' ' -f1 || true)
     [ -n "$dmg" ] && [ "$got" = "$EXPECTED" ] && pass P6.dmg-sha256 "DMG SHA-256 $got matches the value given" \
         || bad P6.dmg-sha256 "DMG SHA-256 ${got:-missing} != expected $EXPECTED"
     (cd "$PKG" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1) && pass P6.sha256sums "SHA256SUMS verifies" || bad P6.sha256sums "SHA256SUMS does not verify"
     (cd "$PKG" && shasum -a 256 -c PACKAGE.sha256 >/dev/null 2>&1) && pass P6.package "package files match PACKAGE.sha256" || bad P6.package "package files changed since staging"
     [ "$(pkgval candidate_dmg_sha256)" = "$EXPECTED" ] || bad P6.package-env "package.env names a different DMG"
-    if xattr "$dmg" 2>/dev/null | grep -q com.apple.quarantine; then bad P6.quarantine "the DMG is quarantined; do not bypass Gatekeeper, restage it"
+    if [ -n "$dmg" ] && xattr "$dmg" 2>/dev/null | grep -q com.apple.quarantine; then bad P6.quarantine "the DMG is quarantined; do not bypass Gatekeeper, restage it"
     else pass P6.quarantine "no quarantine attribute (no Gatekeeper bypass needed)"; fi
     local bad_files; bad_files=$(find "$PKG" -mindepth 1 \( -type l -o ! -user "$MAIN_USER" \) 2>/dev/null | wc -l | tr -d ' ')
     [ "$bad_files" = 0 ] && pass P6.package-owner "package files are plain files owned by the staging account" || bad P6.package-owner "$bad_files package entries are links or owned by someone else"
@@ -172,6 +177,9 @@ gate() {
     echo; echo "Manual: System Settings > General > Login Items & Extensions. Is $APP_NAME listed? [y/n]"
     local li; li=$(tty_read)
     [ "$li" = y ] && bad P7.login-items "$APP_NAME already listed in Login Items" || pass P7.login-items "$APP_NAME not in Login Items (owner observation)"
+    local free_kb; free_kb=$(df -k "$HOME" | awk 'NR==2{print $4}')
+    [ "${free_kb:-0}" -ge 3000000 ] && pass P5.disk "$(( free_kb / 1048576 )) GB free (the large batches need up to ~1.5 GB)" \
+        || bad P5.disk "only $(( ${free_kb:-0} / 1024 )) MB free; the large batches need ~1.5 GB"
     local hour; hour=$(date +%H)
     { [ "$hour" -ge 23 ] || [ "$hour" -lt 1 ]; } && result P7.clock INFO "within an hour of local midnight: 'Today' checks may roll over; consider running later"
 
@@ -205,20 +213,40 @@ write_small_fixtures() {
     mkdir -p "$g"; echo "run=$(basename "$RUN")" > "$GROK/$MARK"
     printf '{"turns":[{"endedAt":"%s","inputTokens":100,"outputTokens":50,"cachedReadTokens":0,"cacheCreationTokens":0,"modelCalls":1,"costUsdTicks":2500000000,"totalTokens":150,"primaryModelId":"grok-val"},{"endedAt":"%s","inputTokens":100,"outputTokens":50,"cachedReadTokens":0,"cacheCreationTokens":0,"modelCalls":1,"costUsdTicks":2500000000,"totalTokens":151,"primaryModelId":"grok-val"}]}\n' "$now" "$now" > "$g/usage.json"
 }
+# A project folder of its own (like Claude Code's, two levels below ~/.claude/projects), written while the app is quit,
+# so the next launch's first full scan indexes it with progress in the footer.
 write_big_fixtures() { # files messages-per-file tag
-    local d; d=$(fixture_dir)/big-$3 k
-    mkdir -p "$d"
-    for ((k = 1; k <= $1; k++)); do claude_messages "$d/s$k.jsonl" "$3f$k" 1 "$2" 600; done
+    local d; d="$(fixture_dir)-$3" k
+    mkdir -p "$d"; echo "run=$(basename "$RUN")" > "$d/$MARK"
+    for ((k = 1; k <= $1; k++)); do claude_messages "$d/s$k.jsonl" "$3f$k" 1 "$2" 400; done
 }
 
 # ------------------------------------------------------------------------------------------------- app control
+# Background watchers are registered as "pid command" and stopped on exit, interrupt or cleanup; a pid is only
+# signalled if it still runs the command it was registered with (no stale pid is ever killed).
+register_watcher() { echo "$1 $(ps -o comm= -p "$1" 2>/dev/null | awk '{print $1}')" >> "$RUN/.watchers"; }
+stop_watchers() {
+    [ -n "${RUN:-}" ] && [ -f "$RUN/.watchers" ] || return 0
+    local pid comm
+    while read -r pid comm; do
+        [ -n "$pid" ] && [ "$(ps -o comm= -p "$pid" 2>/dev/null | awk '{print $1}')" = "$comm" ] && kill "$pid" 2>/dev/null || true
+    done < "$RUN/.watchers"
+    : > "$RUN/.watchers"
+}
+on_exit() {
+    stop_watchers
+    if [ -n "${MOUNTED:-}" ] && [ -d "$MOUNTED" ]; then hdiutil detach "$MOUNTED" >/dev/null 2>&1 || true; fi
+}
+trap on_exit EXIT
+trap 'echo; echo "Interrupted. Run ./validate.sh cleanup when ready."; exit 130' INT TERM
+
 # launch LABEL: open the installed copy; watch it until it exits (forks, sockets, security/grok processes).
 launch() {
     local label=$1 t0 pid=""
     [ -z "$(app_pid)" ] || die "$APP_NAME is already running"
     local w="$RUN/watch-$label"; mkdir -p "$w"
     log stream --style compact --predicate 'process == "security" OR process == "grok"' > "$w/tool-log.txt" 2>&1 &
-    echo $! > "$w/.logpid"
+    register_watcher $!
     sleep 1
     t0=$(ms)
     open "$APP_DST"
@@ -227,12 +255,13 @@ launch() {
     echo "$pid" > "$w/.pid"
     say "launch $label: pid after $(( $(ms) - t0 )) ms"
     "$PKG/procwatch" "$pid" > "$w/forks.txt" 2>&1 &
+    register_watcher $!
     ( while kill -0 "$pid" 2>/dev/null; do
           lsof -nP -a -p "$pid" -i 2>/dev/null | tail -n +2 | awk '{print $8, $9}' >> "$w/sockets.txt" || true
           echo "$(stamp) $(ps -o %cpu=,rss= -p "$pid" 2>/dev/null)" >> "$w/samples.txt"
           sleep 2
       done ) &
-    echo $! > "$w/.sockpid"
+    register_watcher $!
 }
 # wait_exit LABEL SECONDS: wait for the app to exit; prints the ms from the call to the exit, or "timeout".
 wait_exit() {
@@ -241,16 +270,12 @@ wait_exit() {
     for _ in $(seq 1 $(( $2 * 10 ))); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
     if kill -0 "$pid" 2>/dev/null; then echo timeout; return; fi
     echo $(( $(ms) - t0 ))
-    stop_watch "$1"
-}
-stop_watch() {
-    local w="$RUN/watch-$1"
-    for f in .logpid .sockpid; do [ -f "$w/$f" ] && { kill "$(cat "$w/$f")" 2>/dev/null || true; rm -f "$w/$f"; }; done
+    stop_watchers
 }
 # Quitting is done by you in the app (popover > Quit): that runs SpanDeck's own quit path (#86). A signal wouldn't.
 quit_app() { # label prompt -> echoes ms from Return to exit
     local label=$1
-    { echo; echo ">>> $2"; echo "    Press Return, THEN click Quit within a few seconds."; } > /dev/tty
+    { echo; echo ">>> $2"; echo "    With the popover open, press Return and click Quit right away."; } > /dev/tty
     tty_read >/dev/null
     wait_exit "$label" 60
 }
@@ -361,11 +386,12 @@ cmd_run() {
     # ---- A. Default launch on the candidate
     step "A. Install and default launch"
     local mnt="$RUN/.mnt"; mkdir -p "$mnt" "$HOME/Applications"
-    hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$(ls "$PKG"/*.dmg | head -1)" >/dev/null
+    hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$mnt" "$(find "$PKG" -maxdepth 1 -name '*.dmg' -type f | head -1)" >/dev/null
+    MOUNTED=$mnt
     local bid; bid=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$mnt/$APP_NAME.app/Contents/Info.plist")
     [ "$bid" = "$BUNDLE_ID" ] || { hdiutil detach "$mnt" >/dev/null; die "DMG app is $bid, not $BUNDLE_ID"; }
     ditto "$mnt/$APP_NAME.app" "$APP_DST"
-    hdiutil detach "$mnt" >/dev/null; rmdir "$mnt"
+    hdiutil detach "$mnt" >/dev/null; MOUNTED=""; rmdir "$mnt"
     echo "run=$(basename "$RUN")" > "$RUN/.installed"
     local exe_sha want_exe; exe_sha=$(shasum -a 256 "$APP_DST/Contents/MacOS/$APP_NAME" | cut -d' ' -f1)
     want_exe=$(sed -n 's/^sha256 executable: *//p' "$PKG/PROVENANCE.txt")
@@ -378,7 +404,7 @@ cmd_run() {
     echo "    Watching the first launch for 60 s: don't click anything yet."
     sleep 60
     local wA="$RUN/watch-A" forks sockets tools
-    forks=$(grep -c ' fork ' "$wA/forks.txt" || true); sockets=$(wc -l < "$wA/sockets.txt" 2>/dev/null | tr -d ' ' || echo 0)
+    forks=$(grep -c ' fork ' "$wA/forks.txt" || true); sockets=$( [ -f "$wA/sockets.txt" ] && wc -l < "$wA/sockets.txt" | tr -d ' ' || true)
     tools=$(tail -n +2 "$wA/tool-log.txt" | grep -cE 'security\[|grok\[' || true)
     head -1 "$wA/tool-log.txt" | grep -q '^Filtering the log data' || tools=unavailable
     [ "${forks:-0}" = 0 ] && result A2.processes PASS "no child process (kernel-reported forks: 0)" || result A2.processes FAIL "$forks child process(es): $(grep ' fork ' "$wA/forks.txt" | awk '{print $NF}' | sort -u | tr '\n' ' ')"
@@ -422,25 +448,25 @@ cmd_run() {
     pause "Now open and close the popover 10 times at a normal pace (click, look, click). Leave it closed."
     ask B1.popover "Every open showed the content promptly with no visible hitch or blank frame, and every close was clean"
 
-    # B3: quit during a first index, then relaunch.
-    local big_files=${VALIDATE_BIG_FILES:-5000} big_msgs=${VALIDATE_BIG_MESSAGES:-40} attempt=0 quit_ms="" got=n cur=A
+    # B3: a normal quit, then quit during the first index of a large batch, then relaunch.
+    local q0; q0=$(quit_app A "Open the popover and click Quit (a normal quit).")
+    [ "$q0" != timeout ] && result B3.quit PASS "normal quit exited ${q0} ms after Return" || die "SpanDeck didn't quit within 60 s of Return"
+    local big_files=${VALIDATE_BIG_FILES:-5000} big_msgs=${VALIDATE_BIG_MESSAGES:-40} attempt=0 quit_ms="" got=n
     while [ $attempt -lt 3 ]; do
         attempt=$((attempt + 1))
-        echo "    Writing synthetic batch $attempt ($big_files files x $big_msgs messages, about a minute)..."
+        echo "    Writing synthetic batch $attempt ($big_files files x $big_msgs messages; about a minute) while SpanDeck is quit..."
         write_big_fixtures "$big_files" "$big_msgs" "b$attempt"
         say "big batch $attempt written"
-        echo "    Within ~10 s the popover footer should show 'Indexing Claude logs n/$big_files'."
-        quit_ms=$(quit_app "$cur" "Open the popover. While the footer shows 'Indexing Claude logs ...', click Quit.")
+        launch "B3-try$attempt"
+        echo "    SpanDeck is starting. Within a few seconds the popover footer shows 'Indexing Claude logs n/...'."
+        quit_ms=$(quit_app "B3-try$attempt" "Open the popover. While the footer shows 'Indexing Claude logs ...', click Quit.")
         [ "$quit_ms" != timeout ] || die "SpanDeck didn't quit within 60 s of Return"
         echo "??? Did you click Quit while 'Indexing Claude logs' was showing? [y/n]"; got=$(tty_read)
         [ "$got" = y ] && break
-        [ $attempt -lt 3 ] || break
-        cur="B3-retry$attempt"; launch "$cur"
-        pause "Wait until the footer shows 'Usage updated ...' (it finishes this batch). A new batch is written next."
+        [ $attempt -lt 3 ] && echo "    No problem: another batch is written and SpanDeck relaunched for the next try."
     done
     if [ "$got" = y ]; then
-        [ "$quit_ms" -le 8000 ] && result B3.quit-during-index PASS "app exited ${quit_ms} ms after Return (includes your click; the app's own cap is 5 s)" \
-            || result B3.quit-during-index FAIL "app took ${quit_ms} ms after Return to exit"
+        result B3.quit-during-index PASS "quit while indexing; exited ${quit_ms} ms after Return (includes your click). The app's own quit time is checked from diagnostics (B3.shutdown-time)"
     else result B3.quit-during-index SKIP "indexing wasn't caught in $attempt attempts"; fi
     local expected_big=$(( attempt * big_files * big_msgs * 30 )) expected_total
     expected_total=$(( 910 * 1 + expected_big ))
@@ -449,7 +475,7 @@ cmd_run() {
     screenshot B3-after-relaunch
     ask B3.relaunch-totals "The Claude row's Today value is $(human_tokens $expected_total) (all synthetic messages, none twice)"
     local q2; q2=$(quit_app B3 "Click Quit in the popover.")
-    [ "$q2" != timeout ] && result B3.quit PASS "quit exited ${q2} ms after Return" || result B3.quit FAIL "quit didn't finish in 60 s"
+    [ "$q2" != timeout ] && result B3.quit-after-index PASS "quit exited ${q2} ms after Return" || result B3.quit-after-index FAIL "quit didn't finish in 60 s"
     local cs; cs=$(cache_summary)
     echo "$cs" > "$RUN/cache-after-B3.txt"
     [[ "$cs" == *"tokens=$expected_total "* ]] && result B3.exact PASS "usage cache holds exactly $expected_total Claude tokens (every message once)" \
@@ -475,6 +501,11 @@ cmd_run() {
         for k in launch firstUsage popoverOpen refresh cacheSave shutdown sessionResume process; do
             grep -q "^KIND ${k}[: ]" "$RUN/diagnostics-summary.txt" || missing="$missing $k"
         done
+        local smax; smax=$(sed -n 's/^KIND shutdown[^ ]* count=[0-9]* ms\[n=[0-9]* median=[0-9.]* p95=[0-9.]* max=\([0-9.]*\)\].*/\1/p' "$RUN/diagnostics-summary.txt" | sort -n | tail -1)
+        if [ -n "$smax" ]; then
+            awk -v m="$smax" 'BEGIN{exit !(m <= 5500)}' && result B3.shutdown-time PASS "longest quit, measured by the app (request to reply): ${smax} ms (cap 5 s)" \
+                || result B3.shutdown-time FAIL "longest quit, measured by the app: ${smax} ms (cap 5 s)"
+        else result B3.shutdown-time FAIL "no shutdown event in the export"; fi
         [ -z "$missing" ] && result B5.export-kinds PASS "export has launch, firstUsage, popoverOpen, refresh, cacheSave, shutdown, sessionResume, process" \
             || result B5.export-kinds FAIL "missing kinds:$missing"
     else result B5.export FAIL "no export at the path given"; fi
@@ -496,9 +527,11 @@ cmd_run() {
         || result B4.exact FAIL "final cache: $cs (expected version=7 tokens=$expected_total)"
     local all_forks=0 all_socks=0 all_tools=0 w
     for w in "$RUN"/watch-*; do
-        all_forks=$(( all_forks + $(grep -c ' fork ' "$w/forks.txt" 2>/dev/null || echo 0) ))
-        all_socks=$(( all_socks + $(wc -l < "$w/sockets.txt" 2>/dev/null | tr -d ' ' || echo 0) ))
-        all_tools=$(( all_tools + $(tail -n +2 "$w/tool-log.txt" 2>/dev/null | grep -cE 'security\[|grok\[' || true) ))
+        local f1 s1 t1
+        f1=$(grep -c ' fork ' "$w/forks.txt" 2>/dev/null || true)
+        s1=$( [ -f "$w/sockets.txt" ] && wc -l < "$w/sockets.txt" | tr -d ' ' || true)
+        t1=$(tail -n +2 "$w/tool-log.txt" 2>/dev/null | grep -cE 'security\[|grok\[' || true)
+        all_forks=$(( all_forks + ${f1:-0} )); all_socks=$(( all_socks + ${s1:-0} )); all_tools=$(( all_tools + ${t1:-0} ))
     done
     [ $all_forks = 0 ] && [ $all_socks = 0 ] && [ $all_tools = 0 ] \
         && result C2.no-egress PASS "across every launch: 0 child processes, 0 sockets, 0 security/grok processes" \
@@ -560,15 +593,20 @@ cmd_cleanup() {
     echo "Cleanup removes: ~/Applications/$APP_NAME.app (if this run installed it), SpanDeck's Application Support folder and"
     echo "preferences in THIS account, and fixture folders marked with run $id. Evidence in $RUN is kept. Continue? [y/N]"
     [ "$(tty_read)" = y ] || { echo "Cancelled."; exit 1; }
-    for f in "$RUN"/watch-*; do [ -d "$f" ] && stop_watch "$(basename "$f" | sed 's/^watch-//')"; done 2>/dev/null || true
+    stop_watchers
     if [ -f "$RUN/.installed" ] && [ -d "$APP_DST" ] && [ ! -L "$APP_DST" ] \
         && [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP_DST/Contents/Info.plist" 2>/dev/null)" = "$BUNDLE_ID" ]; then
         rm -rf "$APP_DST"; echo "removed ~/Applications/$APP_NAME.app"
     fi
-    [ -L "$APP_SUPPORT" ] || rm -rf "$APP_SUPPORT"
-    defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-    defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
-    rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
+    # SpanDeck's state only if this run installed and launched it: the gate required a clean slate first, so the state
+    # is this run's. After a failed gate nothing of SpanDeck's is touched.
+    if [ -f "$RUN/.installed" ]; then
+        [ -L "$APP_SUPPORT" ] || rm -rf "$APP_SUPPORT"
+        defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+        defaults read "$BUNDLE_ID" >/dev/null 2>&1 || rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
+        rm -rf "$HOME/Library/Caches/$BUNDLE_ID" "$HOME/Library/HTTPStorages/$BUNDLE_ID" "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
+        echo "removed SpanDeck's state in this account (created by this run)"
+    else echo "this run installed nothing: SpanDeck's state, if any, is left alone"; fi
     local d
     for d in "$PROJECTS"/-Users-"$TEST_USER"-spandeck-validation-*; do
         [ -d "$d" ] && [ ! -L "$d" ] && grep -qx "run=$id" "$d/$MARK" 2>/dev/null && { rm -rf "$d"; echo "removed fixtures $(basename "$d")"; }
@@ -579,7 +617,8 @@ cmd_cleanup() {
     rmdir "$GROK/sessions" "$GROK" "$PROJECTS" "$HOME/.claude" 2>/dev/null || true
     if [ -f "$RUN/.parked" ]; then
         while IFS= read -r p; do
-            if [ -e "$p.parked-$id" ] && [ ! -e "$p" ]; then mv "$p.parked-$id" "$p"; echo "restored $(echo "$p" | sanitize)"; fi
+            if [ -e "$p.parked-$id" ] && [ ! -e "$p" ]; then mv "$p.parked-$id" "$p"; echo "restored $(echo "$p" | sanitize)"
+            elif [ -e "$p.parked-$id" ]; then echo "WARNING: $(echo "$p" | sanitize) exists again, so the parked copy stays at $(echo "$p.parked-$id" | sanitize); merge or move it by hand"; fi
         done < "$RUN/.parked"
     fi
     rm -f "$RUN/.active"
