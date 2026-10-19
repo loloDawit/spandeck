@@ -1,0 +1,359 @@
+{
+  "cold_scan_open": {
+    "busy_ms": 299.26383200000004,
+    "indexing_publishes": 14,
+    "max_span_ms": 52.470583,
+    "other_update_span_ms": 52.470583,
+    "publish_span_ms": 15.72975,
+    "publishes": 23,
+    "scan_wall_s": 24.371439834,
+    "update_spans": 16
+  },
+  "cold_scan_spans_ms": {
+    "max": 52.470583,
+    "median": 0.045083,
+    "min": 0.003417,
+    "n": 33,
+    "p95": 34.088833
+  },
+  "dataset": "large",
+  "load_average": {
+    "after": "{ 5.36 5.14 6.40 }",
+    "before": "{ 4.78 5.16 6.54 }"
+  },
+  "mode": "publish",
+  "quiet_closed": {
+    "max": 17.686708,
+    "median": 8.845791499999999,
+    "min": 0.004875,
+    "n": 2,
+    "p95": 17.686708
+  },
+  "quiet_open": {
+    "max": 0.01975,
+    "median": 0.01975,
+    "min": 0.01975,
+    "n": 1,
+    "p95": 0.01975
+  },
+  "sample_tick_open": {
+    "busy_ms": {
+      "max": 64.177666,
+      "median": 40.149395999999996,
+      "min": 24.204333,
+      "n": 60,
+      "p95": 43.996417
+    },
+    "max_span_ms": {
+      "max": 64.163083,
+      "median": 40.13575,
+      "min": 24.204333,
+      "n": 60,
+      "p95": 43.95525
+    },
+    "other_update_span_ms": {
+      "max": 64.163083,
+      "median": 40.13575,
+      "min": 24.204333,
+      "n": 60,
+      "p95": 43.95525
+    },
+    "publish_span_ms": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 60,
+      "p95": 0
+    },
+    "publishes": {
+      "max": 6,
+      "median": 6,
+      "min": 4,
+      "n": 60,
+      "p95": 6
+    },
+    "update_spans": {
+      "max": 1,
+      "median": 1,
+      "min": 1,
+      "n": 60,
+      "p95": 1
+    },
+    "work_ms": {
+      "max": 37.541709,
+      "median": 2.179354,
+      "min": 1.096542,
+      "n": 60,
+      "p95": 8.8315
+    }
+  },
+  "sample_tick_open_forced": {
+    "bodies_after": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "bodies_in_layout": {
+      "max": 1,
+      "median": 1,
+      "min": 1,
+      "n": 30,
+      "p95": 1
+    },
+    "display_ms": {
+      "max": 0.105666,
+      "median": 0.072375,
+      "min": 0.05075,
+      "n": 30,
+      "p95": 0.089542
+    },
+    "layout_ms": {
+      "max": 49.202834,
+      "median": 42.5455835,
+      "min": 27.236083,
+      "n": 30,
+      "p95": 47.134334
+    },
+    "residual_span_ms": {
+      "max": 0.051541,
+      "median": 0.0110415,
+      "min": 0,
+      "n": 30,
+      "p95": 0.040458
+    }
+  },
+  "tick_closed_10_new": {
+    "busy_ms": {
+      "max": 8.015209,
+      "median": 6.1326255000000005,
+      "min": 2.640833,
+      "n": 30,
+      "p95": 7.661792
+    },
+    "max_span_ms": {
+      "max": 7.964625,
+      "median": 6.071187500000001,
+      "min": 2.595292,
+      "n": 30,
+      "p95": 7.613417
+    },
+    "other_update_span_ms": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "publish_ms": {
+      "max": 0.014042,
+      "median": 0.007709,
+      "min": 0.006583,
+      "n": 30,
+      "p95": 0.013125
+    },
+    "publish_span_ms": {
+      "max": 0.057916,
+      "median": 0.0289795,
+      "min": 0.020917,
+      "n": 30,
+      "p95": 0.043625
+    },
+    "publishes": {
+      "max": 5,
+      "median": 5,
+      "min": 5,
+      "n": 30,
+      "p95": 5
+    },
+    "refresh_wall_ms": {
+      "max": 181.935334,
+      "median": 76.10585449999999,
+      "min": 60.618,
+      "n": 30,
+      "p95": 101.19925
+    },
+    "update_spans": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    }
+  },
+  "tick_closed_nothing_new": {
+    "busy_ms": {
+      "max": 3.953792,
+      "median": 0.15541700000000003,
+      "min": 0.090417,
+      "n": 30,
+      "p95": 0.523624
+    },
+    "max_span_ms": {
+      "max": 3.711834,
+      "median": 0.09670799999999999,
+      "min": 0.048125,
+      "n": 30,
+      "p95": 0.462958
+    },
+    "other_update_span_ms": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    },
+    "publish_ms": {
+      "max": 0.015875,
+      "median": 0.010167,
+      "min": 0.00525,
+      "n": 30,
+      "p95": 0.014542
+    },
+    "publish_span_ms": {
+      "max": 0.0465,
+      "median": 0.0296045,
+      "min": 0.017791,
+      "n": 30,
+      "p95": 0.039208
+    },
+    "publishes": {
+      "max": 5,
+      "median": 5,
+      "min": 5,
+      "n": 30,
+      "p95": 5
+    },
+    "refresh_wall_ms": {
+      "max": 15.566084,
+      "median": 9.4147295,
+      "min": 4.867875,
+      "n": 30,
+      "p95": 11.063333
+    },
+    "update_spans": {
+      "max": 0,
+      "median": 0,
+      "min": 0,
+      "n": 30,
+      "p95": 0
+    }
+  },
+  "tick_open_10_new": {
+    "busy_ms": {
+      "max": 46.55354,
+      "median": 40.700417,
+      "min": 34.302999,
+      "n": 30,
+      "p95": 45.074833
+    },
+    "max_span_ms": {
+      "max": 23.430208,
+      "median": 20.877479,
+      "min": 16.009792,
+      "n": 30,
+      "p95": 22.615
+    },
+    "other_update_span_ms": {
+      "max": 23.430208,
+      "median": 20.877479,
+      "min": 16.009792,
+      "n": 30,
+      "p95": 22.615
+    },
+    "publish_ms": {
+      "max": 0.03175,
+      "median": 0.0175415,
+      "min": 0.015042,
+      "n": 30,
+      "p95": 0.026333
+    },
+    "publish_span_ms": {
+      "max": 17.359709,
+      "median": 14.1939375,
+      "min": 13.078375,
+      "n": 30,
+      "p95": 15.915291
+    },
+    "publishes": {
+      "max": 5,
+      "median": 5,
+      "min": 5,
+      "n": 30,
+      "p95": 5
+    },
+    "refresh_wall_ms": {
+      "max": 114.18125,
+      "median": 75.347396,
+      "min": 66.125834,
+      "n": 30,
+      "p95": 91.0285
+    },
+    "update_spans": {
+      "max": 2,
+      "median": 2,
+      "min": 2,
+      "n": 30,
+      "p95": 2
+    }
+  },
+  "tick_open_nothing_new": {
+    "busy_ms": {
+      "max": 46.296626,
+      "median": 40.4833545,
+      "min": 33.751875999999996,
+      "n": 30,
+      "p95": 45.053459
+    },
+    "max_span_ms": {
+      "max": 27.593625,
+      "median": 23.7722505,
+      "min": 18.674875,
+      "n": 30,
+      "p95": 26.890417
+    },
+    "other_update_span_ms": {
+      "max": 27.593625,
+      "median": 23.7722505,
+      "min": 18.674875,
+      "n": 30,
+      "p95": 26.890417
+    },
+    "publish_ms": {
+      "max": 0.032166,
+      "median": 0.023479,
+      "min": 0.015209,
+      "n": 30,
+      "p95": 0.026375
+    },
+    "publish_span_ms": {
+      "max": 18.704875,
+      "median": 16.417333499999998,
+      "min": 14.313334,
+      "n": 30,
+      "p95": 18.616959
+    },
+    "publishes": {
+      "max": 5,
+      "median": 5,
+      "min": 5,
+      "n": 30,
+      "p95": 5
+    },
+    "refresh_wall_ms": {
+      "max": 38.690334,
+      "median": 33.006729,
+      "min": 22.988958,
+      "n": 30,
+      "p95": 37.819958
+    },
+    "update_spans": {
+      "max": 2,
+      "median": 2,
+      "min": 2,
+      "n": 30,
+      "p95": 2
+    }
+  }
+}

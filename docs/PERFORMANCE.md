@@ -1,6 +1,6 @@
 # Performance baseline (#8)
 
-**Status:** the first baseline, from the reference machine (one Apple M2 Pro). The budgets in §5 are **provisionally accepted** by the owner (2026-10-18): B3 is an accepted priority failure (#86), B9 waits for an allocation profile (#87), and B2 and B11 for better UI measurement (#88). Synthetic data only. No real transcript, credential, provider endpoint, setting or app launch was used, and the personal-account app was never run.
+**Status:** the first baseline, from the reference machine (one Apple M2 Pro). The budgets in §5 are **provisionally accepted** by the owner (2026-10-18): B3 is an accepted priority failure (#86), B9 waits for an allocation profile (#87), and B2 and B11 for better UI measurement (#88; measured in §4.7, final budgets proposed in §5.4). Synthetic data only. No real transcript, credential, provider endpoint, setting or app launch was used, and the personal-account app was never run.
 
 ## 1. How to reproduce
 
@@ -80,6 +80,7 @@ The ledger's clock is injected (`BenchClock`) to force a 5-minute full scan, an 
 - **The real app process:**
   - `NSApplication` start-up, status-item creation, login-item checks, and timers firing on a real run loop aren't included. Launching the app isn't allowed here (owner rule).
   - Scenario 2 covers the ledger's part of a launch; the rest is unmeasured.
+- **The real popover** (#88, §4.7): the UI harness runs SwiftUI's update path on a real run loop, but in a window that is never shown, so nothing is drawn or sent to the window server. `NSPopover`, its animation and the click-to-content time aren't measured.
 - **Real sleep and wake:** the machine wasn't slept. Scenario 7 models the work the wake handler starts, not the OS transition or network recovery.
 - **Network and offline:** every scenario is offline by construction, since nothing in the usage path makes a request. Quota polling (opt-in, one request a minute) is not timed: its latency depends on a provider endpoint the owner doesn't allow tests to reach.
 - **Energy:** no `powermetrics` (it needs root) and no energy-impact sampling. CPU time is the proxy.
@@ -164,7 +165,7 @@ One ledger per process (memory runs):
   - Scanning runs on the ledger's serial queue. During a cold scan, the main actor was never late by more than 4.6 ms.
   - `ProviderServices.refreshUsage` **drops** a refresh requested while one runs (10 of 10 dropped), so ticks can't pile up.
   - The ledger queue itself doesn't coalesce: 10 direct calls run one after another. The app-level guard is the only backpressure.
-  - **Not measured on the main thread:** the store publish after a refresh, and the popover update (#88). The popover's *first* full render is 103–359 ms (below) and runs on the main thread.
+  - **Not measured on the main thread here:** the store publish after a refresh, and the popover update. Measured in §4.7 (#88): with the popover closed the publish costs microseconds; with it open, each store change re-renders it in 14–40 ms (median).
 - **Quit is held for a whole scan.**
   - `applicationWillTerminate` calls `Ledger.flush()`, a `queue.sync` behind any scan in flight.
   - 50 ms into a cold scan, quitting held the main thread **0.3 s (small), 4.2 s (medium) and 19.7 s (large)**.
@@ -199,6 +200,7 @@ One ledger per process (memory runs):
   - Closed: only the strip is drawn, at 8 µs median.
   - Open: a full render (layout and draw) takes 26–31 ms. The first one is 103–359 ms (SwiftUI's first-use cost), one sample per process (#88).
   - An open popover redraws on each store change (every 1 s sample). A full render is an upper bound for one update.
+  - **Superseded by §4.7 (#88):** these renders used an empty store, one first render per process. §4.7 has 20 fresh processes per dataset and path with full histories, limits and plan.
 - **Hover:** the top-consumer list takes about 0.9 ms per refresh (1.6 ms under the large set's load).
 
 ### 4.5 After #86: non-blocking quit
@@ -381,6 +383,98 @@ Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic
 - The demonstrated cost is the save's encode transient. If the owner adopts the stricter peak budget proposed for B9 (§5.2), that becomes a failure, and **O2 (with O1)** is the candidate: a separate, approved PR, not an M0 exit criterion.
 - O3–O6 aren't worth their risk on this evidence.
 
+### 4.7 UI measurement (#88)
+
+Raw data, commands and provenance: [`perf/2026-10-19-m2pro-ui-88/`](perf/2026-10-19-m2pro-ui-88/). Run `run1`, at commit `e1f1fcc` with no local changes, on the reference machine (`Mac14,10`, macOS 26.5 `25F71`, Swift 6.3.3, Xcode 26.6), release build with `DEBUG` as in §1. 130 processes, all passed. **Load average 3.3–11.8** (other work was running), recorded per process. Synthetic data only; no code changed except the test-only, opt-in harness.
+
+**Reproduce:**
+```bash
+scripts/bench-ui.sh [--out DIR] [--runs N] [small|medium|large ...]   # default: all three, 20 runs
+scripts/bench-ui-report.py DIR                                        # the tables below
+scripts/bench-ui-sample-report.py SAMPLE.txt                          # main-thread frame groups from a macOS `sample` report
+```
+
+**How it measures** (`PerformanceUIBenchTests`):
+- **The test process runs a real main run loop** (`probe`: default mode, on the main thread). A SwiftUI hosting view in a window that is never shown re-evaluates its views by itself on the next run-loop pass after a publish, and three publishes in one turn give one pass. So the app's automatic update path runs here; it isn't simulated.
+- **Main-thread hold is a busy span:** run-loop observers record each span from waking (`afterWaiting`, observed first) to going back to sleep (`beforeWaiting`, observed last). SwiftUI's update pass runs inside that span, before the run loop sleeps. A zero-size probe view on the same store marks the spans with an update pass; a `claudeUsage` sink marks the post-refresh publish. The observers' own floor with the popover open is ≤ 0.02 ms.
+- **Popover open** = `PopoverView` in an `NSHostingController` sized to its content (as `togglePopover` builds it), in a borderless window that is never ordered in. **Closed** = no view tree, as after `popoverDidClose`.
+- **Store contents:** usage from the real ledger on the dataset (a warm start through `ProviderServices.refreshUsage`); system values, full 150-point histories, limits and plan from `SnapshotFixture`; the snapshot's preferences (every segment shown) in the volatile argument domain. So all cards render, unlike #85's scenario 11, which rendered an empty store.
+- **First render:** one per fresh process, n = 20 per path and dataset, `hosting` and `image` alternated so load drift falls on both. `hosting` times building the controller, attaching it to the window, `layoutSubtreeIfNeeded` and `displayIfNeeded` + a transaction flush. `image` is `ImageRenderer`, as #85 measured it.
+- **Attribution:** macOS `sample` at 1 ms on a separate `publish` process (`profiles/`). Shares only; `sample` adds its own cost.
+
+**Popover closed: the publish costs nothing measurable.**
+
+| Dataset | Refresh tick, longest span: nothing new / 10 new messages (median / p95 / worst, n = 30) | The four assignments (median) | Update passes |
+|---|---|---|---|
+| small | 0.1 / 0.4 / 0.6 ms; 0.9 / 2.5 / 21.6 ms | 6–8 µs | 0 |
+| medium | 0.0 / 0.1 / 0.4 ms; 1.2 / 4.3 / 4.5 ms | 4–7 µs | 0 |
+| large | 0.1 / 0.5 / 3.7 ms; 6.1 / 7.6 / 8.0 ms | 8–10 µs | 0 |
+
+- The warm start's publish (n = 20 processes per dataset) is the same: 25–27 µs median, longest span ≤ 0.43 ms.
+- Small's 21.6 ms worst is one sample. The quiet floor with the popover closed also had one 10–18 ms span per dataset in 1 s of nothing (unexplained, not seen with it open); treat single closed-popover spans of that size as harness noise.
+
+**Popover open: each store change re-renders the whole popover, and a refresh tick does it twice.**
+
+| Dataset | Refresh tick, nothing new: longest span | … the publish's span (with its update pass) | … the other update pass | 10 new messages: longest span | 1 s sample tick: longest span |
+|---|---|---|---|---|---|
+| small | 13.9 / 34.5 / 45.4 ms | 13.1 / 34.5 / 45.4 ms | 13.5 / 27.0 / 30.4 ms | 17.4 / 25.4 / 25.8 ms | **36.4 / 44.4 / 55.2 ms** (60) |
+| medium | 21.0 / 26.6 / 29.5 ms | 15.6 / 17.9 / 18.1 ms | 21.0 / 26.6 / 29.5 ms | 22.1 / 23.5 / 24.5 ms | **38.6 / 44.9 / 57.0 ms** (60) |
+| large | 23.8 / 26.9 / 27.6 ms | 16.4 / 18.6 / 18.7 ms | 23.8 / 26.9 / 27.6 ms | 20.9 / 22.6 / 23.4 ms | **40.1 / 44.0 / 64.2 ms** (60) |
+
+Median / p95 / worst, n = 30 unless stated.
+- **Two update passes per refresh tick, every tick (median 2).** `Ledger.refresh` calls `progress(nil)` at the end of every refresh, not only after indexing, and `ProviderServices` assigns it to `store.indexing` on the main queue. `@Published` fires on every assignment, equal or not, so an open popover re-renders for a value that didn't change. The final publish then re-renders it again in a later span. On medium and large the `indexing` pass is the longer of the two (21–24 against 15–16 ms median) although both re-evaluate the same tree; that is observed, not understood. **Existing behaviour:** the call is at the same place in #85's commit `56f5333`.
+- **The 1 s sample tick costs 36–40 ms (median) on the main thread while the popover is open**, every second. The sampling and the strip are 1.6–2.2 ms of it; the rest is the update pass. Forcing the steps: view graph + layout 27–43 ms (median), one pass. Drawing measured 0.1 ms, **consistent with AppKit not drawing a window that isn't shown**: treat the hosting figures as containing no drawing (limitation below).
+- **Attribution (`profiles/`, small):** in the run-loop observer pass, Swift Charts frames are **63 %** of main-thread time during refresh ticks and **72 %** during sample ticks. `DailyChart.body` (the 29-day bar chart) is 33 % and 16 %: it is re-evaluated on every sample tick although usage didn't change. Every card takes the whole `Store` as an `ObservedObject`, and `UsageSummary`, `DayBar` and `Point` aren't `Equatable`, so SwiftUI can't skip an unchanged subtree. The three 150-point `LiveChart`s (monotone area + line) are re-built every second by design.
+- **Cost doesn't grow with the ledger:** the popover's content is a fixed shape (29 days × 4 families, three histories), so small, medium and large are within the noise of each other. The ledger's size changes only the refresh wall time behind it (1.6–76 ms here), which runs off the main thread.
+
+**Cold scan with the popover open** (one scan per dataset): 2, 5 and 14 `indexing` publishes (every 25 indexed files, plus the per-refresh `nil`); longest span 39, 33 and 52 ms; median span ≤ 0.05 ms; main thread busy 83, 117 and 299 ms in total over 0.45, 4.9 and 24.4 s of scanning. The scan itself never held the main thread (as in #85).
+
+**First popover render (B11): one per fresh process, n = 20.**
+
+| Dataset | Hosting controller: first render | … re-open, per-process medians | `ImageRenderer`: first render | … re-render, per-process medians |
+|---|---|---|---|---|
+| small | 158.1 / 253.4 / 415.3 ms | 78.4 / 91.5 / 92.5 ms | 105.7 / 131.5 / 133.5 ms | 41.8 / 43.4 / 45.0 ms |
+| medium | 147.7 / 176.4 / 374.7 ms | 73.7 / 82.9 / 85.0 ms | 103.9 / 159.8 / 614.8 ms | 40.1 / 43.1 / 104.3 ms |
+| large | 153.3 / 169.0 / 172.9 ms | 77.8 / 81.7 / 82.2 ms | 108.0 / 115.8 / 120.7 ms | 38.2 / 40.7 / 42.9 ms |
+
+Median / p95 / worst. p95 is nearest-rank: with n = 20 it is the 19th of 20.
+- **Hosting, in steps (medians):** build 1.9–2.5 ms; **attach to the window 90–97 ms** (the hosting view builds its graph and computes its size); layout 21–24 ms; display + flush 34–36 ms; nothing deferred after (≤ 0.34 ms). The first display costs 35 ms where later ones cost 0.1 ms; what it does in a hidden window isn't established.
+- **Every open is a new tree:** `togglePopover` builds a new `PopoverView` and `NSHostingController`, and `popoverDidClose` drops them. A re-open in the same process costs 74–78 ms (median of medians) on the hosting path, half the first; closing is 1.5–2.1 ms.
+- **The worst samples coincide with load:** 415 ms (small hosting) ran at a 1-minute load average of 9.0, and was the run's first process. 375 ms (medium hosting) and 615 ms (medium image) ran back to back while it rose from 6.7 to 9.5 to 11.8. #85's single first render of 359 ms on large was the same kind of tail. Large's 20 hosting samples were all ≤ 173 ms.
+- **Against #85:** `ImageRenderer` first render 104–108 ms median here, against #85's single samples of 103, 104 and 359 ms. Its re-render is 38–42 ms against #85's 26–31 ms, because #85 rendered an empty store (no histories, limits or plan); `PopoverView.swift` and `Store.swift` are unchanged since `56f5333`. **No regression is shown.**
+
+**#86 and #87:**
+- #86 added one check (`ledger.isStopping`) before the publish. The four assignments cost 4–10 µs with the popover closed. The non-blocking quit (§4.5) holds the main thread ≤ 0.074 ms; this harness doesn't run the quit with a view tree, and the AppKit side of quitting is unmeasured (§3).
+- #87 changed no app code. The popover's cost is independent of the ledger's memory; the save and decode transients run on the ledger queue, and the closed-popover ticks with new data (no save) held the main thread 0.9–6.1 ms (median), 8.0 ms worst on large (one 21.6 ms sample on small).
+
+**What the harness can't show** (for the owner's consented run of the real app):
+- **Drawing and the window server.** A window that isn't shown isn't drawn: the hosting figures are view graph and layout only. `ImageRenderer` draws into a bitmap the real popover never uses, so it is an upper bound for drawing, not the app's path. The real popover adds layer drawing and a commit to the window server on each update.
+- **`NSPopover` itself:** its window, its open animation (`animates = true`), activation (`NSApp.activate`) and the status-item click. The time from click to visible content is not measured.
+- **App launch:** `NSApplication` start-up, the status item, and the first refresh on a real run loop with timers. Cold and warm app launch are unmeasured (§3); the ledger's part is B7.
+- **Event delivery during a hitch:** a held main thread delays clicks, hovers and the next sample. That a 36–40 ms span each second is visible to a user is inferred, not observed.
+- **The shipped binary:** this is the release build with `DEBUG`, not `build.sh`'s universal release build (§1).
+
+**Recommendation** (no change is made under #88):
+
+| Finding | Class | Why |
+|---|---|---|
+| Popover closed: the post-refresh publish | **Accept** | 4–10 µs; no update pass; B2 met |
+| Background scans and refreshes | **Accept** | the scan never held the main thread; refresh wall time is off the main thread (#85, here) |
+| First popover render, 148–158 ms median, p95 ≤ 176 ms on medium and large | **Accept / Monitor** | inside B11's 250 ms except small's p95 (253 ms) and single worst samples under load |
+| Every open builds a new tree: 74–78 ms per re-open | **Monitor** | a deliberate trade (nothing renders while closed); keeping the tree would make every closed-popover change re-render |
+| The redundant `indexing = nil` publish: a second full re-render per refresh tick | **Optimize (candidate U1)** | a whole update pass (13–24 ms median) for a value that didn't change, every 10 s while open |
+| The 1 s sample tick re-renders every card: 36–40 ms median each second while open | **Optimize (candidates U2, U3), after the owner's real-app check** | over one 60 Hz frame (B2) by 2.3–2.5× in median, every second; Charts are 72 % of it |
+| Cold scan with the popover open: up to 14 progress re-renders, ≤ 52 ms | **Monitor** | first launch or rebuild only |
+| Drawing, `NSPopover`, app launch, quit UI | **Unverified** | the harness can't show them (above) |
+
+| | Change | Expected benefit | Complexity | Correctness risk | Possible regressions |
+|---|---|---|---|---|---|
+| **U1** | Assign `store.indexing` only when it changes (or call `progress(nil)` only after indexing showed progress) | one of the two update passes per refresh tick: about −13–24 ms of main thread every 10 s while open (the pass's measured median; why it is the longer pass isn't known) | low: one comparison | the "Indexing…" line must still clear after a scan, a stop and a cache clear | none expected; covered by the existing progress paths |
+| **U2** | Stop unchanged cards re-rendering: `Equatable` inputs (`.equatable()` on `DailyChart`/`UsageCard` with an `Equatable` `UsageSummary`), or observe usage and system values separately | −16 % (`DailyChart`) up to the non-system cards' share of each sample tick. **Estimate** | medium | a card that misses a change shows stale totals; equality must cover every displayed field | stale UI if equality is incomplete; needs a test that every published field reaches the view |
+| **U3** | Cheaper live charts: a `Path`-based sparkline, or fewer points | most of the sample tick's 72 % Charts share. **Estimate** | medium | none to accounting | appearance and accessibility of the system cards change; a design decision |
+
+U1 is independent and small. U2 and U3 should wait for the real-app check, since drawing (unmeasured here) may change the balance.
+
 ## 5. Budgets
 
 ### 5.1 Owner decisions (2026-10-18)
@@ -388,7 +482,7 @@ Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic
 - **B1–B11 are provisionally accepted.**
 - **B3 is an accepted priority failure.** Tracked in #86 (P1).
 - **B9 needs an allocation profile before a final memory budget.** Tracked in #87 (P1, investigation only). Profile done (§4.6); the final B9 below is a proposal, not yet decided.
-- **B2 and B11 need better UI measurement.** Tracked in #88.
+- **B2 and B11 need better UI measurement.** Tracked in #88. Measured (§4.7); the final B2 and B11 below are a proposal, not yet decided.
 - **Reference machine:** this Apple M2 Pro (`Mac14,10`, 12 cores, 16 GB, macOS 26.5).
 - **A regression above 25 % in a median requires investigation, not automatic rejection.**
 - **No timing threshold is enforced on shared GitHub Actions runners.** The 3-core `macos-15` runners can't time reliably. CI runs `BenchStatsTests` only, which checks the statistics and the data-folder guard; it times nothing.
@@ -401,7 +495,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 | # | Budget (provisional) | Measured (run 4) | Status | Why this number |
 |---|---|---|---|---|
 | B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.17 % | met | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
-| B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only) | met for scans; **post-refresh publish not measured** (#88) | one 60 Hz frame. The first popover render is a UI action under B11 |
+| B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only); **popover closed:** publish 4–10 µs, longest span ≤ 8 ms worst on large (§4.7); **popover open:** 14–24 ms per refresh tick, 36–40 ms per sample tick (median) | **met with the popover closed; fails with it open** (§4.7). Final proposal §5.4 | one 60 Hz frame. The first popover render is a UI action under B11 |
 | B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.074 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, merged) | a quit that takes seconds looks hung |
 | B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
 | B5 | Tick with new data, **excluding cache saves**: p95 ≤ **100 ms** | 59.6 ms; no timed sample saved (checked) | met | runs every 10 s during active use. Saves are B6; the first change after a start (1.67 s, it saves) is reported apart |
@@ -410,7 +504,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 | B8 | First scan or rebuild ≥ **20 MB/s** of transcript, excluding the first save | 34–38 MB/s on CPU time; about 20 MB/s wall time on large under a load average of 7 | met on CPU time; **marginal** on wall time under load | 30 days of heavy use indexed in under a minute |
 | B9 | Resident memory ≤ **5 KB per logged message** (medium and large), and peak ≤ **2×** steady | footprint 2.3–3.9 KB/message (§4.6); live 1.1–1.3 KB. Peak ÷ steady footprint 1.0–2.1×, which says little: the steady footprint holds the peak's freed pages | **5 KB met. Final budget proposed after #87 (below), for the owner** | in-memory state is per operation; this keeps 120,000 messages under about 600 MB |
 | B10 | Cache file ≤ **500 B per logged message** | 400–440 B | met | the #55 growth (about 2.4×) left little room |
-| B11 | Popover full render: median ≤ **50 ms**; first render ≤ **250 ms** | 26–31 ms; first 103–359 ms (one sample per process) | median met; **first render fails** on large; needs repeated measurement (#88) | redrawn while open; the first open should feel immediate |
+| B11 | Popover full render: median ≤ **50 ms**; first render ≤ **250 ms** | 26–31 ms; first 103–359 ms (one sample per process). **§4.7, n = 20:** re-render 38–42 ms; first render 148–158 ms median, p95 169–253 ms (hosting), 104–108 ms median (`ImageRenderer`) | median met; **first render met at the median and at p95 on medium and large**; small's p95 253 ms and single worst samples under load exceed it. Final proposal §5.4 | redrawn while open; the first open should feel immediate |
 
 ### 5.3 Proposed final B9 (#87, for the owner's decision)
 
@@ -426,6 +520,23 @@ Measured untraced with `scripts/bench-memory.sh` on the reference machine: mediu
 - **If B9c is adopted,** the save transient is a failure, and §4.6 names the candidate: O2, with O1.
 - **If it isn't,** B9 is met as it stands, and the save transient stays a watch item.
 
+### 5.4 Proposed final B2 and B11 (#88, for the owner's decision)
+
+Measured with `scripts/bench-ui.sh` on the reference machine (§4.7). All figures are the harness's: view graph and layout without drawing, in a window that isn't shown. The real app adds drawing and a window-server commit, so a harness figure that fails will fail in the app; one that passes may not.
+
+| | Budget | Today (§4.7) | Status |
+|---|---|---|---|
+| **B2a** | Popover closed: main thread held ≤ **16 ms** (p95) while a background refresh or scan runs, including the post-refresh publish (unchanged B2) | p95 ≤ 7.6 ms (refresh ticks), ≤ 4.6 ms (cold scan, #85) | met |
+| **B2b** | Popover open: each update pass after a store change ≤ **16 ms** (p95) | refresh tick, longest pass 23–35 ms; 1 s sample tick 44–45 ms (p95) | **fails** (U1–U3) |
+| **B2c** | Popover open: at most **one** update pass per refresh | 2 | **fails** (U1) |
+| **B11a** | First popover render in a fresh process, hosting path: p95 ≤ **250 ms**, n ≥ 20 processes | 169–176 ms (medium, large); 253 ms (small, under load up to 9) | met on medium and large; marginal on small |
+| **B11b** | Re-open (a new tree in a running process): median ≤ **100 ms** | 74–78 ms | met; 100 ms is the usual limit for a response to feel immediate |
+| **B11c** | Popover full render (`ImageRenderer`), median ≤ **50 ms** (unchanged B11 median) | 38–42 ms | met |
+
+- B2b uses the same one-frame reason as B2. Whether 16 ms is right for an update the user didn't cause (the 1 s sample) is the owner's call; a two-frame 33 ms would still fail the sample tick (36–40 ms median).
+- B2c is a count, so it is checked on any machine, CI included, without timing.
+- **Not a budget yet:** the time from click to visible content, which needs `NSPopover` and the window server (the owner's real-app run).
+
 ## 6. Bottlenecks, ranked
 
 1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, merged).**
@@ -438,7 +549,10 @@ Measured untraced with `scripts/bench-memory.sh` on the reference machine: mediu
    - This is ADR 0001 D6's revisit trigger 1: "#8 measures encode or decode cost above a budget the owner sets".
    - B6 and B7 are met today, so this is a watch item, not a format change.
 4. **A full summary on every change:** 36–53 ms per tick with new data on medium and large. It is the bulk of the active-use tick; B5 is met with about 40 % headroom.
-5. **The first popover render on large (B11, #88):** up to 359 ms on the main thread, one sample per process.
+5. **An open popover re-renders every card on every store change (B2b, #88, §4.7).**
+   - The 1 s sample tick holds the main thread 36–40 ms (median) each second while it's open; Swift Charts are 72 % of that, and the 29-day `DailyChart` is re-evaluated although usage didn't change.
+   - Each refresh tick re-renders it twice; one pass is for an `indexing = nil` that didn't change.
+   - Candidates U1–U3 (§4.7). The first render (148–158 ms median, n = 20) is no longer a bottleneck: #85's 359 ms was a tail under load.
 6. **First-scan throughput:** CPU-bound at 34–38 MB/s, with wall time on large sensitive to disk reads and load (B8).
 
 **Not bottlenecks:** idle CPU, the no-change tick, full scans with nothing new, the hardware probes, the menu-bar strip and the hover list.
@@ -448,11 +562,13 @@ Measured untraced with `scripts/bench-memory.sh` on the reference machine: mediu
 **Created 2026-10-18 with owner approval.** Each is a sub-issue of #8 in M0, workstream Performance. **None is an M0 exit criterion.**
 - **#86** *Non-blocking shutdown during an active ledger scan* (P1). Investigate safe cancellation, durable cache state, resumability and no double counting before any fix. "Stop and flush partial state" is not assumed safe.
 - **#87** *Profile ledger memory across cold and warm loads* (P1). Investigation only, with an allocation profile on synthetic data. Done: §4.6, with the B9 proposal in §5.3 and options O1–O6 awaiting the owner.
-- **#88** *Complete UI performance measurement*: post-refresh publishing on the main thread, and repeated first popover renders, in safe harnesses.
+- **#88** *Complete UI performance measurement*: post-refresh publishing on the main thread, and repeated first popover renders, in safe harnesses. Done: §4.7, with the B2 and B11 proposal in §5.4 and candidates U1–U3 awaiting the owner.
 
 **Proposed, not created:**
 - the summary cost independent of slot count (the #57 note; acceptance: scenario 6 ≤ 15 ms on large, totals identical on every fixture);
-- saves off the tick path, a watch item.
+- saves off the tick path, a watch item;
+- U1, one update pass per refresh (acceptance: B2c; the indexing line still clears after a scan, a stop and a cache clear);
+- U2 and U3, after the owner's real-app check of the open popover (acceptance: B2b, with appearance and accessibility unchanged or approved).
 
 **No optimization PR** until the owner decides.
 

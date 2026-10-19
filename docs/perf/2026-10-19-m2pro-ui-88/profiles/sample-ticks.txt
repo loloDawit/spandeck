@@ -1,0 +1,12 @@
+sample-sample-ticks.txt main-thread samples 17328
+   13652   78.8%  idle (mach_msg wait)
+    3570   20.6%  run-loop observer pass (beforeWaiting)
+    3145   18.1%  SwiftUI graph update (AG::Subgraph::update / ViewGraph)
+    2566   14.8%  Charts (any frame in Charts.framework)
+     559    3.2%  LiveChart.body
+     565    3.3%  DailyChart.body
+      46    0.3%  PopoverView/cards .body (Headroom views)
+      97    0.6%  Text layout (CoreText / NSAttributedString / TextLayout)
+     386    2.2%  Layout (sizeThatFits/placeSubviews)
+       0    0.0%  ledger refresh continuation (refreshUsage)
+     247    1.4%  store.record / StatusRenderer
