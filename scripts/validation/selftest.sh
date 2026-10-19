@@ -330,6 +330,7 @@ setup v-rules
     v=$(vt VALIDATION 1 1 "${allpass[@]}" "B6.voiceover|SKIP|x" "A2.log-stream|INFO|x"); [[ "$v" == GO* ]] && ok "v-rules: every required check PASS -> GO (optional skip allowed)" || no "v-rules: expected GO, got: $v"
     v=$(vt VALIDATION 1 1 "${allpass[@]:1}"); [[ "$v" == NO-GO*missing* ]] && ok "v-rules: a required check that never ran -> NO-GO" || no "v-rules: missing required gave: $v"
     v=$(vt VALIDATION 1 1 "A|PASS|x"); [[ "$v" == NO-GO* ]] && ok "v-rules: a few PASS rows alone are never GO" || no "v-rules: partial rows gave: $v"
+    v=$(vt VALIDATION 1 1 "${allpass[@]}" "A1.install|INFO|x"); [[ "$v" == NO-GO*"not PASS"* ]] && ok "v-rules: a required check last recorded as INFO -> NO-GO" || no "v-rules: required INFO gave: $v"
     v=$(vt VALIDATION 1 1 "A|PASS|x" "B|INCONCLUSIVE|x"); [[ "$v" == NO-GO*INCONCLUSIVE* ]] && ok "v-rules: any INCONCLUSIVE -> NO-GO" || no "v-rules: INCONCLUSIVE gave: $v"
     v=$(vt VALIDATION 1 1 "A|PASS|x" "B3.quit-during-index|SKIP|x"); [[ "$v" == NO-GO*skipped* ]] && ok "v-rules: required SKIP -> NO-GO" || no "v-rules: required SKIP gave: $v"
     v=$(vt VALIDATION 1 1 "A|FAIL|x"); [[ "$v" == NO-GO*FAIL* ]] && ok "v-rules: any FAIL -> NO-GO" || no "v-rules: FAIL gave: $v"

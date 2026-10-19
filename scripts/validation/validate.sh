@@ -707,12 +707,13 @@ verdict() {
     local r=""
     [ -f "$RUN/.gate-passed" ] || r="$r; isolation or package gate failed or didn't finish"
     [ -f "$RUN/.complete" ] || r="$r; run incomplete"
-    local fails inconc skips missing="" id
+    local fails inconc skips missing="" nonpass="" id last
     for id in $REQUIRED_IDS; do
-        [ "$(awk -F'\t' -v i="$id" 'NR>1 && $1==i {s=$2} END{print s}' "$RUN/results.tsv")" = PASS ] \
-            || [ -n "$(awk -F'\t' -v i="$id" 'NR>1 && $1==i' "$RUN/results.tsv")" ] || missing="$missing $id"
+        last=$(awk -F'\t' -v i="$id" 'NR>1 && $1==i {s=$2} END{print s}' "$RUN/results.tsv")
+        if [ -z "$last" ]; then missing="$missing $id"; elif [ "$last" != PASS ]; then nonpass="$nonpass $id($last)"; fi
     done
     [ -z "$missing" ] || r="$r; required checks missing (never ran):$missing"
+    [ -z "$nonpass" ] || r="$r; required checks not PASS:$nonpass"
     fails=$(awk -F'\t' 'NR>1 && $2=="FAIL"{printf " %s", $1}' "$RUN/results.tsv")
     inconc=$(awk -F'\t' 'NR>1 && $2=="INCONCLUSIVE"{printf " %s", $1}' "$RUN/results.tsv")
     skips=$(awk -F'\t' -v opt="$OPTIONAL_IDS" 'NR>1 && $2=="SKIP" && index(opt, " " $1 " ")==0 {printf " %s", $1}' "$RUN/results.tsv")
