@@ -210,11 +210,18 @@ struct PerformanceBenchTests {
         let beginMs = Double(ns() - tBegin) / 1e6
         while outcome == nil { try? await Task.sleep(nanoseconds: 2_000_000) }
         quitBeat.cancel()
-        // A mark that never came is reported as missing (null), never as 0 s (review of #90).
-        func span(_ from: UInt64?, _ to: UInt64?) -> Any { if let from, let to { Double(to - from) / 1e9 } else { NSNull() } }
+        // A mark that never came is reported as missing (null), never as 0 s, and the difference is signed, so a mark
+        // earlier than its start can't trap (review of #90).
+        func span(_ from: UInt64?, _ to: UInt64?) -> Any {
+            if let from, let to { Double(Int64(bitPattern: to &- from)) / 1e9 } else { NSNull() }
+        }
+        // The cancellation latency only means something if the scan was still running when the quit began.
+        let scanEndedFirst = (marks.get("stopped") ?? .max) < tBegin
         report["quit_coordinator_during_cold_scan"] = [
             "outcome": "\(outcome!)", "begin_ms": beginMs, "heartbeat_late_ms": Bench.stats(quitLate),
-            "cancel_latency_s": span(tBegin, marks.get("stopped")), "save_s": span(marks.get("stopped"), marks.get("saved")),
+            "cancel_latency_s": scanEndedFirst ? NSNull() : span(tBegin, marks.get("stopped")),
+            "scan_ended_before_quit": scanEndedFirst,
+            "save_s": span(marks.get("stopped"), marks.get("saved")),
             "total_to_reply_s": span(tBegin, marks.get("reply")),
             "cache_bytes": Self.fileSize(stoppingSupport.appendingPathComponent(Ledger.cacheName)),
             "bytes_scanned_before_stop": await Self.readBytes(stopping),

@@ -759,19 +759,24 @@ final class Ledger {
     /// In-file checkpoints come every this many lines, or this many bytes, whichever is first: 2048 lines is about
     /// 2.5 MB of the #8 benchmark's transcripts, under 0.1 s of scanning on the reference machine, and the byte budget
     /// bounds a run of very long lines. Tests lower them. Read under `stopLock`, like the hook.
+    /// At least 1, so a checkpoint always comes after a counted line and a stop always makes progress.
     var stopCheckLines: Int {
         get { stopLock.withLock { _stopCheckLines } }
-        set { stopLock.withLock { _stopCheckLines = newValue } }
+        set { stopLock.withLock { _stopCheckLines = max(1, newValue) } }
     }
     var stopCheckBytes: Int {
         get { stopLock.withLock { _stopCheckBytes } }
-        set { stopLock.withLock { _stopCheckBytes = newValue } }
+        set { stopLock.withLock { _stopCheckBytes = max(1, newValue) } }
     }
     /// Tests only: called on the ledger queue at every checkpoint, before the stop flag is read.
     var checkpointHook: ((Checkpoint) -> Void)? {
         get { stopLock.withLock { _checkpointHook } }
         set { stopLock.withLock { _checkpointHook = newValue } }
     }
+    /// The three above, read once per refresh on the ledger queue (not per file or per checkpoint).
+    private var scanHook: ((Checkpoint) -> Void)?
+    private var scanLines = 2048
+    private var scanBytes = 4 << 20
     private let storage: PrivateDirectory
     /// Key for the opaque ids. Loaded (or made) before anything is scanned, since ids are computed while indexing.
     private var key = SymmetricKey(size: .bits256)
@@ -865,11 +870,15 @@ final class Ledger {
                  completion: @escaping (_ claude: UsageSummary, _ grok: UsageSummary, _ lastActivity: Date) -> Void) {
         queue.async { [self] in
             // #86: once stopping, nothing is scanned or saved again, but the caller still gets an answer.
-            // `ProviderServices` drops this answer, so the empty summary is never shown as a measured zero.
-            if isStopping {
+            // Once stopping (#86), nothing is scanned or saved, but the caller still gets an answer: the last
+            // summaries, or empty ones. They aren't a new measurement, so `ProviderServices` drops them (it checks
+            // `isStopping`); a stopped ledger only exists while the app quits.
+            func stopped() {
                 progress(nil)
-                return completion(cachedSummaries?.0 ?? UsageSummary(), cachedSummaries?.1 ?? UsageSummary(), lastActivity)
+                completion(cachedSummaries?.0 ?? UsageSummary(), cachedSummaries?.1 ?? UsageSummary(), lastActivity)
             }
+            if isStopping { return stopped() }
+            (scanHook, scanLines, scanBytes) = stopLock.withLock { (_checkpointHook, _stopCheckLines, _stopCheckBytes) }
             if !loaded { loadCache(); loaded = true }
             if !checkpoint(.beforeScan) {
                 if now().timeIntervalSince(lastFullScan) >= 300 {
@@ -883,10 +892,7 @@ final class Ledger {
                 }
             }
             // A stopped scan is saved by `requestStop`'s block, which runs next on this queue.
-            if isStopping {
-                progress(nil)
-                return completion(cachedSummaries?.0 ?? UsageSummary(), cachedSummaries?.1 ?? UsageSummary(), lastActivity)
-            }
+            if isStopping { return stopped() }
             // Encoding the cache is the most expensive step, so only persist occasionally (and on quit).
             if dirty, lastSave == .distantPast || now().timeIntervalSince(lastSave) > 600 {
                 saveCache()
@@ -933,8 +939,8 @@ final class Ledger {
 
     /// Whether to stop here (#86). On the ledger queue only.
     private func checkpoint(_ c: Checkpoint) -> Bool {
-        // The hook is called outside the lock: it may call `requestStop`, which takes it.
-        checkpointHook?(c)
+        // The hook was read when the refresh began; it's called outside the lock, since it may call `requestStop`.
+        scanHook?(c)
         return isStopping
     }
 
@@ -1010,8 +1016,9 @@ final class Ledger {
         }
 
         hotFiles = hot
-        // Progress for a first index, and for one resumed after a quit (#86): then some marks exist already.
-        let initial = state.files.isEmpty || candidates.count >= 25
+        // Progress for a first index, and for one resumed after a quit (#86), when some marks exist already: files
+        // without a mark are what's left to index. A rescan of files that grew isn't an index.
+        let initial = state.files.isEmpty || candidates.filter { state.files[$0.id] == nil }.count >= 25
         for (i, (path, id, size, stamp)) in candidates.enumerated() {
             // #86: files not reached keep their marks. Pruning is skipped too: the first refresh after a relaunch is
             // always a full scan (`lastFullScan` isn't saved), and it prunes.
@@ -1157,7 +1164,7 @@ final class Ledger {
         guard let base = raw.baseAddress else { return offset }
         let n = raw.count
         var start = offset, lines = 0, checked = offset
-        let (maxLines, maxBytes) = stopLock.withLock { (_stopCheckLines, _stopCheckBytes) }
+        let maxLines = scanLines, maxBytes = scanBytes
         while start < n, let nl = memchr(base + start, 0x0A, n - start) {
             // #86: every `stopCheckLines` lines or `stopCheckBytes` bytes, a checkpoint. Every line before `start` is
             // fully counted, so the mark set from the returned offset resumes exactly there; the stamp and size are
