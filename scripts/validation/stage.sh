@@ -38,6 +38,7 @@ cp scripts/validation/validate.sh scripts/runtime/procwatch.c build/validation/p
 {
     echo "main_user=$(id -un)"
     echo "main_uid=$(id -u)"
+    echo "stager_uid=$(id -u)"
     echo "candidate_commit=$(sed -n 's/^commit: *//p' "$src/PROVENANCE.txt")"
     echo "candidate_dmg_sha256=$want"
     echo "package_commit=$(git rev-parse HEAD)"
