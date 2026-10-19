@@ -2,19 +2,20 @@
 
 **Status: plan only.** Nothing here is set up. SpanDeck has no Apple Developer account, certificate, signing secret or notarized build. `build.sh` signs ad hoc. Since #11, `release.yml` publishes nothing that [`scripts/verify-release.sh`](../scripts/verify-release.sh) doesn't accept as a notarized Developer ID build, and with no Team ID configured every release run stops before building. **This document doesn't authorize a release.** A public or enterprise distribution also needs the open items in #3, #11 and the [roadmap](ROADMAP.md) release blockers.
 
-## Where things stand (checked locally, 2026-10-15, macOS 26.5, Xcode 26.6, Swift 6.3.3)
+## Where things stand (re-recorded 2026-10-19 on `SpanDeck.app` built from `main` = `999a1fd`, before #97; later commits change Swift sources only, not the bundle, signing or packaging, macOS 26.5, Xcode 26.6, Swift 6.3.3)
 
-| Check | Command | Result today |
+| Check | Command | Result |
 |---|---|---|
-| Universal binary | `lipo -archs build/Headroom.app/Contents/MacOS/Headroom` | `x86_64 arm64` |
-| App signature | `codesign --verify --deep --strict --verbose=2 build/Headroom.app` | valid on disk (**ad hoc**) |
-| Signature details | `codesign -dvv build/Headroom.app` | `Signature=adhoc`, `TeamIdentifier=not set`, flags `adhoc` (no hardened runtime) |
-| Gatekeeper, app | `spctl --assess --type execute --verbose=4 build/Headroom.app` | **rejected** (exit 3) |
-| DMG integrity | `hdiutil verify build/Headroom-1.1.dmg` | checksum VALID |
-| DMG signature | `codesign -dv build/Headroom-1.1.dmg` | not signed |
-| Gatekeeper, DMG | `spctl --assess --type open --context context:primary-signature --verbose=4 build/Headroom-1.1.dmg` | **rejected**, "no usable signature" |
+| Universal binary | `lipo -archs build/SpanDeck.app/Contents/MacOS/SpanDeck` | `x86_64 arm64`, minimum macOS 14.0 on both (`vtool -show-build`) |
+| App signature | `codesign --verify --deep --strict --verbose=2 build/SpanDeck.app` | valid on disk, satisfies its Designated Requirement (**ad hoc**) |
+| Signature details | `codesign -dvv build/SpanDeck.app` | `Identifier=io.github.lolodawit.SpanDeck`, `Signature=adhoc`, `TeamIdentifier=not set`, flags `0x2(adhoc)` (no hardened runtime) |
+| Gatekeeper, app | `spctl --assess --type execute --verbose=4 build/SpanDeck.app` | **rejected** (exit 3) |
+| DMG integrity | `hdiutil verify build/SpanDeck-1.1.dmg` | checksum VALID |
+| DMG signature | `codesign -dv build/SpanDeck-1.1.dmg` | not signed |
+| Gatekeeper, DMG | `spctl --assess --type open --context context:primary-signature --verbose=4 build/SpanDeck-1.1.dmg` | **rejected**, "no usable signature" |
+| Release gate | `scripts/verify-release.sh build/SpanDeck-1.1.dmg` | **REFUSED**: no Team ID configured |
 
-These were produced by `./build.sh dmg` into the git-ignored `build/` folder. Nothing was installed or launched. **Reproducibility isn't shown yet:** two consecutive builds gave the same binary hash, but the second build reused cached objects. A clean build on a second machine with the same pinned toolchain is still needed (step 9).
+These were produced by `./build.sh dmg` (via `scripts/package-candidate.sh --no-test`) into the git-ignored `build/` folder. The 2026-10-15 table recorded the same results on the pre-#11 `Headroom.app`. Nothing was installed or launched. **Reproducibility isn't shown yet:** two consecutive builds gave the same binary hash, but the second build reused cached objects. A clean build on a second machine with the same pinned toolchain is still needed (step 9).
 
 ## Decisions needed before any signed build (product owner)
 
