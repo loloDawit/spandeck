@@ -2,22 +2,26 @@
 
 **Live status:** GitHub Project **SpanDeck — Product Roadmap** ([repository Projects tab](https://github.com/loloDawit/spandeck/projects)). Phases are GitHub Milestones `M0`–`M4`, with no dates. How tracking works: [`PROJECT_MANAGEMENT.md`](PROJECT_MANAGEMENT.md).
 
-**Snapshot:** 2026-10-15, `main` = `6d51227`. If this page and the Project disagree, the Project is right.
+**Snapshot:** 2026-10-19, `main` after #97. If this page and the Project disagree, the Project is right.
 
-Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation. Evidence labels: **[mocked]** means it is shown by tests with injected dependencies, not observed on a real macOS system. **[CI]** means the test suite passed on a GitHub-hosted runner. That shows the [mocked] tests pass on that toolchain. It doesn't show how the app behaves on a real Mac. Before 2026-10-15, test results were owner-reported local runs only. See [Hosted CI baseline](#hosted-ci-baseline).
+Work must be traceable to issues and acceptance tests. Do not ship features before M0 validates the foundation.
+
+**Evidence labels:**
+- **[mocked]:** shown by tests with injected dependencies, not observed on a real macOS system.
+- **[CI]:** the suite passed on a GitHub-hosted runner. That shows the [mocked] tests pass on that toolchain; it doesn't show how the app behaves on a real Mac.
+- **[runtime]:** observed in the running app, by the owner, in the `spandecktest` account.
 
 ## Now, next, later
 
 | Order | Item | Milestone | Status | Notes |
 |---|---|---|---|---|
-| Done | R8: minimize and protect the local usage cache, #33 | M1 | Done — PR #34 (`8bcb1e7`) | Mocked, local evidence only; permissions on a real install not checked. |
-| Done | R10: restrict `--snapshot` to debug builds or a synthetic store | M1 | Done — PR #39 (`d068a38`) | Mocked, local evidence only; neither binary launched with `--snapshot`. |
-| Done | R11: SHA-pin actions, least `permissions`, signing / notarization plan, #37 | M0 | Done — PR #41 (`eca47fe`) | Workflow and doc change. Hardening check passes in hosted CI; nothing signed or notarized. |
-| Next 3 | #3: OS-level runtime verification (audit §7 Phase 2) | M0 | **Verified on one Mac** (runs 1 and 2) | [Results](audits/0003-runtime-verification.md#8-results). Default launch: offline as observed, no credential or subprocess access, no login item; only local cache and preference writes [runtime]. Closing #3 is the owner's decision. Not covered: Intel, other macOS versions, signed builds, V16. |
-| Next 4 | #6 streaming / dedupe fixtures and #8 performance baseline | M0 | Not started | Independent of each other. #8 needs supported macOS hardware. |
-| Then | #7 provenance contract (remaining), #5 data minimization (after R8), then #9 ADR | M0 | In progress / blocked | #9 waits on findings from #3, #5, #6 and #7. |
-| Later | #4 capability matrix and integration lifecycle spec, #10 supported Claude surfaces | M0 | Open | Feed M1 integrations and M2 adapters. |
-| Backlog | #46 blocking subprocesses can starve Swift's shared executor | M0 | Open, not prioritized | Working diagnosis from the CI failures; CI runs serially until it is resolved. |
+| Now | **#94 Private daily-use readiness** | M0 | In progress | Delegated milestone: a validated private-use candidate and a GO / CONDITIONAL GO / NO-GO decision. Slices: trust states (#95) and diagnostics (#96, #97) merged; acceptance suite, candidate build and docs (#92) in review. |
+| Done | #3, #5, #6, #10, #12, #86, #87, #88 | M0 | Closed | Default launch [runtime] at `6e777c0` (Run 4); privacy (#5); F01–F49; Claude surfaces audit; quit during a scan; memory and UI baselines (optimizations deferred, #94). |
+| Open | #7 provenance, #9 ADR | M0 | In progress | Contract 0.4 and ADR 0001 partly accepted. Open: stale threshold, P10, P15, Enterprise and Bedrock wording, the real-app VoiceOver check. |
+| Open | #4 consent and integration lifecycle | M0 | In progress | Every integration is opt-in and reversible ([`PRIVATE_USE.md`](PRIVATE_USE.md) §3). Open: credential-alternatives analysis, status-line/OTel change-preview spec (M2), V16. |
+| Open | #11 release security | M0 | In progress | Open: Developer ID signing and notarization (needs the owner's Apple account), tag ruleset, Intel and macOS 14 runs. |
+| Open | #8 performance baseline | M0 | In progress | Synthetic baseline done. In-app numbers come from the opt-in diagnostics session (#96, merged). |
+| Backlog | #46 executor starvation, #89 test flake | M0 | Backlog | Not blocking private use; CI stays serial. |
 
 ## Remediation series (R1–R12)
 
@@ -117,8 +121,8 @@ Nothing should be published as a SpanDeck release until these are cleared:
 1. ~~**No OS-level evidence.**~~ Default-launch behavior verified [runtime] on one Apple Silicon Mac with macOS 26.5 and an ad-hoc build ([runtime verification](audits/0003-runtime-verification.md) §8.4). Still open: Intel, other macOS versions, a Developer ID-signed build (#11), and consent-enabled paths (V16).
 2. ~~**Cache still stores raw transcript paths** with default file modes until R8 merges (#33).~~ Resolved in source by R8 (#34); not verified on a real install.
 3. ~~**`--snapshot` can write real usage data to any path** until R10 merges (#36).~~ Resolved in source by R10 (#39); not verified by running a release binary.
-4. **No signing or notarization.** Builds are signed ad hoc, and the Developer ID plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)) hasn't been carried out. If triggered, `release.yml` would still publish an ad-hoc-signed, unnotarized DMG; the release gate is open in #11. Hosted CI now passes ([run 38844113831](https://github.com/loloDawit/spandeck/actions/runs/38844113831)), but it runs tests only, serially (#46).
-5. **No accounting regression fixtures or performance baseline** (#6, #8), so M0 cannot exit.
+4. **No signing or notarization.** Builds are signed ad hoc, and the Developer ID plan ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)) hasn't been carried out. Since #75, `release.yml` refuses anything but a notarized Developer ID DMG, so no release can be published today. A private-use candidate is a local build ([INSTALL.md](INSTALL.md)), not a release.
+5. ~~**No accounting regression fixtures or performance baseline**~~ F01–F49 (#6) and the synthetic baseline (#8, #87, #88) exist. M0's remaining exit criteria are on #2.
 
 ## Dependencies
 
