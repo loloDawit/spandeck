@@ -200,24 +200,58 @@ One ledger per process (memory runs):
 
 ### 4.5 After #86: non-blocking quit
 
-These are from run `86236c3` (the #86 branch, no local changes). Raw results are in [`perf/2026-10-18-m2pro-after-86/`](perf/2026-10-18-m2pro-after-86/). The load average was 2.5–13.7, given per dataset in the JSON. The quit runs through `ShutdownCoordinator` and `Ledger.requestStop`, as the app now quits.
+**Run:**
+- `run86e`, on the reference machine (Apple M2 Pro, `Mac14,10`, 12 cores, 16 GB, macOS 26.5 `25F71`, Swift 6.3.3, Xcode 26.6), at commit `832a160` with no local changes.
+- Raw results: [`perf/2026-10-18-m2pro-after-86/`](perf/2026-10-18-m2pro-after-86/), whose README gives the provenance. All 12 benchmark processes passed.
+- Load average 3.7–10.6, given per dataset in the JSON. Small ran first, under the most load.
+
+**Which numbers are which:**
+- Every figure below was **measured** by the benchmark.
+- **Simulated:** none of these scenarios is simulated. Simulated wake (§2) is a separate scenario.
+- **Not measured:** AppKit's own termination after the reply, and logout or restart (§3).
+- The quit runs through `ShutdownCoordinator` and `Ledger.requestStop`, the app's path since #86. The coordinator's 5 s timer was armed in every run, and none fired.
+
+**Main thread and quit time.** 9c quits 50 ms into a cold scan. 9d quits with every operation held and unsaved changes, the longest save a quit can wait for.
 
 | Quit | small | medium | large |
 |---|---|---|---|
-| **Old path** (`flush`, `queue.sync`) 50 ms into a cold scan: main thread blocked | 0.33 s | 4.4 s | **18.1 s** |
-| **9c, since #86**, 50 ms into a cold scan: `begin` on main / heartbeat late, worst | 0.07 / 1.1 ms | 0.04 / 1.1 ms | 0.21 / 1.1 ms |
-| … cancellation latency / save / total to the reply | 18 / 6 / 25 ms | 24 / 6 / 30 ms | 46 / 7 / 53 ms |
-| **9d, since #86**, with the whole cache to save (the worst case): `begin` / heartbeat late, worst | 0.05 / 1.1 ms | 0.02 / 1.1 ms | 0.02 / 1.1 ms (259 beats) |
-| … save = total to the reply | 40 ms (1.4 MB) | 0.34 s (13 MB) | **1.5 s** (48 MB) |
-| Outcome | saved | saved | saved |
+| **Before #86** (9b, `flush` → `queue.sync`), 50 ms into a cold scan: main thread blocked | 0.42 s | 4.3 s | **18.0 s** |
+| **9c**, 50 ms into a cold scan: `begin` on main | 0.074 ms | 0.047 ms | 0.047 ms |
+| … heartbeat late, worst (n beats) | 1.05 ms (4) | 1.06 ms (5) | 1.07 ms (8) |
+| … cancellation latency (the scan was still running when the quit began: checked) | 17 ms | 24 ms | 42 ms |
+| … save / total to the reply | 6 / 23 ms | 6 / 30 ms | 7 / 48 ms |
+| **9d**, with the whole cache to save: `begin` on main | 0.043 ms | 0.033 ms | 0.038 ms |
+| … heartbeat late, worst (n beats) | 1.15 ms (7) | 1.07 ms (57) | 1.13 ms (233) |
+| … save = total to the reply (cache size) | 42 ms (1.4 MB) | 0.34 s (13 MB) | **1.39 s** (48 MB) |
+| Outcome, every quit | saved | saved | saved |
 
-- **B3 is met:** the main thread is held at most 0.21 ms. The total quit time, while AppKit keeps the event loop running, is at most 1.5 s on large, well under the 5 s timeout.
-- **Scan throughput is unchanged.** First-scan, rebuild, tick, warm-start and save CPU are within −12 % to +7.5 % of run 4 on every dataset. The +7.5 % is on small, under a load average of 5–13; a quieter rerun of small and medium was within ±3 %.
-- **Timeout and failure:**
-  - The 5 s timeout replies `timedOut` and ignores a late result.
-  - A failed save reports `failed`, keeps the previous cache byte for byte, and the relaunch rebuilds the rest.
-  - The benchmark measures only successful quits. Timeout and failure are covered by `ShutdownTests` and `ShutdownCoordinatorTests`.
-- **Not measured here:** AppKit's own termination after the reply, and logout or restart. Those need the owner's run in a test account.
+Each 9c and 9d value is **one quit per dataset** (n = 1). The heartbeat columns give the samples inside that quit.
+
+- **B3 passes.** The main thread is held at most 0.074 ms, against the 1 s budget, and the main actor is never late by more than 1.15 ms.
+- **Total quit time** while AppKit keeps the event loop running is at most 1.39 s on large: the full 48 MB save, well under the 5 s timeout.
+- **Before #86** the main thread was blocked for the rest of the scan: 18.0 s on large.
+
+**Scan throughput and accounting cost.**
+- **Interleaved A/B** (`ab-vs-main/`). Pre-#86 `main` (`587f1c3`) and `832a160` alternated, two rounds each, on the same machine and in the same session, at a load average of 3.1–4.4. Every scenario was within **±4.2 %** (CPU median):
+  - small: cold start −0.8 %, rebuild +1.8 %, warm start −4.2 %, save +1.8 %, ticks +0.2 % and −4.1 %;
+  - medium: −1.8 %, −1.0 %, +0.6 %, −2.5 %, −1.2 % and −2.7 %;
+  - throughput 36.2 → 36.5 MB/s (small) and 36.8 → 37.1 MB/s (medium).
+- **The review fixes alone** (`ab-vs-121aebd/`, small): −1.3 % to +0.3 %.
+- **Against run 4** (a different time and load), run86e's large set is 4.9–12.8 % *faster* in CPU, 37.2 against 33.7 MB/s, and medium within ±10 %.
+  - Small's +13.4 % cold-start CPU in run86e, and +12.8 % in a recheck at load 5.6, came at higher load than run 4. The interleaved A/B, which holds the load equal, shows none of it.
+  - Large has no A/B. Its comparison is across runs only.
+
+**Timeout and failure behaviour** are verified by tests, not by this benchmark:
+- `ShutdownCoordinatorTests`:
+  - the 5 s timeout replies `timedOut`, and a late result changes nothing;
+  - with a 0.2 s timer, the real timer fires;
+  - one request gets one reply; a request after the outcome is answered at once.
+- `ShutdownTests`:
+  - a failed save reports `failed`, keeps the previous cache byte for byte, and leaves no temporary file;
+  - a save under way when the quit arrives is waited for on the ledger queue, never on the caller;
+  - relaunch matches an uninterrupted scan at every interruption point.
+
+**Not measured:** AppKit's own termination after the reply, logout or restart, and quitting from the real app. Those need the owner's run in a test account (§3).
 
 ## 5. Budgets
 
@@ -240,7 +274,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 |---|---|---|---|---|
 | B1 | Idle CPU at the app's cadence ≤ **0.5 %** of one core | 0.11–0.17 % | met | a menu-bar monitor must not show up in Activity Monitor; about 3× headroom |
 | B2 | Main thread held ≤ **16 ms** while a background refresh or scan runs | ≤ 4.6 ms (cold scan only) | met for scans; **post-refresh publish not measured** (#88) | one 60 Hz frame. The first popover render is a UI action under B11 |
-| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.21 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, pending merge) | a quit that takes seconds looks hung |
+| B3 | Quit holds the main thread ≤ **1 s** | 0.3 / 4.2 / 19.7 s; **since #86: ≤ 0.074 ms** (§4.5) | was an accepted priority failure; **met with #86** (PR #90, pending merge) | a quit that takes seconds looks hung |
 | B4 | 10 s tick, nothing new: p95 ≤ **10 ms** | 3.4 ms | met | it runs 360 times an hour |
 | B5 | Tick with new data, **excluding cache saves**: p95 ≤ **100 ms** | 59.6 ms; no timed sample saved (checked) | met | runs every 10 s during active use. Saves are B6; the first change after a start (1.67 s, it saves) is reported apart |
 | B6 | Cache save ≤ **0.5 s** (medium) / ≤ **2 s** (large) | 0.30 / 1.4 s | met | it blocks the ledger queue: ticks wait behind it |
@@ -254,7 +288,7 @@ Each budget is set from the measurement plus headroom, against a user-facing rea
 
 1. **Quit waited for an in-flight scan (B3). Addressed by #86 (PR #90, pending merge).**
    - The main thread was held for the rest of the scan: up to 19.7 s on large.
-   - Now the scan stops at a checkpoint and saves on the ledger queue while AppKit waits. The main thread is held ≤ 0.21 ms, and quitting takes at most 1.5 s on large (§4.5).
+   - Now the scan stops at a checkpoint and saves on the ledger queue while AppKit waits. The main thread is held ≤ 0.074 ms, and quitting takes at most 1.39 s on large (§4.5).
 2. **Memory per message, and its warm-start variance (B9, #87).**
    - 279 MB resident after a cold scan on large, and 377–545 MB after a warm start.
    - The cause isn't located yet.
