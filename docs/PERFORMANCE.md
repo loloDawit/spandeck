@@ -315,8 +315,8 @@ Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic
 | Scenario (large unless stated) | Result |
 |---|---|
 | **Repeated warm loads**, 5 in one process, each ledger released before the next | live loaded 186–189 MB every time; live released 1.3–1.6 MB. Footprint after a release: 23 MB after the first, then 278–543 MB, no upward trend beyond the first load's peak. Medium: live 52 MB loaded, 1.2–1.5 MB released |
-| **Idle**: 30 refreshes back to back after a warm load | live 186 → 137 MB after the first tick, then flat; footprint median 381 MB at the first tick and at the last. No growth |
-| **Idle at the app's cadence**: 13 refreshes 10 s apart, 2 runs (profiles, `0046b36`) | footprint 380/384 MB → **146 MB** after 20–30 s and flat after (live 137 MB). Both drops coincided with ticks that read pressure level 2 |
+| **Idle**: 30 refreshes back to back after a warm load | live 186 → 137 MB after the first tick, then flat; footprint median 381 MB at the first tick and at the last (one round fell 476 → 381 MB during the ticks). No growth |
+| **Idle at the app's cadence**: 13 refreshes 10 s apart, 2 runs (profiles, `0046b36`) | footprint 380/384 MB began falling after 10–20 s and reached **146 MB** after about 60 s (run 1) and 30 s (run 2), then stayed flat (live 137 MB). The first drop in each run coincided with a tick that read pressure level 2; the last step did in run 1, not in run 2 |
 | **Stop during a cold scan**, 10 s in (`requestStop`, as quit does since #86) | result `saved` in 5 of 5; live 67 [64–74] MB at the stop (what was counted); footprint peak to the stop 320 MB. **Ledger released: live 1.4 MB**, footprint 164 [148–202] MB. The resume: live 160 MB, highest 592 [552–598] MB in its save. Medium (2 s in): live 15 MB stopped, 1.4 MB released |
 | **Incremental after a warm load** | +10 messages, the first change after a start, **saves the whole cache**: 1.43 s, highest live 495 MB. +100: 71 ms, highest live 139 MB. +1,000: 193 ms, live +1 MB, footprint +15 MB |
 
@@ -353,10 +353,10 @@ Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic
 - In every mode and round, releasing the ledger returns live memory to 1.1–1.6 MB.
 - After release, `heap` finds no `Ledger` type, only the test's own price tables. Over 5 loads the residue grows 1.3 → 1.6 MB; a heap diff attributes it to the harness's own phase records (`[String: Any]`), not to the ledger.
 - Idle ticks don't grow live memory.
-- The excess of footprint over live is freed memory not yet given back to the system. It was given back in both app-cadence idle runs, within 30 s.
+- The excess of footprint over live is freed memory not yet given back to the system. It was given back in both app-cadence idle runs, after about 30 s and 60 s.
 
 **Unexplained:**
-- **What triggers the return of freed pages.** It coincided with pressure-level-2 readings in both idle runs, and happened at unpredictable points under lldb. Asking the allocator directly (`malloc_zone_pressure_relief`) returned **0 bytes every time**.
+- **What triggers the return of freed pages.** It began with a pressure-level-2 reading in both idle runs, though one run's last step came at level 1, and happened at unpredictable points under lldb. Asking the allocator directly (`malloc_zone_pressure_relief`) returned **0 bytes every time**.
 - **Why releasing the first warm-loaded ledger drops the footprint to 23 MB** while a released cold-scan ledger, or a later warm load in the same process, keeps 278–543 MB. Live memory is 1.3–1.6 MB in all of these cases.
 - **The idle machine.** No run was at pressure level 1 throughout.
 
@@ -366,7 +366,7 @@ Raw data, commands and provenance: `perf/2026-10-18-m2pro-memory-87/`. Synthetic
 
 | # | Change | Expected saving (large) | CPU and throughput | Cache consistency, cancellation | Complexity, risk | Cache format |
 |---|---|---|---|---|---|---|
-| O1 | Release the cache bytes right after the decode: an `autoreleasepool` around the read and decode in `loadCache`, or a queue with `autoreleaseFrequency: .workItem` | −48 MB live from the load until the next queue item (about 10 s in the app). **Measured mechanism, estimated saving** | none | none: only when a buffer is freed | a few lines; low | unchanged |
+| O1 | Release the cache bytes right after the decode: an `autoreleasepool` around the read and decode in `loadCache`, or a queue with `autoreleaseFrequency: .workItem` | −48 MB live from the load until the next queue item (about 10 s in the app). **Measured retention, inferred mechanism, estimated saving** | none | none: only when a buffer is freed | a few lines; low | unchanged |
 | O2 | Encode the cache without `JSONEncoder`'s intermediate tree: write the same JSON directly into one buffer | the save transient, about −300 MB of the 360–430 MB. **Estimate until built** | likely faster saves, so quit and wake shorten (each save is ≤ 1.4 s of the ≤ 5 s quit budget today) | the stop path saves with it (#86): it must fail the same way, keep the previous cache on failure, and stay atomic | a hand-written encoder of `State`; medium. Needs a byte-for-byte or decode-equivalence test against `JSONEncoder` on every fixture | unchanged (same JSON) |
 | O3 | Decode the same way (a streaming reader instead of `JSONDecoder`) | −150–200 MB of the warm-load transient. Estimate | likely faster warm starts | load-only; a bad cache must still be discarded as today | a hand-written parser; medium–high | unchanged |
 | O4 | A compact in-memory `parts`: one model inline, a dictionary only when an operation has several | −45 MB steady live (about −33 %). Estimate | neutral or better | touches counting and dedupe (#55, #58, #66): every path that reads or merges `parts` | medium | unchanged (same coding) |

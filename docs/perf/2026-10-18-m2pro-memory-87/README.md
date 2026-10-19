@@ -27,7 +27,8 @@ and figures: `docs/PERFORMANCE.md` §4.6.
   on an uncommitted harness had shown drops under the tools; they weren't reproduced, so no such effect is claimed.
   Footprint under lldb still varies between runs (§4.6): use these runs for attribution, `run1/` for figures.
 - `medium-repeat/`: 5 warm loads in one process, for the heap diff between "released 1" (phase 2) and "released 5"
-  (phase 10).
+  (phase 10). It ran after the others, at the same `Sources` and `Tests`, with one uncommitted edit to
+  `scripts/bench-memory-report.py`, which doesn't run during profiling.
 - `idle-app-cadence-*`: two untraced `idle` runs on large, 13 ticks 10 s apart (`SPANDECK_BENCH_TICKS=13
   SPANDECK_BENCH_TICK_MS=10000`), with the pressure level at every tick.
 - Tool versions: `heap`, `vmmap` and `footprint` from macOS 26.5 (25F71); `lldb-2100.0.17.203` from Xcode 26.6 (17F113).
