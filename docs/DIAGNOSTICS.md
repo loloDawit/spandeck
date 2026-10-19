@@ -18,7 +18,7 @@ Every event has one **kind**, from a fixed list, and only numbers or a fixed lab
 | `launch` | process start (kernel start time) → end of `applicationDidFinishLaunching` | `ms` |
 | `firstUsage` | process start → first usage totals published | `ms` |
 | `popoverOpen` | menu-bar click → main thread next idle: view built, laid out, committed. Not drawing on screen. | `ms` |
-| `popoverClose` | close click → `popoverDidClose` | `ms` |
+| `popoverClose` | close click on the menu-bar item → `popoverDidClose` (a click outside the popover isn't timed) | `ms` |
 | `stall` | a main-thread busy span ≥ 100 ms (run-loop observer) | `ms` |
 | `refresh` | one ledger refresh on its queue: `cold` (first scan without a cache), `full` (5-minute rescan), `tail` | `ms` |
 | `cacheLoad` | reading the usage cache at the first refresh: `kept`, `discarded`, `absent` | `ms`, `bytes` |
@@ -37,22 +37,23 @@ Every event has one **kind**, from a fixed list, and only numbers or a fixed lab
   - Written atomically, and excluded from backups.
   - The same protections as the usage cache (`PrivateDirectory`).
 - **Bounded:** at most 5,000 events, about 100 bytes each, so about 0.5 MB. The oldest are dropped first and counted in `dropped`.
-- **Written:** at most every 5 minutes while a session runs, when it stops, and at quit. A crash loses up to 5 minutes of events.
+- **Written:** at most every 5 minutes while a session runs, when it stops, and at quit. Encoding and writing run on a background queue; stop and quit wait for the write. A crash loses up to 5 minutes of events.
 - **Across relaunches:** a session continues, so start-up and quit are measured.
 - **24-hour limit:** a session stops by itself 24 hours after it started.
-- **Retention:** a stopped session's file is deleted at launch once it hasn't been written for 7 days. Starting a new session replaces the previous one's data.
+- **Retention:** a stopped session's file is deleted at launch once it hasn't been written for 7 days. A damaged file, or one of another schema, is deleted at launch. Starting a new session replaces the previous one's data.
 - **No network:** no upload, endpoint or background transfer of any kind. Diagnostics adds no request, credential read or subprocess.
 
 ## Overhead
 **While off:**
-- `record` takes one lock and returns.
+- `record` reads the clock, takes one lock and returns.
 - No observer or timer is installed.
 - The session file is read once at launch, to resume or expire it.
 
 **While on:**
 - **Run-loop observers:** two, each doing two `mach_absolute_time` reads and a comparison per main run-loop pass.
 - **Timer:** one at 30 s, doing a `getrusage` and a `task_info` call.
-- **Writes:** a JSON write of at most about 0.5 MB every 5 minutes.
+- **Recording:** an append under a lock, in place; at the cap, the oldest event is dropped.
+- **Writes:** a JSON write of at most about 0.5 MB every 5 minutes, off the main thread.
 - **Ledger timings:** a clock read around work that is already done.
 
 ## What it can't measure
@@ -60,6 +61,7 @@ Every event has one **kind**, from a fixed list, and only numbers or a fixed lab
 - **Energy:** not measured.
 - **Shutdown after the reply:** not measured.
 - **Process start:** if the kernel's start time can't be read, `launch` and `firstUsage` are skipped.
+- **Export result:** the save panel may close the popover. The result ("Diagnostics exported…") then shows the next time the popover opens.
 - **Busy spans and time spent waiting:** a stall is a busy span of the main thread. Time the main thread spends waiting, such as for a modal panel, isn't a stall.
 
 ## Tests

@@ -83,11 +83,31 @@ struct DiagnosticsTests {
         let box = try Sandbox()
         let clock = TestClock()
         let d = Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now })
+        let expired = Flag()
+        d.onExpire = { expired.set() }
         d.start()
         clock.advance(Diagnostics.maxSessionAge)
         d.record(.stall, ms: 200)
         #expect(!d.isActive && !box.preferences.bool(forKey: Diagnostics.activeKey))
+        #expect(expired.isSet) // the app republishes its state then
         #expect(try session(box).events.map(\.kind) == [.sessionStart])
+    }
+
+    @Test func damagedFileIsRemovedAndFutureStartDoesNotResume() throws {
+        let box = try Sandbox()
+        let clock = TestClock()
+        try Data("{damaged".utf8).write(to: file(box))
+        Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now }).restore()
+        #expect(!FileManager.default.fileExists(atPath: file(box).path))
+
+        // A session whose start lies in the future (the clock moved back) isn't resumed.
+        let d = Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now })
+        d.start()
+        d.persist(force: true, wait: true)
+        clock.advance(-3600)
+        let relaunch = Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now })
+        relaunch.restore()
+        #expect(!relaunch.isActive && relaunch.writeFailure == nil)
     }
 
     @Test func activeSessionResumesAtLaunchUntilItsMaximumAge() throws {
@@ -96,13 +116,13 @@ struct DiagnosticsTests {
         let first = Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now })
         first.start()
         first.record(.launch, ms: 300)
-        first.persist(force: true) // as at quit
+        first.persist(force: true, wait: true) // as at quit
 
         clock.advance(3600)
         let relaunch = Diagnostics(directory: PrivateDirectory(url: box.appSupport), preferences: box.preferences, now: { clock.now })
         relaunch.restore()
         #expect(relaunch.isActive)
-        relaunch.persist(force: true)
+        relaunch.persist(force: true, wait: true)
         #expect(try session(box).events.map(\.kind) == [.sessionStart, .launch, .sessionResume])
 
         clock.advance(Diagnostics.maxSessionAge)

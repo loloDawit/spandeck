@@ -63,6 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self?.refreshLimits()
             self?.refreshUsage()
         }
+        // A session that stops itself at its maximum age is shown as off at once (review of #97).
+        services.diagnostics.onExpire = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                MainActor.assumeIsolated { self.services.publishDiagnostics() }
+                self.monitor.sync()
+            }
+        }
         monitor.sync()
         if diagnostics.isActive, let started = ProcessMetrics.startDate() {
             diagnostics.record(.launch, ms: Date().timeIntervalSince(started) * 1000)
@@ -94,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 case .timedOut: detail = .timedOut
                 }
                 diagnostics.record(.shutdown, detail, ms: DiagnosticsMonitor.ms(from: quitStarted, to: mach_absolute_time()))
-                diagnostics.persist(force: true)
+                diagnostics.persist(force: true, wait: true)
             }
             if outcome == .failed || outcome == .timedOut {
                 // No path, id or count: only that the usage cache wasn't saved, so the previous one is kept.

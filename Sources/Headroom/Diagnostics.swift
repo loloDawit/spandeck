@@ -82,8 +82,14 @@ final class Diagnostics: @unchecked Sendable {
     private let lock = NSLock()
     private var session: DiagnosticSession?
     private var lastPersist = Date.distantPast
-    /// Why the last write failed, if it did (shown in Settings).
-    private(set) var writeFailure: StorageFailure?
+    private var failure: StorageFailure?
+    /// Encoding and writing happen here, off the main thread, in order: a delete queued after a write runs after it.
+    private let writeQueue = DispatchQueue(label: "spandeck.diagnostics.write", qos: .utility)
+    /// Called (on any thread) when a session stops by itself at `maxSessionAge`, so the UI can show it as off.
+    var onExpire: (@Sendable () -> Void)?
+
+    /// Why the last write failed, if it did.
+    var writeFailure: StorageFailure? { lock.withLock { failure } }
 
     init(directory: PrivateDirectory, preferences: PreferenceStore, now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory
@@ -98,10 +104,14 @@ final class Diagnostics: @unchecked Sendable {
     /// At launch: resume a session that was on when the app last quit (so start-up and quit are measured), unless it
     /// is older than `maxSessionAge`; delete a session file not written for `retention`. Reads only SpanDeck's own file.
     func restore() {
-        let stored = try? directory.read(Self.fileName).flatMap { try? Self.decoder.decode(DiagnosticSession.self, from: $0) }
+        let data = (try? directory.read(Self.fileName)) ?? nil
+        let stored = data.flatMap { try? Self.decoder.decode(DiagnosticSession.self, from: $0) }
+        // SpanDeck's own file, but unusable (damaged, or another schema): nothing can be exported from it, so it goes.
+        if data != nil, stored == nil { try? directory.remove(Self.fileName) }
         let current = now()
         if preferences.bool(forKey: Self.activeKey) {
-            if var s = stored, current.timeIntervalSince(s.startedAt) < Self.maxSessionAge {
+            // A start time in the future (the clock moved back) doesn't extend the session.
+            if var s = stored, s.startedAt <= current, current.timeIntervalSince(s.startedAt) < Self.maxSessionAge {
                 s.updatedAt = current
                 lock.withLock { session = s }
                 record(.sessionResume)
@@ -124,16 +134,16 @@ final class Diagnostics: @unchecked Sendable {
     /// Stops the session and writes it. Nothing is recorded afterwards.
     func stop() {
         guard isActive else { return }
-        persist(force: true)
+        persist(force: true, wait: true)
         lock.withLock { session = nil }
         preferences.set(false, forKey: Self.activeKey)
     }
 
-    /// Stops any session and deletes its file.
+    /// Stops any session and deletes its file, after any write already queued.
     func delete() throws {
         lock.withLock { session = nil }
         preferences.set(false, forKey: Self.activeKey)
-        try directory.remove(Self.fileName)
+        try writeQueue.sync { try directory.remove(Self.fileName) }
     }
 
     /// Adds one event if a session is active; stops a session that reached `maxSessionAge`.
@@ -141,43 +151,50 @@ final class Diagnostics: @unchecked Sendable {
                 cpuPercent: Double? = nil, footprintMB: Double? = nil) {
         let t = now()
         let expired: Bool = lock.withLock {
-            guard var s = session else { return false }
-            if t.timeIntervalSince(s.startedAt) >= Self.maxSessionAge { return true }
-            s.events.append(DiagnosticEvent(t: Self.round(t.timeIntervalSince(s.startedAt), 3), kind: kind, detail: detail,
-                                            ms: ms.map { Self.round($0, 2) }, bytes: bytes,
-                                            cpuPercent: cpuPercent.map { Self.round($0, 2) },
-                                            footprintMB: footprintMB.map { Self.round($0, 1) }))
-            if s.events.count > Self.maxEvents {
-                let extra = s.events.count - Self.maxEvents
-                s.events.removeFirst(extra)
-                s.dropped += extra
+            guard let started = session?.startedAt else { return false }
+            if t.timeIntervalSince(started) >= Self.maxSessionAge { return true }
+            // In place: no copy of the event array per record.
+            session!.events.append(DiagnosticEvent(t: Self.round(t.timeIntervalSince(started), 3), kind: kind,
+                                                   detail: detail, ms: ms.map { Self.round($0, 2) }, bytes: bytes,
+                                                   cpuPercent: cpuPercent.map { Self.round($0, 2) },
+                                                   footprintMB: footprintMB.map { Self.round($0, 1) }))
+            if session!.events.count > Self.maxEvents {
+                session!.events.removeFirst()
+                session!.dropped += 1
             }
-            s.updatedAt = t
-            session = s
+            session!.updatedAt = t
             return false
         }
-        if expired { stop() }
+        if expired {
+            stop()
+            onExpire?()
+        }
     }
 
-    /// Writes the session file: at most every `persistInterval`, unless `force`.
-    func persist(force: Bool = false) {
+    /// Writes the session file: at most every `persistInterval`, unless `force`. The snapshot is taken now; encoding
+    /// and writing run on `writeQueue`, so a periodic write doesn't hold the main thread. `wait` (stop, quit) returns
+    /// once the file is written.
+    func persist(force: Bool = false, wait: Bool = false) {
         let t = now()
         guard let s: DiagnosticSession = lock.withLock({
             guard let s = session, force || t.timeIntervalSince(lastPersist) >= Self.persistInterval else { return nil }
             lastPersist = t
             return s
         }) else { return }
-        do {
-            try directory.write(try Self.encoder.encode(s), to: Self.fileName, excludedFromBackup: true)
-            writeFailure = nil
-        } catch {
-            writeFailure = error as? StorageFailure ?? .io(EIO)
+        let write = { [self] in
+            var result: StorageFailure?
+            do { try directory.write(try Self.encoder.encode(s), to: Self.fileName, excludedFromBackup: true) } catch {
+                result = error as? StorageFailure ?? .io(EIO)
+            }
+            lock.withLock { failure = result }
         }
+        if wait { writeQueue.sync(execute: write) } else { writeQueue.async(execute: write) }
     }
 
     /// The export: the current session, or the last stopped one from its file, with a sanitized environment (app
     /// version, macOS version, architecture and core count; no host, user or path). nil when there is nothing.
     func exportData(environment: [String: String] = Diagnostics.environment()) -> Data? {
+        writeQueue.sync {} // a stopped session's last write has landed
         let s = lock.withLock { session } ?? (try? directory.read(Self.fileName))
             .flatMap { $0 }.flatMap { try? Self.decoder.decode(DiagnosticSession.self, from: $0) }
         guard let s else { return nil }
@@ -186,7 +203,9 @@ final class Diagnostics: @unchecked Sendable {
     }
 
     /// Whether a session file exists (for Settings: Export and Delete are offered then).
-    var hasData: Bool { isActive || ((try? directory.read(Self.fileName)) ?? nil) != nil }
+    var hasData: Bool {
+        isActive || writeQueue.sync { FileManager.default.fileExists(atPath: directory.url.appendingPathComponent(Self.fileName).path) }
+    }
 
     static func environment() -> [String: String] {
         let info = Bundle.main.infoDictionary ?? [:]
