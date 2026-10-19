@@ -1,6 +1,7 @@
 # Metric and provenance contract
 
-- **Status:** Partly accepted. Contract version **0.3**. Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+- **Status:** Partly accepted. Contract version **0.4**. Refs #7, drafted jointly with #9 ([ADR 0001](adr/0001-canonical-events-identity-and-storage.md)).
+  - **0.4 (#94):** F-3 addressed with the accepted *Stale rule* (§3, §5), for Claude limits and the Grok plan; transcript-folder availability (§4.6). The stale *threshold* is still open.
   - **0.3:** a valid quota percent is a finite number from 0 to 100 (§4, provisional); F-2 addressed in #81 (§5).
   - **Also in 0.3, no rule change:** F-1 addressed in #80 (§5).
   - **Accepted by the owner on 2026-10-18:** missing is not zero; the value statuses and qualifiers (§3); F-1 → #7, F-2 → #4; the F-3 direction; Bedrock/Vertex labelling (§8).
@@ -59,7 +60,7 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 | incomplete data | unread records or flawed counters in the period | `DataCompleteness.isComplete == false` | unread / flawed note |
 | pending | a transcript's last line is unfinished | `DataCompleteness.pending` | none shown as a gap (normal while writing) |
 | saturated | a sum held at `Int.max` | `QuantityUncertainty.saturated` | held note |
-| stale | a last-known value shown after a failed or missed refresh, with its age, and only while it is still meaningful (see *Stale rule*) | `GrokPlan` after a temporary failure; **not yet for the Claude quota** | Grok stale label |
+| stale | a last-known value shown after a failed or missed refresh, with its age, and only while it is still meaningful (see *Stale rule*) | `claudeError` with kept `ClaudeLimits`; `GrokPlan` after a temporary failure; both bounded by `LimitEntry.current` / `GrokPlan.isCurrent` (F-3, 0.4) | "⟨error⟩, showing data from ⟨age⟩"; Grok stale label; past a reset: "Window has reset since the last update; current usage not known yet" |
 | boundary-uncertain | a window's first slot may include records before its start | none yet (P15) | none |
 | unofficial | value from an undocumented endpoint | none yet | consent card text (#15) |
 
@@ -67,9 +68,9 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 - **Within its window:** a quota value stays meaningful only within its own window. After a failed refresh, the last-known value is shown as *stale* with its age (`fetchedAt`) **while now < that limit's `resets_at`**.
 - **After the reset:** the value is **unavailable**. No current value is inferred or extrapolated after a reset.
 - **No reset time:** a limit with no `resets_at` has no proven window, so a failed refresh makes it unavailable.
-- **Grok:** the same rule applies to the billing period. The last plan is *stale* only while now < `GrokPlan.periodEnd` (`Clients.swift:157`); after it, or with no `periodEnd`, it is unavailable.
-  - **Today:** #21's stale plan isn't bounded by `periodEnd`, so the same gap as F-3 exists.
-  - **Proposed:** track it with F-3 under #4.
+- **Grok:** the same rule applies to the billing period. The last plan is *stale* only while now < `GrokPlan.periodEnd`; after it, or with no `periodEnd`, it is unavailable.
+- **Even without a failure** (0.4): a value whose `resets_at` or `periodEnd` has passed is unavailable until the next answer. Refreshes run every 60 s, so this covers the gap after a reset, sleep, or a paused provider.
+- **Implemented (0.4, #94):** `LimitEntry.current(at:stale:)`, `ClaudeLimits.current`, `GrokPlan.isCurrent(at:stale:)`, used by the popover, the hover, the menu-bar gauges and the 5-hour window start (`ProviderServices.windowStart`). Tests: `TrustStateTests`, `GrokErrorStateTests`.
 - **Prices aren't "stale":** they change only by an explicit download (R6). The built-in snapshot's revision and `retrieved` date are shown instead.
 
 **Polling cadence and failure behaviour, as observed in code (2026-10-18):**
@@ -77,7 +78,7 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 - Claude: a 429 backs off 300 s, and a 401 pauses 300 s (`ProviderServices.swift:264–265`, `claudeAuthPause`).
   - On any error the last limits are kept in `Store` and `claudeError` is set.
   - The **menu-bar gauge blanks** (`StatusRenderer.swift:71`).
-  - The **popover still lists the last limits** with "⟨error⟩, showing data from ⟨age⟩" (`PopoverView.swift:465`), with no check against `resets_at`.
+  - The popover lists the last limits with "⟨error⟩, showing data from ⟨age⟩"; since 0.4 only those still within their window (F-3).
   - Only a missing login (`notConfigured`) clears them (`ProviderServices.swift:260`).
 - Grok: a rejected key pauses 600 s (`grokAuthPause`). Temporary failures keep the last plan, labelled stale (#21).
 - **Still undocumented:**
@@ -96,6 +97,7 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
 3. **No data in a period** (no records at all) is exactly 0 tokens with `complete` coverage. But if any source that covers the period failed or is unread, the total carries **incomplete data**.
 4. **Sums keep their worst status.** One unknown term makes a sum partial; all unknown makes it unavailable (`CostEstimate +`, `UsageSummary.combine`).
 5. **Clamping hides data.** A derived counter that would be negative is a data conflict, flagged, not clamped to 0. Grok's `max(inputTokens − cachedReadTokens, 0)` was such a clamp; see F-1.
+6. **A source that can't be looked at isn't zero (0.4, #94).** If neither Claude transcript folder (`~/.claude/projects`, `~/.config/claude/projects`) exists, or one exists but can't be listed, Claude's totals are **unavailable** with a reason (`SourceText`), not 0. An existing, readable, empty folder is an observed 0. Usage counted before a folder went away is kept and labelled as no longer updating; nothing counted is dropped. Tests: `TrustStateTests`.
 
 ## 5. Violations found, and their status
 - **F-1, Grok local usage reads missing as 0.**
@@ -120,7 +122,8 @@ A **valid zero** (a counter, percent or cost that is present and exactly 0) is a
   - On an error the menu-bar gauge blanks (`StatusRenderer.claudeGauge`, `StatusRenderer.swift:71`; test `claudeGaugeBlankOnOtherErrors`).
   - The popover keeps listing the last limits with their age, **even after their `resets_at`** (`PopoverView.swift:465`). That shows a value outside its window, which the rule below forbids.
   - **Direction (owner, 2026-10-18):** keep the last-known value with *stale* and its age while it's still within its original window; unavailable after its reset (§3 *Stale rule*).
-  - Implementation waits for the stale threshold.
+  - **Addressed in 0.4 (#94)** with the *Stale rule* as accepted: within its window a kept value shows as stale with its age; after `resets_at` (or with no `resets_at` once a refresh failed) it's unavailable, in the popover, the hover and the gauge, and the 5-hour window start ignores a passed reset. The Grok plan follows the same rule with `periodEnd`.
+  - **Still open:** the stale threshold (when to label a value stale after *missed* refreshes, without an error). Today only a failed refresh marks a value stale.
 
 ## 6. Reconciliation and accounting invariants
 These hold in today's code unless marked, and every refactor must keep them (fixture-tested):

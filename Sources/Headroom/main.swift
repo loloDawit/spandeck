@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func refreshUsage() {
-        let windowStart = store.claudeLimits?.session?.resetsAt.map { $0.addingTimeInterval(-5 * 3600) }
+        let windowStart = ProviderServices.windowStart(store.claudeLimits, now: Date())
         Task { @MainActor in
             guard let lastActivity = await services.refreshUsage(windowStart: windowStart) else { return }
             keepAwake.agentActivity = lastActivity

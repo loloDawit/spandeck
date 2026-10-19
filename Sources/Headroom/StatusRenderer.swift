@@ -33,10 +33,10 @@ enum StatusRenderer {
             add(.battery, battery(b))
         }
         if Prefs.bool(Prefs.showClaude), store.claudeAvailable {
-            add(.claude, gauges(symbol: "sparkle", fallback: "CC", values: claudeGauge(store)))
+            add(.claude, gauges(symbol: "sparkle", fallback: "CC", values: claudeGauge(store, now: Date())))
         }
         if Prefs.bool(Prefs.showGrok), store.grokAvailable {
-            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK", values: grokGauge(store)))
+            add(.grok, gauges(symbol: "bolt.horizontal.circle", fallback: "GK", values: grokGauge(store, now: Date())))
         }
         if store.awake {
             add(.awake, icon("cup.and.saucer.fill", "AW"))
@@ -67,14 +67,17 @@ enum StatusRenderer {
 
     /// Claude's session, weekly and model percentages. Limits kept through a failure (a 401 pause, 429, 5xx) are not
     /// drawn as current; the popover shows the error and when they were fetched (#25 review).
-    static func claudeGauge(_ store: Store) -> [Double?] {
-        guard store.claudeError == nil, let l = store.claudeLimits else { return [nil, nil, nil] }
+    /// A limit whose window has reset since it was fetched isn't drawn either (F-3).
+    static func claudeGauge(_ store: Store, now: Date = Date()) -> [Double?] {
+        guard store.claudeError == nil, let l = store.currentClaudeLimits(at: now) else { return [nil, nil, nil] }
         return [l.session?.percent, l.weekly?.percent, l.model?.percent]
     }
 
     /// A stale plan (kept through a temporary failure) is not drawn as current; the popover explains (#21).
-    static func grokGauge(_ store: Store) -> [Double?] {
-        [store.grokFailure == nil ? store.grokPlan?.percent : nil]
+    /// Nor is a plan whose billing period has ended (F-3).
+    static func grokGauge(_ store: Store, now: Date = Date()) -> [Double?] {
+        guard store.grokFailure == nil, let p = store.grokPlan, p.isCurrent(at: now, stale: false) else { return [nil] }
+        return [p.percent]
     }
 
     /// Horizontal extent of each item in the last rendered strip, for hover hit testing.

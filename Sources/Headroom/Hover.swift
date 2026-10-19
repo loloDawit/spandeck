@@ -141,9 +141,9 @@ struct HoverView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 10, weight: .bold)).tracking(0.5).foregroundStyle(.secondary)
             switch model.kind {
-            case .claude: limits(store.claudeLimits?.all ?? [], error: store.claudeError)
+            case .claude: limits(store.currentClaudeLimits()?.all ?? [], error: store.claudeError)
             case .grok:
-                if let g = store.grokPlan, store.grokFailure == nil {
+                if let g = store.grokPlan, store.grokFailure == nil, g.isCurrent(at: Date(), stale: false) {
                     limits([LimitEntry(id: "g", name: "Credits used", percent: g.percent, resetsAt: g.periodEnd)], error: nil)
                 } else {
                     Text(store.grokFailure?.title ?? "Loading").font(.system(size: 11)).foregroundStyle(.secondary)

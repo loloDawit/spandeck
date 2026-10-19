@@ -604,6 +604,17 @@ final class Pricing: @unchecked Sendable {
 // MARK: - Ledger
 
 /// Why the usage cache isn't being saved, or an old one couldn't be removed (R8). Usage is still counted in memory.
+/// Whether Claude Code's transcript folders could be looked at (#94). Missing is not zero: with no folder, or none that
+/// can be read, the totals aren't an observation of zero usage, and the popover says why instead of showing 0.
+enum TranscriptSource: Equatable, Sendable {
+    /// At least one folder exists and every existing one can be listed.
+    case found
+    /// Neither `~/.claude/projects` nor `~/.config/claude/projects` exists.
+    case notFound
+    /// A folder exists but can't be listed (permissions), so what it holds isn't counted.
+    case unreadable
+}
+
 enum LedgerCacheIssue: Equatable {
     case notSaved(StorageFailure)
     case legacyNotRemoved(StorageFailure)
@@ -791,6 +802,7 @@ final class Ledger {
     private var keyExcluded = false
     private let issueLock = NSLock()
     private var issue: LedgerCacheIssue?
+    private var source: TranscriptSource?
     private let home: URL
     private let pricing: Pricing
     private static let usageNeedle = Array(#""usage""#.utf8)
@@ -814,6 +826,24 @@ final class Ledger {
     /// Why the cache isn't being saved, if it isn't; nil when it is (or nothing was tried yet).
     var cacheIssue: LedgerCacheIssue? { issueLock.withLock { issue } }
     private func setIssue(_ i: LedgerCacheIssue?) { issueLock.withLock { issue = i } }
+
+    /// The Claude transcript folders' state at the last refresh; nil before the first one (#94).
+    var claudeSource: TranscriptSource? { issueLock.withLock { source } }
+
+    /// A `stat(2)` and an `access(2)` per folder, on every refresh, so a folder that appears, disappears or changes
+    /// permissions is reported at the next tick. Only whether the folder itself exists and can be listed; nothing in it
+    /// is read here. Limit: an unreadable subfolder, or a denial that only shows while listing, isn't detected.
+    private func checkClaudeSource() {
+        var exists = false, unreadable = false
+        for root in claudeRoots {
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            exists = true
+            if access(root.path, R_OK | X_OK) != 0 { unreadable = true }
+        }
+        let s: TranscriptSource = !exists ? .notFound : unreadable ? .unreadable : .found
+        issueLock.withLock { source = s }
+    }
 
     // MARK: Opaque ids (R8)
 
@@ -884,6 +914,7 @@ final class Ledger {
             if isStopping { return stopped() }
             (scanHook, scanLines, scanBytes) = stopLock.withLock { (_checkpointHook, _stopCheckLines, _stopCheckBytes) }
             if !loaded { loadCache(); loaded = true }
+            checkClaudeSource()
             if !checkpoint(.beforeScan) {
                 if now().timeIntervalSince(lastFullScan) >= 300 {
                     scanClaude(progress: progress)
